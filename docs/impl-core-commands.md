@@ -11,4 +11,12 @@ Implement the initial `ac-cli` repository with secure enrollment exchange and au
 - [x] Run formatting, tests, and build validation
 - [x] Commit the implementation in the new repository
 
-The exchange success schema was not specified, so the decoder accepts common flat, nested, and `data`-wrapped metadata fields. Credential lookup fails closed if more than one stored agent matches a workstream.
+Follow-up: support multiple local agents in one workstream and enforce the verified exchange response contract.
+
+- [x] Add `--agent <agentId>` selection to `send` and `read`
+- [x] List matching agent IDs when workstream-only selection is ambiguous
+- [x] Print the exchanged agent ID prominently with selector guidance
+- [x] Replace speculative exchange decoding with the exact flat response schema
+- [x] Keep retries limited to transport failures, never HTTP status responses
+- [x] Add multi-agent selection and strict response-contract tests
+- [x] Run formatting, tests, and build validation

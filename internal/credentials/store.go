@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 const fileVersion = 1
@@ -26,6 +27,14 @@ type File struct {
 type Store struct {
 	directory string
 	path      string
+}
+
+type MultipleAgentsError struct {
+	AgentIDs []string
+}
+
+func (e *MultipleAgentsError) Error() string {
+	return "multiple credentials for workstream"
 }
 
 func NewStore(home string) *Store {
@@ -65,24 +74,38 @@ func (s *Store) FindByWorkstream(workstreamCode string) (Credential, error) {
 		return Credential{}, err
 	}
 
-	var found Credential
-	matches := 0
+	var matches []Credential
+	var agentIDs []string
 	for agentID, credential := range file.Agents {
 		if credential.AgentID != agentID {
 			return Credential{}, errors.New("credential agent ID does not match its key")
 		}
 		if credential.WorkstreamCode == workstreamCode {
-			found = credential
-			matches++
+			matches = append(matches, credential)
+			agentIDs = append(agentIDs, agentID)
 		}
 	}
-	if matches == 0 {
+	if len(matches) == 0 {
 		return Credential{}, errors.New("no credentials for workstream")
 	}
-	if matches > 1 {
-		return Credential{}, errors.New("multiple credentials for workstream")
+	if len(matches) > 1 {
+		sort.Strings(agentIDs)
+		return Credential{}, &MultipleAgentsError{AgentIDs: agentIDs}
 	}
-	return found, nil
+	return matches[0], nil
+}
+
+func (s *Store) FindByAgent(workstreamCode string, agentID string) (Credential, error) {
+	file, err := s.load()
+	if err != nil {
+		return Credential{}, err
+	}
+
+	credential, ok := file.Agents[agentID]
+	if !ok || credential.AgentID != agentID || credential.WorkstreamCode != workstreamCode {
+		return Credential{}, errors.New("no credentials for agent in workstream")
+	}
+	return credential, nil
 }
 
 func (s *Store) load() (File, error) {

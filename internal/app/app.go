@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -57,11 +57,14 @@ type sendRequest struct {
 	IdempotencyID string `json:"idempotencyId"`
 }
 
-type exchangeResult struct {
-	AgentID        string
-	AgentName      string
-	WorkstreamCode string
-	SocketAddress  string
+type exchangeResponse struct {
+	AgentID        string `json:"agentId"`
+	AgentName      string `json:"agentName"`
+	SocketAddress  string `json:"socketAddress"`
+	WorkstreamID   string `json:"workstreamId"`
+	WorkstreamCode string `json:"workstreamCode"`
+	Generation     *int   `json:"generation"`
+	ConsumedAt     string `json:"consumedAt"`
 }
 
 type httpResult struct {
@@ -98,7 +101,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli exchange | send --workstream <code> --body <text> | read --workstream <code>"
+	return "Usage: ac-cli exchange | send --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>]"
 }
 
 func (a *App) exchange(arguments []string) error {
@@ -145,7 +148,7 @@ func (a *App) exchange(arguments []string) error {
 		return exchangeStatusError(response.status)
 	}
 
-	result, err := decodeExchangeResult(response.body)
+	result, err := decodeExchangeResponse(response.body)
 	if err != nil {
 		return &publicError{message: "The enrollment service returned an invalid success response."}
 	}
@@ -162,9 +165,10 @@ func (a *App) exchange(arguments []string) error {
 
 	protected := []string{ticket, apiToken, socketKey}
 	output := fmt.Sprintf(
-		"Agent name: %s\nAgent ID: %s\nWorkstream: %s\nSocket address: %s\n",
-		safeMetadata(result.AgentName, protected...),
+		"Agent ID: %s\nUse for send/read: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
 		safeMetadata(result.AgentID, protected...),
+		safeMetadata(result.AgentID, protected...),
+		safeMetadata(result.AgentName, protected...),
 		safeMetadata(result.WorkstreamCode, protected...),
 		safeMetadata(result.SocketAddress, protected...),
 	)
@@ -178,17 +182,19 @@ func (a *App) send(arguments []string) error {
 	flags := flag.NewFlagSet("send", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var workstreamCode string
+	var agentID string
 	var body string
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&body, "body", "", "update body")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || body == "" {
-		return &publicError{message: "Usage: ac-cli send --workstream <code> --body <text>"}
+		return &publicError{message: "Usage: ac-cli send --workstream <code> [--agent <agentId>] --body <text>"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
 	}
 
-	credential, err := a.credentialFor(workstreamCode)
+	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
 	}
@@ -215,15 +221,17 @@ func (a *App) read(arguments []string) error {
 	flags := flag.NewFlagSet("read", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var workstreamCode string
+	var agentID string
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
-		return &publicError{message: "Usage: ac-cli read --workstream <code>"}
+		return &publicError{message: "Usage: ac-cli read --workstream <code> [--agent <agentId>]"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
 	}
 
-	credential, err := a.credentialFor(workstreamCode)
+	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
 	}
@@ -260,15 +268,39 @@ func validateWorkstreamCode(code string) error {
 	return nil
 }
 
-func (a *App) credentialFor(workstreamCode string) (credentials.Credential, error) {
+func (a *App) credentialFor(workstreamCode string, agentID string) (credentials.Credential, error) {
 	if a.Store == nil {
 		return credentials.Credential{}, &publicError{message: "Credential storage is unavailable."}
 	}
-	credential, err := a.Store.FindByWorkstream(workstreamCode)
-	if err != nil {
-		return credentials.Credential{}, &publicError{message: fmt.Sprintf("No stored credentials uniquely match workstream %s.", workstreamCode)}
+	if agentID != "" {
+		credential, err := a.Store.FindByAgent(workstreamCode, agentID)
+		if err != nil {
+			return credentials.Credential{}, &publicError{message: fmt.Sprintf(
+				"No stored credential matches agent %s in workstream %s.",
+				singleLine(agentID),
+				workstreamCode,
+			)}
+		}
+		return credential, nil
 	}
-	return credential, nil
+
+	credential, err := a.Store.FindByWorkstream(workstreamCode)
+	if err == nil {
+		return credential, nil
+	}
+	var multiple *credentials.MultipleAgentsError
+	if errors.As(err, &multiple) {
+		agentIDs := make([]string, 0, len(multiple.AgentIDs))
+		for _, availableAgentID := range multiple.AgentIDs {
+			agentIDs = append(agentIDs, singleLine(availableAgentID))
+		}
+		return credentials.Credential{}, &publicError{message: fmt.Sprintf(
+			"Multiple credentials match workstream %s. Available agent IDs: %s. Re-run with --agent <agentId>.",
+			workstreamCode,
+			strings.Join(agentIDs, ", "),
+		)}
+	}
+	return credentials.Credential{}, &publicError{message: fmt.Sprintf("No stored credentials match workstream %s.", workstreamCode)}
 }
 
 func exchangeStatusError(status int) error {
@@ -298,18 +330,12 @@ func workstreamStatusError(status int, code string, workstreamCode string, write
 
 func responseCode(body []byte) string {
 	var response struct {
-		Code  string `json:"code"`
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
+		Code string `json:"code"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
 		return ""
 	}
-	if response.Code != "" {
-		return response.Code
-	}
-	return response.Error.Code
+	return response.Code
 }
 
 func (a *App) request(method string, path string, apiToken string, payload []byte) (httpResult, error) {
@@ -360,10 +386,6 @@ func (a *App) request(method string, path string, apiToken string, payload []byt
 			}
 			return httpResult{}, &publicError{message: "Unable to read the AirCommand response."}
 		}
-		if retryableStatus(response.StatusCode) && attempt < attempts {
-			a.waitBeforeRetry(attempt)
-			continue
-		}
 		return httpResult{status: response.StatusCode, body: contents}, nil
 	}
 	return httpResult{}, &publicError{message: "Unable to connect to AirCommand."}
@@ -380,21 +402,6 @@ func readResponse(reader io.Reader) ([]byte, error) {
 	return contents, nil
 }
 
-func retryableStatus(status int) bool {
-	switch status {
-	case http.StatusRequestTimeout,
-		http.StatusTooEarly,
-		http.StatusTooManyRequests,
-		http.StatusInternalServerError,
-		http.StatusBadGateway,
-		http.StatusServiceUnavailable,
-		http.StatusGatewayTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
 func (a *App) waitBeforeRetry(attempt int) {
 	if a.RetryDelay != nil {
 		a.RetryDelay(attempt)
@@ -403,78 +410,37 @@ func (a *App) waitBeforeRetry(attempt int) {
 	time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
 }
 
-func decodeExchangeResult(body []byte) (exchangeResult, error) {
+func decodeExchangeResponse(body []byte) (exchangeResponse, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	var root map[string]any
-	if err := decoder.Decode(&root); err != nil {
-		return exchangeResult{}, err
+	decoder.DisallowUnknownFields()
+	var response exchangeResponse
+	if err := decoder.Decode(&response); err != nil {
+		return exchangeResponse{}, err
 	}
-
-	scopes := []map[string]any{root}
-	if data, ok := objectAt(root, "data"); ok {
-		scopes = append([]map[string]any{data}, scopes...)
+	if err := ensureJSONEnd(decoder); err != nil {
+		return exchangeResponse{}, err
 	}
-
-	var result exchangeResult
-	for _, scope := range scopes {
-		if result.AgentID == "" {
-			result.AgentID = firstString(scope, []string{"agentId"}, []string{"agentID"}, []string{"agent", "id"}, []string{"agent", "agentId"})
-		}
-		if result.AgentName == "" {
-			result.AgentName = firstString(scope, []string{"agentName"}, []string{"agent", "name"}, []string{"agent", "agentName"})
-		}
-		if result.WorkstreamCode == "" {
-			result.WorkstreamCode = firstString(scope, []string{"workstreamCode"}, []string{"workstream", "code"}, []string{"agent", "workstreamCode"})
-		}
-		if result.SocketAddress == "" {
-			result.SocketAddress = firstString(
-				scope,
-				[]string{"socketAddress"},
-				[]string{"socketUrl"},
-				[]string{"socketURL"},
-				[]string{"socketAddr"},
-				[]string{"websocketUrl"},
-				[]string{"websocketURL"},
-				[]string{"socket", "address"},
-				[]string{"socket", "url"},
-			)
-		}
+	if response.AgentID == "" ||
+		response.AgentName == "" ||
+		response.SocketAddress == "" ||
+		response.WorkstreamID == "" ||
+		response.WorkstreamCode == "" ||
+		response.Generation == nil ||
+		response.ConsumedAt == "" {
+		return exchangeResponse{}, errors.New("exchange response is missing a required field")
 	}
-	if result.AgentID == "" || result.AgentName == "" || result.WorkstreamCode == "" || result.SocketAddress == "" {
-		return exchangeResult{}, fmt.Errorf("exchange response is missing required metadata")
-	}
-	return result, nil
+	return response, nil
 }
 
-func objectAt(value map[string]any, key string) (map[string]any, bool) {
-	object, ok := value[key].(map[string]any)
-	return object, ok
-}
-
-func firstString(value map[string]any, paths ...[]string) string {
-	for _, path := range paths {
-		current := any(value)
-		for _, key := range path {
-			object, ok := current.(map[string]any)
-			if !ok {
-				current = nil
-				break
-			}
-			current = object[key]
+func ensureJSONEnd(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("response contains more than one JSON value")
 		}
-		switch item := current.(type) {
-		case string:
-			if item != "" {
-				return item
-			}
-		case json.Number:
-			return item.String()
-		case float64:
-			return strconv.FormatFloat(item, 'f', -1, 64)
-		}
+		return err
 	}
-	return ""
+	return nil
 }
 
 func writeSafeResponse(output io.Writer, body []byte, protected ...string) error {

@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -56,6 +57,36 @@ func TestSaveUsesSecureModesAndAgentKeyedShape(t *testing.T) {
 	}
 	if got := file.Agents[want.AgentID]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("stored credential = %#v, want %#v", got, want)
+	}
+}
+
+func TestFindSupportsExplicitAgentAndReportsAmbiguity(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(t.TempDir())
+	first := Credential{APIToken: "api_one", SocketKey: "sock_one", WorkstreamCode: "694", AgentID: "agent-z", SocketAddress: "ac:agent-z"}
+	second := Credential{APIToken: "api_two", SocketKey: "sock_two", WorkstreamCode: "694", AgentID: "agent-a", SocketAddress: "ac:agent-a"}
+	for _, credential := range []Credential{first, second} {
+		if err := store.Save(credential); err != nil {
+			t.Fatalf("Save(%s): %v", credential.AgentID, err)
+		}
+	}
+
+	got, err := store.FindByAgent("694", second.AgentID)
+	if err != nil {
+		t.Fatalf("FindByAgent: %v", err)
+	}
+	if !reflect.DeepEqual(got, second) {
+		t.Fatalf("FindByAgent = %#v, want %#v", got, second)
+	}
+
+	_, err = store.FindByWorkstream("694")
+	var multiple *MultipleAgentsError
+	if !errors.As(err, &multiple) {
+		t.Fatalf("FindByWorkstream error = %v, want *MultipleAgentsError", err)
+	}
+	if want := []string{"agent-a", "agent-z"}; !reflect.DeepEqual(multiple.AgentIDs, want) {
+		t.Fatalf("available agent IDs = %v, want %v", multiple.AgentIDs, want)
 	}
 }
 

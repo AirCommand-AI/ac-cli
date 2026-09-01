@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
-func TestExchangeIntegrationUsesStdinAndReusesRequestOnRetry(t *testing.T) {
+func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing.T) {
 	t.Parallel()
 
 	ticket := "setup_ticket_from_stdin"
@@ -31,7 +32,6 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnRetry(t *testing.T) {
 		t.Fatalf("marshal expected request: %v", err)
 	}
 
-	var requests [][]byte
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost {
 			t.Errorf("method = %q, want POST", request.Method)
@@ -49,27 +49,26 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnRetry(t *testing.T) {
 		if readErr != nil {
 			t.Errorf("read request body: %v", readErr)
 		}
-		requests = append(requests, body)
-		if len(requests) == 1 {
-			writer.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = writer.Write([]byte(`{"error":"temporary"}`))
-			return
+		if !bytes.Equal(body, wantBody) {
+			t.Errorf("body = %s, want %s", body, wantBody)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"agentId":"agent-7","agentName":"Builder","workstreamCode":"694","socketAddress":"wss://socket.example/agent-7"}`))
+		_, _ = writer.Write([]byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamId":"workstream-694","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z"}`))
 	}))
 	defer server.Close()
 
 	client, stdout, stderr := testApp(t, server.URL, ticket+"\n", deterministicRandom(0x11, 0x22, 0x33))
+	transport := &failOnceTransport{base: http.DefaultTransport}
+	client.HTTPClient = &http.Client{Transport: transport}
 	if exitCode := client.Run([]string{"exchange"}); exitCode != 0 {
 		t.Fatalf("exchange exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	if len(requests) != 2 {
-		t.Fatalf("exchange sent %d requests, want 2", len(requests))
+	if transport.calls != 2 {
+		t.Fatalf("exchange transport attempts = %d, want 2", transport.calls)
 	}
-	for index, body := range requests {
+	for index, body := range transport.bodies {
 		if !bytes.Equal(body, wantBody) {
-			t.Errorf("request %d body = %s, want %s", index+1, body, wantBody)
+			t.Errorf("transport request %d body = %s, want %s", index+1, body, wantBody)
 		}
 	}
 
@@ -79,7 +78,10 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnRetry(t *testing.T) {
 			t.Errorf("%s reached command output", name)
 		}
 	}
-	for _, metadata := range []string{"Builder", "agent-7", "694", "wss://socket.example/agent-7"} {
+	if !strings.HasPrefix(output, "Agent ID: agent-7\nUse for send/read: --agent agent-7\n") {
+		t.Errorf("exchange output does not prominently identify the agent: %q", output)
+	}
+	for _, metadata := range []string{"Builder", "agent-7", "694", "ac:agent-7"} {
 		if !strings.Contains(output, metadata) {
 			t.Errorf("exchange output %q does not contain %q", output, metadata)
 		}
@@ -94,7 +96,7 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnRetry(t *testing.T) {
 		SocketKey:      socketKey,
 		WorkstreamCode: "694",
 		AgentID:        "agent-7",
-		SocketAddress:  "wss://socket.example/agent-7",
+		SocketAddress:  "ac:agent-7",
 	}
 	if stored != wantCredential {
 		t.Fatalf("stored credential = %#v, want %#v", stored, wantCredential)
@@ -182,6 +184,66 @@ func TestReadIntegration(t *testing.T) {
 	want := "{\"code\":\"694\",\"updates\":[{\"body\":\"starting on the parser\"}]}\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestAgentSelectorDisambiguatesTwoAgentsInOneWorkstream(t *testing.T) {
+	t.Parallel()
+
+	claude := testCredential()
+	claude.AgentID = "agent-claude"
+	claude.APIToken = "api_" + repeatedHex(0xc1)
+	claude.SocketKey = "sock_" + repeatedHex(0xc2)
+	claude.SocketAddress = "ac:agent-claude"
+	pi := testCredential()
+	pi.AgentID = "agent-pi"
+	pi.APIToken = "api_" + repeatedHex(0xd1)
+	pi.SocketKey = "sock_" + repeatedHex(0xd2)
+	pi.SocketAddress = "ac:agent-pi"
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		if got, want := request.Header.Get("Authorization"), "Bearer "+pi.APIToken; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x61))
+	for _, credential := range []credentials.Credential{claude, pi} {
+		if err := client.Store.Save(credential); err != nil {
+			t.Fatalf("Save(%s): %v", credential.AgentID, err)
+		}
+	}
+
+	if exitCode := client.Run([]string{"send", "--workstream", "694", "--agent", "agent-pi", "--body", "hello"}); exitCode != 0 {
+		t.Fatalf("selected send exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := client.Run([]string{"read", "--workstream", "694", "--agent", "agent-pi"}); exitCode != 0 {
+		t.Fatalf("selected read exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if requests != 2 {
+		t.Fatalf("selected commands sent %d requests, want 2", requests)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if exitCode := client.Run([]string{"read", "--workstream", "694"}); exitCode == 0 {
+		t.Fatal("ambiguous read unexpectedly succeeded")
+	}
+	if requests != 2 {
+		t.Fatalf("ambiguous read sent a request; request count = %d, want 2", requests)
+	}
+	message := stderr.String()
+	for _, expected := range []string{"agent-claude", "agent-pi", "--agent <agentId>"} {
+		if !strings.Contains(message, expected) {
+			t.Errorf("ambiguous error %q does not contain %q", message, expected)
+		}
 	}
 }
 
@@ -308,14 +370,61 @@ func TestWorkstreamStatusMessages(t *testing.T) {
 	}
 }
 
-func TestResponseCodeSupportsTopLevelAndNestedErrors(t *testing.T) {
+func TestResponseCodeUsesTopLevelContract(t *testing.T) {
 	t.Parallel()
 
 	if got := responseCode([]byte(`{"code":"WorkstreamPaused"}`)); got != "WorkstreamPaused" {
 		t.Fatalf("top-level code = %q", got)
 	}
-	if got := responseCode([]byte(`{"error":{"code":"WorkstreamPaused"}}`)); got != "WorkstreamPaused" {
-		t.Fatalf("nested code = %q", got)
+	if got := responseCode([]byte(`{"error":{"code":"WorkstreamPaused"}}`)); got != "" {
+		t.Fatalf("speculative nested code = %q, want empty", got)
+	}
+}
+
+func TestExchangeResponseRequiresExactFlatContract(t *testing.T) {
+	t.Parallel()
+
+	valid := []byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamId":"workstream-694","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z"}`)
+	response, err := decodeExchangeResponse(valid)
+	if err != nil {
+		t.Fatalf("decode exact response: %v", err)
+	}
+	if response.AgentID != "agent-7" || response.WorkstreamID != "workstream-694" || response.Generation == nil || *response.Generation != 1 {
+		t.Fatalf("decoded response = %#v", response)
+	}
+
+	for name, body := range map[string][]byte{
+		"nested":        []byte(`{"agent":{"id":"agent-7"}}`),
+		"missing field": []byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z"}`),
+		"unknown field": []byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamId":"workstream-694","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z","other":"surprise"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := decodeExchangeResponse(body); err == nil {
+				t.Fatal("unexpected response shape decoded successfully")
+			}
+		})
+	}
+}
+
+func TestHTTPStatusIsNotRetried(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = writer.Write([]byte(`{"code":"Unavailable"}`))
+	}))
+	defer server.Close()
+
+	client, _, _ := testApp(t, server.URL, "setup_ticket", deterministicRandom(0x71, 0x72, 0x73))
+	client.RetryDelay = func(int) { t.Fatal("HTTP status triggered retry delay") }
+	if exitCode := client.Run([]string{"exchange"}); exitCode == 0 {
+		t.Fatal("exchange unexpectedly succeeded")
+	}
+	if requests != 1 {
+		t.Fatalf("HTTP 503 produced %d requests, want 1", requests)
 	}
 }
 
@@ -348,6 +457,29 @@ func deterministicRandom(values ...byte) io.Reader {
 
 func repeatedHex(value byte) string {
 	return hex.EncodeToString(bytes.Repeat([]byte{value}, 32))
+}
+
+type failOnceTransport struct {
+	base   http.RoundTripper
+	calls  int
+	bodies [][]byte
+}
+
+func (t *failOnceTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.calls++
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err := request.Body.Close(); err != nil {
+		return nil, err
+	}
+	t.bodies = append(t.bodies, body)
+	if t.calls == 1 {
+		return nil, errors.New("simulated transport failure")
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	return t.base.RoundTrip(request)
 }
 
 func testCredential() credentials.Credential {
