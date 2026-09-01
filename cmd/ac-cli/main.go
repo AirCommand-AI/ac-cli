@@ -7,6 +7,7 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/app"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 )
 
 const dashboardURL = "https://dashboard.aircommand.ai"
@@ -23,10 +24,11 @@ func main() {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		Store:  credentials.NewStore(home),
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
+		Store:       credentials.NewStore(home),
+		ListenStore: listenstore.NewStore(home),
+		Stdin:       os.Stdin,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
 	}
 	os.Exit(client.Run(os.Args[1:]))
 }

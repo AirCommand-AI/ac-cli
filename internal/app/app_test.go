@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 )
 
 func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing.T) {
@@ -78,7 +79,7 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 			t.Errorf("%s reached command output", name)
 		}
 	}
-	if !strings.HasPrefix(output, "Agent ID: agent-7\nUse for send/read: --agent agent-7\n") {
+	if !strings.HasPrefix(output, "Agent ID: agent-7\nUse for send/read/listen: --agent agent-7\n") {
 		t.Errorf("exchange output does not prominently identify the agent: %q", output)
 	}
 	for _, metadata := range []string{"Builder", "agent-7", "694", "ac:agent-7"} {
@@ -381,7 +382,7 @@ func TestResponseCodeUsesTopLevelContract(t *testing.T) {
 	}
 }
 
-func TestExchangeResponseRequiresExactFlatContract(t *testing.T) {
+func TestExchangeResponseRequiresFieldsAndAllowsAdditions(t *testing.T) {
 	t.Parallel()
 
 	valid := []byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamId":"workstream-694","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z"}`)
@@ -393,10 +394,15 @@ func TestExchangeResponseRequiresExactFlatContract(t *testing.T) {
 		t.Fatalf("decoded response = %#v", response)
 	}
 
+	withUnknownField := []byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamId":"workstream-694","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z","other":"additive"}`)
+	if _, err := decodeExchangeResponse(withUnknownField); err != nil {
+		t.Fatalf("decode response with additive field: %v", err)
+	}
+
 	for name, body := range map[string][]byte{
 		"nested":        []byte(`{"agent":{"id":"agent-7"}}`),
 		"missing field": []byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z"}`),
-		"unknown field": []byte(`{"agentId":"agent-7","agentName":"Builder","socketAddress":"ac:agent-7","workstreamId":"workstream-694","workstreamCode":"694","generation":1,"consumedAt":"2026-09-01T19:05:34Z","other":"surprise"}`),
+		"trailing data": append(append([]byte(nil), valid...), []byte(` {}`)...),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -433,10 +439,12 @@ func testApp(t *testing.T, baseURL string, stdin string, random io.Reader) (*App
 
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
+	home := t.TempDir()
 	client := &App{
 		BaseURL:       baseURL,
 		HTTPClient:    http.DefaultClient,
-		Store:         credentials.NewStore(t.TempDir()),
+		Store:         credentials.NewStore(home),
+		ListenStore:   listenstore.NewStore(home),
 		Stdin:         strings.NewReader(stdin),
 		Stdout:        stdout,
 		Stderr:        stderr,

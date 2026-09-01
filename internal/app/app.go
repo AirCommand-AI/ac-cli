@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
@@ -26,15 +28,18 @@ const (
 var validWorkstreamCode = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type App struct {
-	BaseURL       string
-	HTTPClient    *http.Client
-	Store         *credentials.Store
-	Stdin         io.Reader
-	Stdout        io.Writer
-	Stderr        io.Writer
-	Random        io.Reader
-	RetryAttempts int
-	RetryDelay    func(attempt int)
+	BaseURL         string
+	HTTPClient      *http.Client
+	Store           *credentials.Store
+	ListenStore     *listenstore.Store
+	Stdin           io.Reader
+	Stdout          io.Writer
+	Stderr          io.Writer
+	Random          io.Reader
+	RetryAttempts   int
+	RetryDelay      func(attempt int)
+	ListenPollLimit int
+	ListenSleep     func(delay time.Duration)
 }
 
 type publicError struct {
@@ -43,6 +48,21 @@ type publicError struct {
 
 func (e *publicError) Error() string {
 	return e.message
+}
+
+type silentError struct{}
+
+func (*silentError) Error() string {
+	return "listen stopped"
+}
+
+type transportFailure struct {
+	reason        string
+	publicMessage string
+}
+
+func (*transportFailure) Error() string {
+	return "AirCommand transport failure"
 }
 
 type exchangeRequest struct {
@@ -67,6 +87,21 @@ type exchangeResponse struct {
 	ConsumedAt     string `json:"consumedAt"`
 }
 
+type messageNotification struct {
+	Type     string `json:"type"`
+	UpdateID string `json:"updateId"`
+	Author   string `json:"author"`
+	TaskID   string `json:"taskId"`
+	At       string `json:"at"`
+	Summary  string `json:"summary"`
+}
+
+type messagesResponse struct {
+	Notifications    []messageNotification `json:"notifications"`
+	Cursor           *string               `json:"cursor"`
+	PollAfterSeconds *int                  `json:"pollAfterSeconds"`
+}
+
 type httpResult struct {
 	status int
 	body   []byte
@@ -84,6 +119,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.send(arguments[1:])
 		case "read":
 			err = a.read(arguments[1:])
+		case "listen":
+			err = a.listen(arguments[1:])
 		default:
 			err = &publicError{message: usage()}
 		}
@@ -91,6 +128,9 @@ func (a *App) Run(arguments []string) int {
 
 	if err == nil {
 		return 0
+	}
+	if _, silent := err.(*silentError); silent {
+		return 1
 	}
 	message := "AirCommand command failed."
 	if visible, ok := err.(*publicError); ok {
@@ -101,7 +141,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli exchange | send --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli exchange | send --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | listen --workstream <code> [--agent <agentId>]"
 }
 
 func (a *App) exchange(arguments []string) error {
@@ -165,7 +205,7 @@ func (a *App) exchange(arguments []string) error {
 
 	protected := []string{ticket, apiToken, socketKey}
 	output := fmt.Sprintf(
-		"Agent ID: %s\nUse for send/read: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
+		"Agent ID: %s\nUse for send/read/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentName, protected...),
@@ -244,6 +284,180 @@ func (a *App) read(arguments []string) error {
 		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, false)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
+}
+
+func (a *App) listen(arguments []string) error {
+	flags := flag.NewFlagSet("listen", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workstreamCode string
+	var agentID string
+	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
+		return &publicError{message: "Usage: ac-cli listen --workstream <code> [--agent <agentId>]"}
+	}
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+	credential, err := a.credentialFor(workstreamCode, agentID)
+	if err != nil {
+		return err
+	}
+	if a.ListenStore == nil {
+		return &publicError{message: "Listener state storage is unavailable."}
+	}
+
+	cursor, err := a.ListenStore.LoadCursor(workstreamCode, credential.AgentID)
+	if err != nil {
+		return &publicError{message: "Unable to read the listener cursor state."}
+	}
+
+	disconnected := false
+	networkFailures := 0
+	for poll := 1; ; poll++ {
+		query := url.Values{"since": []string{cursor}}
+		path := "/agent/v1/workstreams/" + workstreamCode + "/messages?" + query.Encode()
+		response, requestErr := a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
+		if requestErr != nil {
+			var transport *transportFailure
+			if !errors.As(requestErr, &transport) {
+				return requestErr
+			}
+
+			reason := redact(singleLine(transport.reason), credential.APIToken, credential.SocketKey, cursor)
+			if reason == "" {
+				reason = "network error"
+			}
+			if err := a.writeActionLine("Lost connection: " + reason); err != nil {
+				return err
+			}
+			disconnected = true
+			networkFailures++
+			if a.listenLimitReached(poll) {
+				return nil
+			}
+			a.sleepForListen(networkBackoff(networkFailures))
+			continue
+		}
+
+		switch response.status {
+		case http.StatusUnauthorized:
+			if err := a.writeActionLine(fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)); err != nil {
+				return err
+			}
+			return &silentError{}
+		case http.StatusNotFound:
+			if err := a.writeActionLine(fmt.Sprintf("Workstream %s no longer exists.", workstreamCode)); err != nil {
+				return err
+			}
+			return &silentError{}
+		}
+		if response.status < 200 || response.status >= 300 {
+			return &publicError{message: fmt.Sprintf("AirCommand listener request failed (HTTP %d).", response.status)}
+		}
+
+		messages, err := decodeMessagesResponse(response.body)
+		if err != nil {
+			return &publicError{message: "The message service returned an invalid response."}
+		}
+		if disconnected {
+			if err := a.writeActionLine("Connection restored."); err != nil {
+				return err
+			}
+			disconnected = false
+		}
+		networkFailures = 0
+
+		for _, notification := range messages.Notifications {
+			if err := a.ListenStore.AppendNotification(workstreamCode, notification); err != nil {
+				return &publicError{message: "Unable to append the AirCommand notification spool."}
+			}
+			if err := a.writeActionLine(notification.Summary); err != nil {
+				return err
+			}
+		}
+
+		nextCursor := *messages.Cursor
+		if nextCursor != cursor {
+			if err := a.ListenStore.SaveCursor(workstreamCode, credential.AgentID, nextCursor); err != nil {
+				return &publicError{message: "Unable to persist the listener cursor."}
+			}
+			cursor = nextCursor
+		}
+		if a.listenLimitReached(poll) {
+			return nil
+		}
+		a.sleepForListen(pollDelay(messages.PollAfterSeconds))
+	}
+}
+
+func decodeMessagesResponse(body []byte) (messagesResponse, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var response messagesResponse
+	if err := decoder.Decode(&response); err != nil {
+		return messagesResponse{}, err
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return messagesResponse{}, err
+	}
+	if response.Cursor == nil {
+		return messagesResponse{}, errors.New("message response is missing cursor")
+	}
+	for _, notification := range response.Notifications {
+		if notification.UpdateID == "" || notification.At == "" || notification.Summary == "" {
+			return messagesResponse{}, errors.New("message response has an incomplete notification")
+		}
+		if notification.Type != "workstream.message" && notification.Type != "task.message" {
+			return messagesResponse{}, errors.New("message response has an unsupported notification type")
+		}
+	}
+	return response, nil
+}
+
+func (a *App) writeActionLine(message string) error {
+	if _, err := io.WriteString(a.outputWriter(), "[AirCommand] "+message+"\n"); err != nil {
+		return &publicError{message: "Unable to write listener output."}
+	}
+	return nil
+}
+
+func pollDelay(seconds *int) time.Duration {
+	if seconds == nil {
+		return 30 * time.Second
+	}
+	if *seconds < 5 {
+		return 5 * time.Second
+	}
+	maximumSeconds := int64((time.Duration(1<<63 - 1)) / time.Second)
+	if int64(*seconds) > maximumSeconds {
+		return time.Duration(1<<63 - 1)
+	}
+	return time.Duration(*seconds) * time.Second
+}
+
+func networkBackoff(failures int) time.Duration {
+	switch failures {
+	case 1:
+		return 5 * time.Second
+	case 2:
+		return 10 * time.Second
+	case 3:
+		return 20 * time.Second
+	default:
+		return 30 * time.Second
+	}
+}
+
+func (a *App) listenLimitReached(poll int) bool {
+	return a.ListenPollLimit > 0 && poll >= a.ListenPollLimit
+}
+
+func (a *App) sleepForListen(delay time.Duration) {
+	if a.ListenSleep != nil {
+		a.ListenSleep(delay)
+		return
+	}
+	time.Sleep(delay)
 }
 
 func readTicket(input io.Reader) (string, error) {
@@ -339,6 +553,28 @@ func responseCode(body []byte) string {
 }
 
 func (a *App) request(method string, path string, apiToken string, payload []byte) (httpResult, error) {
+	attempts := a.RetryAttempts
+	if attempts <= 0 {
+		attempts = 3
+	}
+
+	var lastTransport *transportFailure
+	for attempt := 1; attempt <= attempts; attempt++ {
+		result, err := a.singleRequest(method, path, apiToken, payload)
+		if err == nil {
+			return result, nil
+		}
+		if !errors.As(err, &lastTransport) {
+			return httpResult{}, err
+		}
+		if attempt < attempts {
+			a.waitBeforeRetry(attempt)
+		}
+	}
+	return httpResult{}, &publicError{message: lastTransport.publicMessage}
+}
+
+func (a *App) singleRequest(method string, path string, apiToken string, payload []byte) (httpResult, error) {
 	client := a.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -349,47 +585,48 @@ func (a *App) request(method string, path string, apiToken string, payload []byt
 			return http.ErrUseLastResponse
 		}
 	}
-	client = &configuredClient
-	attempts := a.RetryAttempts
-	if attempts <= 0 {
-		attempts = 3
+
+	request, err := http.NewRequest(method, strings.TrimRight(a.BaseURL, "/")+path, bytes.NewReader(payload))
+	if err != nil {
+		return httpResult{}, &publicError{message: "The AirCommand service address is invalid."}
+	}
+	request.Header.Set("Accept", "application/json")
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if apiToken != "" {
+		request.Header.Set("Authorization", "Bearer "+apiToken)
 	}
 
-	for attempt := 1; attempt <= attempts; attempt++ {
-		request, err := http.NewRequest(method, strings.TrimRight(a.BaseURL, "/")+path, bytes.NewReader(payload))
-		if err != nil {
-			return httpResult{}, &publicError{message: "The AirCommand service address is invalid."}
+	response, err := configuredClient.Do(request)
+	if err != nil {
+		return httpResult{}, &transportFailure{
+			reason:        networkErrorReason(err),
+			publicMessage: "Unable to connect to AirCommand.",
 		}
-		request.Header.Set("Accept", "application/json")
-		if payload != nil {
-			request.Header.Set("Content-Type", "application/json")
-		}
-		if apiToken != "" {
-			request.Header.Set("Authorization", "Bearer "+apiToken)
-		}
-
-		response, err := client.Do(request)
-		if err != nil {
-			if attempt < attempts {
-				a.waitBeforeRetry(attempt)
-				continue
-			}
-			return httpResult{}, &publicError{message: "Unable to connect to AirCommand."}
-		}
-
-		contents, readErr := readResponse(response.Body)
-		closeErr := response.Body.Close()
-		if readErr != nil || closeErr != nil {
-			if attempt < attempts {
-				a.waitBeforeRetry(attempt)
-				continue
-			}
-			return httpResult{}, &publicError{message: "Unable to read the AirCommand response."}
-		}
-		return httpResult{status: response.StatusCode, body: contents}, nil
 	}
-	return httpResult{}, &publicError{message: "Unable to connect to AirCommand."}
+
+	contents, readErr := readResponse(response.Body)
+	closeErr := response.Body.Close()
+	if errors.Is(readErr, errResponseTooLarge) {
+		return httpResult{}, &publicError{message: "The AirCommand response is too large."}
+	}
+	if readErr != nil {
+		return httpResult{}, &transportFailure{
+			reason:        networkErrorReason(readErr),
+			publicMessage: "Unable to read the AirCommand response.",
+		}
+	}
+	if closeErr != nil {
+		return httpResult{}, &transportFailure{
+			reason:        networkErrorReason(closeErr),
+			publicMessage: "Unable to read the AirCommand response.",
+		}
+	}
+	return httpResult{status: response.StatusCode, body: contents}, nil
 }
+
+var errResponseTooLarge = errors.New("AirCommand response is too large")
 
 func readResponse(reader io.Reader) ([]byte, error) {
 	contents, err := io.ReadAll(io.LimitReader(reader, maxResponseBytes+1))
@@ -397,9 +634,17 @@ func readResponse(reader io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	if len(contents) > maxResponseBytes {
-		return nil, fmt.Errorf("response exceeds %d bytes", maxResponseBytes)
+		return nil, errResponseTooLarge
 	}
 	return contents, nil
+}
+
+func networkErrorReason(err error) string {
+	var urlError *url.Error
+	if errors.As(err, &urlError) && urlError.Err != nil {
+		return urlError.Err.Error()
+	}
+	return err.Error()
 }
 
 func (a *App) waitBeforeRetry(attempt int) {
@@ -412,7 +657,6 @@ func (a *App) waitBeforeRetry(attempt int) {
 
 func decodeExchangeResponse(body []byte) (exchangeResponse, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
 	var response exchangeResponse
 	if err := decoder.Decode(&response); err != nil {
 		return exchangeResponse{}, err

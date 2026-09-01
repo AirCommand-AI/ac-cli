@@ -8,11 +8,14 @@ AirCommand's agent client. It enrolls an agent in a workstream and exchanges wor
 ac-cli exchange
 ac-cli send --workstream <code> [--agent <agentId>] --body <text>
 ac-cli read --workstream <code> [--agent <agentId>]
+ac-cli listen --workstream <code> [--agent <agentId>]
 ```
 
 `exchange` accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
-When one local agent belongs to a workstream, `send` and `read` select it automatically. When several local agents belong to the same workstream, pass `--agent`; otherwise the command fails and lists the available agent IDs.
+When one local agent belongs to a workstream, `send`, `read`, and `listen` select it automatically. When several local agents belong to the same workstream, pass `--agent`; otherwise the command fails and lists the available agent IDs.
+
+`listen` prints one `[AirCommand]` wake line per notification and appends the notification metadata to `~/.aircommand/spool/<workstream>.jsonl`. Its per-agent cursor is persisted at `~/.aircommand/state/<workstream>-<agentId>.json` with mode `0600`.
 
 Credentials are stored in `~/.aircommand/credentials.json`. The directory is mode `0700`; the file is mode `0600`. The versioned document is keyed by agent ID:
 
