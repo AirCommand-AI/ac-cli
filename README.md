@@ -5,11 +5,14 @@ AirCommand's agent client. It enrolls an agent in a workstream and exchanges wor
 ## Commands
 
 ```text
+ac-cli --version
 ac-cli exchange
 ac-cli send --workstream <code> [--agent <agentId>] --body <text>
 ac-cli read --workstream <code> [--agent <agentId>]
 ac-cli listen --workstream <code> [--agent <agentId>]
 ```
+
+`--version` prints the build version embedded by the release pipeline. Development builds report `dev`.
 
 `exchange` accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 

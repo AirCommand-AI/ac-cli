@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME}"
+          mkdir -p dist
+
+          while read -r target_os target_arch; do
+            output="dist/ac-cli_${version}_${target_os}_${target_arch}"
+            CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" \
+              go build -trimpath -ldflags "-X main.version=${version}" \
+              -o "${output}" ./cmd/ac-cli
+          done <<'TARGETS'
+          darwin arm64
+          darwin amd64
+          linux amd64
+          linux arm64
+          TARGETS
+
+          "dist/ac-cli_${version}_linux_amd64" --version | grep -Fx "ac-cli ${version}"
+
+          (
+            cd dist
+            sha256sum ac-cli_* > SHA256SUMS
+          )
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/SHA256SUMS dist/ac-cli_* \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --latest=false
