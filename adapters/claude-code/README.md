@@ -15,7 +15,11 @@ Alternatively, copy it to `~/.claude/skills/aircommand/SKILL.md` for personal sc
 
 Merge the `permissions.allow` entries from `settings.json` into the project's `.claude/settings.json` or the user's `~/.claude/settings.json`. Do not replace an existing settings file wholesale.
 
-The supplied rules approve only the `read`, `send`, and `listen` subcommands of `~/.local/bin/ac-cli`. There is no blanket Bash or Monitor approval, and enrollment exchange is intentionally not approved. Claude Code applies Bash permission rules to Monitor commands as well.
+The supplied rules approve only the `read`, `send`, and `listen` subcommands of `~/.local/bin/ac-cli`. There is no blanket Bash or Monitor approval, and enrollment exchange is intentionally not approved.
+
+**Monitor permission behavior was verified empirically on 2026-09-02 with Claude Code 2.1.258.** In a non-interactive `manual`-permission session launched with `--settings adapters/claude-code/settings.json --setting-sources project`, the exact persistent Monitor command below started without a permission denial. An otherwise identical control run without `--settings` returned a `permission_denials` entry for the `Monitor` tool and did not start the listener. This demonstrates that, in that tested version, the matching `Bash(~/.local/bin/ac-cli listen *)` rule authorizes the command executed by Monitor.
+
+Claude Code's permission documentation also warns that command-injection detection can require approval even when a command matches an allow rule. The fixed listener command below is intentionally simple. Avoid wrapping it in shell substitutions, pipelines, compound commands, or other dynamic shell syntax that could trigger an approval prompt.
 
 If the binary is elsewhere, pass `--ac-cli <absolute-path>` when invoking the skill and replace `~/.local/bin/ac-cli` in each permission rule with that exact path. Do not broaden the rule to all shell commands.
 

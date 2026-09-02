@@ -11,3 +11,5 @@ Implement T3's long-lived message listener with durable cursors, stdout wake lin
 - [x] Add cursor, duplicate, empty-poll, delay, failure, and spool tests
 - [x] Update command documentation
 - [x] Run formatting, tests, vet, and build validation
+- [x] Treat the first successful poll without stored state as a silent cursor baseline
+- [x] Test history suppression, one later wake, and restart deduplication

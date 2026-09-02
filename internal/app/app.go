@@ -307,7 +307,7 @@ func (a *App) listen(arguments []string) error {
 		return &publicError{message: "Listener state storage is unavailable."}
 	}
 
-	cursor, err := a.ListenStore.LoadCursor(workstreamCode, credential.AgentID)
+	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(workstreamCode, credential.AgentID)
 	if err != nil {
 		return &publicError{message: "Unable to read the listener cursor state."}
 	}
@@ -315,8 +315,11 @@ func (a *App) listen(arguments []string) error {
 	disconnected := false
 	networkFailures := 0
 	for poll := 1; ; poll++ {
-		query := url.Values{"since": []string{cursor}}
-		path := "/agent/v1/workstreams/" + workstreamCode + "/messages?" + query.Encode()
+		path := "/agent/v1/workstreams/" + workstreamCode + "/messages"
+		if hasStoredCursor {
+			query := url.Values{"since": []string{cursor}}
+			path += "?" + query.Encode()
+		}
 		response, requestErr := a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
 		if requestErr != nil {
 			var transport *transportFailure
@@ -368,21 +371,24 @@ func (a *App) listen(arguments []string) error {
 		}
 		networkFailures = 0
 
-		for _, notification := range messages.Notifications {
-			if err := a.ListenStore.AppendNotification(workstreamCode, notification); err != nil {
-				return &publicError{message: "Unable to append the AirCommand notification spool."}
-			}
-			if err := a.writeActionLine(notification.Summary); err != nil {
-				return err
+		if hasStoredCursor {
+			for _, notification := range messages.Notifications {
+				if err := a.ListenStore.AppendNotification(workstreamCode, notification); err != nil {
+					return &publicError{message: "Unable to append the AirCommand notification spool."}
+				}
+				if err := a.writeActionLine(notification.Summary); err != nil {
+					return err
+				}
 			}
 		}
 
 		nextCursor := *messages.Cursor
-		if nextCursor != cursor {
+		if !hasStoredCursor || nextCursor != cursor {
 			if err := a.ListenStore.SaveCursor(workstreamCode, credential.AgentID, nextCursor); err != nil {
 				return &publicError{message: "Unable to persist the listener cursor."}
 			}
 			cursor = nextCursor
+			hasStoredCursor = true
 		}
 		if a.listenLimitReached(poll) {
 			return nil

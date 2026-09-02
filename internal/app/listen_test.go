@@ -16,19 +16,21 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 )
 
-func TestListenPersistsCursorAcrossRestartsWithoutDuplicateOutput(t *testing.T) {
+func TestListenEstablishesSilentBaselineThenWakesOnceWithoutRestartDuplicate(t *testing.T) {
 	t.Parallel()
 
 	const (
-		cursorOne   = "2026-09-01T19:05:34.138976142Z#b3c2e435"
-		cursorTwo   = "2026-09-01T19:06:34.138976142Z#c4d3f546"
-		summaryOne  = "New message on workstream 694 from TestFoo"
-		summaryTwo  = "New task message on workstream 694 from TestBar"
-		messageBody = "body must never reach output"
+		baselineCursor = "2026-09-01T19:05:34.138976142Z#b3c2e435"
+		messageCursor  = "2026-09-01T19:06:34.138976142Z#c4d3f546"
+		historicalOne  = "Historical message on workstream 694 from TestFoo"
+		historicalTwo  = "Older historical message on workstream 694 from TestBaz"
+		newSummary     = "New task message on workstream 694 from TestBar"
+		messageBody    = "body must never reach output"
 	)
 
 	credential := testCredential()
 	requests := 0
+	messagePosted := false
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests++
 		if request.Method != http.MethodGet {
@@ -40,73 +42,85 @@ func TestListenPersistsCursorAcrossRestartsWithoutDuplicateOutput(t *testing.T) 
 		if got, want := request.Header.Get("Authorization"), "Bearer "+credential.APIToken; got != want {
 			t.Errorf("Authorization = %q, want %q", got, want)
 		}
-		if _, present := request.URL.Query()["since"]; !present {
-			t.Error("since query parameter is missing")
-		}
 
 		writer.Header().Set("Content-Type", "application/json")
-		switch since := request.URL.Query().Get("since"); since {
-		case "":
-			_, _ = fmt.Fprintf(writer, `{"notifications":[{"type":"workstream.message","updateId":"b3c2e435","author":"TestFoo","taskId":"","at":"2026-09-01T19:05:34.138976142Z","summary":%q,"body":%q}],"cursor":%q,"pollAfterSeconds":30}`, summaryOne, messageBody, cursorOne)
-		case cursorOne:
-			_, _ = fmt.Fprintf(writer, `{"notifications":[{"type":"task.message","updateId":"c4d3f546","author":"TestBar","taskId":"task-1","at":"2026-09-01T19:06:34.138976142Z","summary":%q}],"cursor":%q,"pollAfterSeconds":30}`, summaryTwo, cursorTwo)
-		case cursorTwo:
-			_, _ = fmt.Fprintf(writer, `{"notifications":[],"cursor":%q,"pollAfterSeconds":30}`, cursorTwo)
+		since, hasSince := request.URL.Query()["since"]
+		switch {
+		case !hasSince:
+			_, _ = fmt.Fprintf(writer, `{"notifications":[{"type":"workstream.message","updateId":"a2b1d324","author":"TestBaz","taskId":"","at":"2026-08-18T19:04:34.138976142Z","summary":%q,"body":%q},{"type":"workstream.message","updateId":"b3c2e435","author":"TestFoo","taskId":"","at":"2026-09-01T19:05:34.138976142Z","summary":%q,"body":%q}],"cursor":%q,"pollAfterSeconds":30}`, historicalTwo, messageBody, historicalOne, messageBody, baselineCursor)
+		case len(since) == 1 && since[0] == baselineCursor:
+			if !messagePosted {
+				t.Error("listener requested post-baseline messages before the test posted one")
+			}
+			_, _ = fmt.Fprintf(writer, `{"notifications":[{"type":"task.message","updateId":"c4d3f546","author":"TestBar","taskId":"task-1","at":"2026-09-01T19:06:34.138976142Z","summary":%q,"body":%q}],"cursor":%q,"pollAfterSeconds":30}`, newSummary, messageBody, messageCursor)
+		case len(since) == 1 && since[0] == messageCursor:
+			_, _ = fmt.Fprintf(writer, `{"notifications":[],"cursor":%q,"pollAfterSeconds":30}`, messageCursor)
 		default:
-			t.Errorf("unexpected since cursor %q", since)
+			t.Errorf("unexpected since cursor %q", request.URL.Query().Get("since"))
 			writer.WriteHeader(http.StatusBadRequest)
 		}
 	}))
 	defer server.Close()
 
 	home := t.TempDir()
-	store := credentials.NewStore(home)
-	if err := store.Save(credential); err != nil {
+	if err := credentials.NewStore(home).Save(credential); err != nil {
 		t.Fatalf("Save credential: %v", err)
 	}
+	stateStore := listenstore.NewStore(home)
 
-	var outputs []string
-	for restart := 0; restart < 3; restart++ {
-		client, stdout, stderr := listenerApp(server.URL, home)
-		client.ListenPollLimit = 1
-		if exitCode := client.Run([]string{"listen", "--workstream", "694", "--agent", credential.AgentID}); exitCode != 0 {
-			t.Fatalf("restart %d exit code = %d, stderr = %q", restart, exitCode, stderr.String())
+	client, stdout, stderr := listenerApp(server.URL, home)
+	client.ListenPollLimit = 2
+	client.ListenSleep = func(_ time.Duration) {
+		cursor, found, err := stateStore.LoadCursor("694", credential.AgentID)
+		if err != nil {
+			t.Fatalf("LoadCursor after baseline: %v", err)
 		}
-		outputs = append(outputs, stdout.String())
+		if !found || cursor != baselineCursor {
+			t.Fatalf("baseline cursor = %q, found = %v; want %q, true", cursor, found, baselineCursor)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("first poll replayed history: %q", stdout.String())
+		}
+		if _, err := os.Stat(stateStore.SpoolPath("694")); !os.IsNotExist(err) {
+			t.Fatalf("first poll created a notification spool, stat error = %v", err)
+		}
+		messagePosted = true
+	}
+	if exitCode := client.Run([]string{"listen", "--workstream", "694", "--agent", credential.AgentID}); exitCode != 0 {
+		t.Fatalf("initial listen exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if got, want := stdout.String(), "[AirCommand] "+newSummary+"\n"; got != want {
+		t.Fatalf("initial listen output = %q, want %q", got, want)
+	}
+
+	restarted, restartStdout, restartStderr := listenerApp(server.URL, home)
+	restarted.ListenPollLimit = 1
+	if exitCode := restarted.Run([]string{"listen", "--workstream", "694", "--agent", credential.AgentID}); exitCode != 0 {
+		t.Fatalf("restart exit code = %d, stderr = %q", exitCode, restartStderr.String())
+	}
+	if restartStdout.Len() != 0 {
+		t.Fatalf("restart duplicated notification output %q", restartStdout.String())
 	}
 	if requests != 3 {
 		t.Fatalf("message requests = %d, want 3", requests)
 	}
-	if got, want := outputs[0], "[AirCommand] "+summaryOne+"\n"; got != want {
-		t.Fatalf("first output = %q, want %q", got, want)
+
+	combinedOutput := stdout.String() + restartStdout.String()
+	for _, forbidden := range []string{historicalOne, historicalTwo, messageBody, baselineCursor, messageCursor, credential.APIToken, credential.SocketKey} {
+		if strings.Contains(combinedOutput, forbidden) {
+			t.Fatalf("listener output contains protected or historical value %q", forbidden)
+		}
 	}
-	if got, want := outputs[1], "[AirCommand] "+summaryTwo+"\n"; got != want {
-		t.Fatalf("second output = %q, want %q", got, want)
-	}
-	if outputs[2] != "" {
-		t.Fatalf("already-seen notifications produced output %q", outputs[2])
-	}
-	combinedOutput := strings.Join(outputs, "")
-	if strings.Count(combinedOutput, summaryOne) != 1 || strings.Count(combinedOutput, summaryTwo) != 1 {
-		t.Fatalf("notification output was duplicated: %q", combinedOutput)
-	}
-	if strings.Contains(combinedOutput, messageBody) {
-		t.Fatal("message body reached stdout")
-	}
-	if strings.Contains(combinedOutput, cursorOne) || strings.Contains(combinedOutput, cursorTwo) {
-		t.Fatal("cursor reached stdout")
-	}
-	if strings.Contains(combinedOutput, credential.APIToken) || strings.Contains(combinedOutput, credential.SocketKey) {
-		t.Fatal("credential reached stdout")
+	if strings.Count(combinedOutput, newSummary) != 1 {
+		t.Fatalf("new notification output count != 1: %q", combinedOutput)
 	}
 
-	stateStore := listenstore.NewStore(home)
-	cursor, err := stateStore.LoadCursor("694", credential.AgentID)
+	cursor, found, err := stateStore.LoadCursor("694", credential.AgentID)
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}
-	if cursor != cursorTwo {
-		t.Fatalf("persisted cursor = %q, want %q", cursor, cursorTwo)
+	if !found || cursor != messageCursor {
+		t.Fatalf("persisted cursor = %q, found = %v; want %q, true", cursor, found, messageCursor)
 	}
 	statePath := stateStore.StatePath("694", credential.AgentID)
 	if want := filepath.Join(home, ".aircommand", "state", "694-agent-7.json"); statePath != want {
@@ -125,25 +139,22 @@ func TestListenPersistsCursorAcrossRestartsWithoutDuplicateOutput(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read spool: %v", err)
 	}
-	if strings.Contains(string(spool), messageBody) {
-		t.Fatal("message body reached spool")
+	spoolText := string(spool)
+	for _, forbidden := range []string{historicalOne, historicalTwo, messageBody} {
+		if strings.Contains(spoolText, forbidden) {
+			t.Fatalf("notification spool contains protected or historical value %q", forbidden)
+		}
 	}
-	spoolLines := strings.Split(strings.TrimSuffix(string(spool), "\n"), "\n")
-	if len(spoolLines) != 2 {
-		t.Fatalf("spool line count = %d, want 2", len(spoolLines))
+	spoolLines := strings.Split(strings.TrimSuffix(spoolText, "\n"), "\n")
+	if len(spoolLines) != 1 {
+		t.Fatalf("spool line count = %d, want 1", len(spoolLines))
 	}
-	for index, line := range spoolLines {
-		var notification messageNotification
-		if err := json.Unmarshal([]byte(line), &notification); err != nil {
-			t.Fatalf("decode spool line %d: %v", index+1, err)
-		}
-		wantSummary := []string{summaryOne, summaryTwo}[index]
-		if notification.Summary != wantSummary {
-			t.Fatalf("spool summary %d = %q, want %q", index+1, notification.Summary, wantSummary)
-		}
-		if !strings.Contains(outputs[index], notification.Summary) {
-			t.Fatalf("spool line %d and stdout are out of sync", index+1)
-		}
+	var notification messageNotification
+	if err := json.Unmarshal([]byte(spoolLines[0]), &notification); err != nil {
+		t.Fatalf("decode spool line: %v", err)
+	}
+	if notification.Summary != newSummary {
+		t.Fatalf("spool summary = %q, want %q", notification.Summary, newSummary)
 	}
 	spoolInfo, err := os.Stat(spoolPath)
 	if err != nil {
@@ -173,6 +184,13 @@ func TestListenEmptyPollPrintsNothing(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("empty poll output = %q, want empty", stdout.String())
+	}
+	cursor, found, err := listenstore.NewStore(home).LoadCursor("694", testCredential().AgentID)
+	if err != nil {
+		t.Fatalf("LoadCursor: %v", err)
+	}
+	if !found || cursor != "" {
+		t.Fatalf("empty baseline cursor = %q, found = %v; want empty, true", cursor, found)
 	}
 }
 

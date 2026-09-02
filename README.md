@@ -18,7 +18,7 @@ ac-cli listen --workstream <code> [--agent <agentId>]
 
 When one local agent belongs to a workstream, `send`, `read`, and `listen` select it automatically. When several local agents belong to the same workstream, pass `--agent`; otherwise the command fails and lists the available agent IDs.
 
-`listen` prints one `[AirCommand]` wake line per notification and appends the notification metadata to `~/.aircommand/spool/<workstream>.jsonl`. Its per-agent cursor is persisted at `~/.aircommand/state/<workstream>-<agentId>.json` with mode `0600`.
+`listen` prints one `[AirCommand]` wake line per notification and appends the notification metadata to `~/.aircommand/spool/<workstream>.jsonl`. On first start it silently establishes a cursor at the newest available page, so historical messages are not replayed; later polls print only new notifications. Its per-agent cursor is persisted at `~/.aircommand/state/<workstream>-<agentId>.json` with mode `0600`.
 
 Credentials are stored in `~/.aircommand/credentials.json`. The directory is mode `0700`; the file is mode `0600`. The versioned document is keyed by agent ID:
 

@@ -33,20 +33,20 @@ func (s *Store) SpoolPath(workstreamCode string) string {
 	return filepath.Join(s.root, "spool", filenameComponent(workstreamCode)+".jsonl")
 }
 
-func (s *Store) LoadCursor(workstreamCode string, agentID string) (string, error) {
+func (s *Store) LoadCursor(workstreamCode string, agentID string) (string, bool, error) {
 	contents, err := os.ReadFile(s.StatePath(workstreamCode, agentID))
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return "", false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read cursor state: %w", err)
+		return "", false, fmt.Errorf("read cursor state: %w", err)
 	}
 
 	var state cursorState
 	if err := json.Unmarshal(contents, &state); err != nil {
-		return "", errors.New("cursor state is invalid")
+		return "", false, errors.New("cursor state is invalid")
 	}
-	return state.Cursor, nil
+	return state.Cursor, true, nil
 }
 
 func (s *Store) SaveCursor(workstreamCode string, agentID string, cursor string) error {
