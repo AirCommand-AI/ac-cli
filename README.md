@@ -38,3 +38,8 @@ Credentials are stored in `~/.aircommand/credentials.json`. The directory is mod
 ```
 
 Use `just build` to build and `just test` to run the test suite.
+
+## Runtime adapters
+
+- [Claude Code](adapters/claude-code/README.md)
+- [pi.dev](adapters/pi/README.md)

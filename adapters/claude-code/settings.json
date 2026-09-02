@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.local/bin/ac-cli read *)",
+      "Bash(~/.local/bin/ac-cli send *)",
+      "Bash(~/.local/bin/ac-cli listen *)"
+    ]
+  }
+}
