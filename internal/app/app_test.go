@@ -81,7 +81,7 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 			t.Errorf("%s reached command output", name)
 		}
 	}
-	if !strings.HasPrefix(output, "Agent ID: agent-7\nUse for send/update/read/listen: --agent agent-7\n") {
+	if !strings.HasPrefix(output, "Agent ID: agent-7\nUse for send/update/read/inbox/ack/listen: --agent agent-7\n") {
 		t.Errorf("exchange output does not prominently identify the agent: %q", output)
 	}
 	for _, metadata := range []string{"Builder", "agent-7", "694", "ac:agent-7"} {

@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	maxTicketBytes   = 16 * 1024
-	maxResponseBytes = 4 * 1024 * 1024
+	maxTicketBytes              = 16 * 1024
+	maxResponseBytes            = 4 * 1024 * 1024
+	maxMessagePageResponseBytes = 24 * 1024 * 1024
 )
 
 var validWorkstreamCode = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -155,6 +156,10 @@ func (a *App) Run(arguments []string) int {
 			err = a.update(arguments[1:])
 		case "read":
 			err = a.read(arguments[1:])
+		case "inbox":
+			err = a.inbox(arguments[1:])
+		case "ack":
+			err = a.ack(arguments[1:])
 		case "listen":
 			err = a.listen(arguments[1:])
 		default:
@@ -177,7 +182,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -196,6 +201,10 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "Usage: ac-cli update --workstream <code> [--agent <agentId>] --body <text>", true
 	case "read":
 		return "Usage: ac-cli read --workstream <code> [--agent <agentId>]", true
+	case "inbox":
+		return inboxUsage, true
+	case "ack":
+		return ackUsage, true
 	case "listen":
 		return "Usage: ac-cli listen --workstream <code> [--agent <agentId>]", true
 	default:
@@ -267,7 +276,7 @@ func (a *App) exchange(arguments []string) error {
 
 	protected := []string{ticket, apiToken, socketKey}
 	output := fmt.Sprintf(
-		"Agent ID: %s\nUse for send/update/read/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
+		"Agent ID: %s\nUse for send/update/read/inbox/ack/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentName, protected...),
@@ -319,7 +328,7 @@ func (a *App) send(arguments []string) error {
 		return &publicError{message: "Unable to prepare the message."}
 	}
 	path := "/agent/v1/workstreams/" + workstreamCode + "/messages"
-	response, err := a.messageRequest(path, credential.APIToken, payload)
+	response, err := a.messageAPIRequest(http.MethodPost, path, credential.APIToken, payload)
 	if err != nil {
 		return err
 	}
@@ -891,14 +900,24 @@ func responseCode(body []byte) string {
 	return response.Code
 }
 
-func (a *App) messageRequest(path string, apiToken string, payload []byte) (httpResult, error) {
+func (a *App) messageAPIRequest(method string, path string, apiToken string, payload []byte) (httpResult, error) {
+	return a.messageAPIRequestWithResponseLimit(method, path, apiToken, payload, maxResponseBytes)
+}
+
+func (a *App) messagePageRequest(path string, apiToken string) (httpResult, error) {
+	// A valid 100-message page can exceed the ordinary response limit because
+	// each 32 KiB body may expand when represented as a JSON string.
+	return a.messageAPIRequestWithResponseLimit(http.MethodGet, path, apiToken, nil, maxMessagePageResponseBytes)
+}
+
+func (a *App) messageAPIRequestWithResponseLimit(method string, path string, apiToken string, payload []byte, responseLimit int64) (httpResult, error) {
 	attempts := a.RetryAttempts
 	if attempts <= 0 {
 		attempts = 3
 	}
 
 	for attempt := 1; attempt <= attempts; attempt++ {
-		result, err := a.singleRequest(http.MethodPost, path, apiToken, payload)
+		result, err := a.singleRequestWithResponseLimit(method, path, apiToken, payload, responseLimit)
 		if err != nil {
 			var transport *transportFailure
 			if !errors.As(err, &transport) {
@@ -949,6 +968,10 @@ func (a *App) request(method string, path string, apiToken string, payload []byt
 }
 
 func (a *App) singleRequest(method string, path string, apiToken string, payload []byte) (httpResult, error) {
+	return a.singleRequestWithResponseLimit(method, path, apiToken, payload, maxResponseBytes)
+}
+
+func (a *App) singleRequestWithResponseLimit(method string, path string, apiToken string, payload []byte, responseLimit int64) (httpResult, error) {
 	client := a.HTTPClient
 	if client == nil {
 		client = http.DefaultClient
@@ -980,7 +1003,7 @@ func (a *App) singleRequest(method string, path string, apiToken string, payload
 		}
 	}
 
-	contents, readErr := readResponse(response.Body)
+	contents, readErr := readResponseWithLimit(response.Body, responseLimit)
 	closeErr := response.Body.Close()
 	result := httpResult{status: response.StatusCode, body: contents}
 	if errors.Is(readErr, errResponseTooLarge) {
@@ -1004,11 +1027,15 @@ func (a *App) singleRequest(method string, path string, apiToken string, payload
 var errResponseTooLarge = errors.New("AirCommand response is too large")
 
 func readResponse(reader io.Reader) ([]byte, error) {
-	contents, err := io.ReadAll(io.LimitReader(reader, maxResponseBytes+1))
+	return readResponseWithLimit(reader, maxResponseBytes)
+}
+
+func readResponseWithLimit(reader io.Reader, limit int64) ([]byte, error) {
+	contents, err := io.ReadAll(io.LimitReader(reader, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(contents) > maxResponseBytes {
+	if int64(len(contents)) > limit {
 		return nil, errResponseTooLarge
 	}
 	return contents, nil

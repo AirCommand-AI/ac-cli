@@ -34,3 +34,16 @@ W7 makes `send` the addressed-message command and preserves broadcast updates as
 - [x] Run formatting, tests, race tests, vet, and build validation
 
 Name matching deliberately performs no Unicode normalization: exact trimmed matching runs first, followed only by `strings.EqualFold` when exact matching finds nothing.
+
+W8 adds explicit, paginated inbox reads and acknowledgement without changing listener behavior.
+
+- [x] Add one-page unread and all-message inbox listing
+- [x] URL-encode opaque cursors and validate optional page limits
+- [x] Add explicit idempotent message acknowledgement
+- [x] Reuse bounded transport and 408/500/503 retries
+- [x] Map every documented list and acknowledgement error safely
+- [x] Prove listing never acknowledges or auto-pages
+- [x] Add command help and user documentation
+- [x] Run formatting, tests, race tests, vet, and build validation
+
+Inbox pages use a dedicated 24 MiB response cap because a valid page of up to 100 32 KiB bodies can exceed the ordinary 4 MiB cap after JSON escaping.
