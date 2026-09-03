@@ -73,9 +73,37 @@ type exchangeRequest struct {
 	IdempotencyID string `json:"idempotencyId"`
 }
 
-type sendRequest struct {
+type updateRequest struct {
 	Body          string `json:"body"`
 	IdempotencyID string `json:"idempotencyId"`
+}
+
+type messageSendRequest struct {
+	RecipientID   string `json:"recipientId"`
+	Body          string `json:"body"`
+	IdempotencyID string `json:"idempotencyId"`
+}
+
+type workstreamRoster struct {
+	Collaborators []rosterCollaborator `json:"collaborators"`
+}
+
+type rosterCollaborator struct {
+	AccountID string        `json:"accountId"`
+	Name      string        `json:"name"`
+	Agents    []rosterAgent `json:"agents"`
+}
+
+type rosterAgent struct {
+	AgentID string `json:"agentId"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+}
+
+type serviceErrorResponse struct {
+	Message string `json:"message"`
+	Error   string `json:"error"`
+	Code    string `json:"code"`
 }
 
 type exchangeResponse struct {
@@ -110,7 +138,12 @@ type httpResult struct {
 
 func (a *App) Run(arguments []string) int {
 	var err error
-	if len(arguments) == 0 {
+	if help, ok := requestedHelp(arguments); ok {
+		_, err = fmt.Fprintln(a.outputWriter(), help)
+		if err != nil {
+			err = &publicError{message: "Unable to write help output."}
+		}
+	} else if len(arguments) == 0 {
 		err = &publicError{message: usage()}
 	} else {
 		switch arguments[0] {
@@ -118,6 +151,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.exchange(arguments[1:])
 		case "send":
 			err = a.send(arguments[1:])
+		case "update":
+			err = a.update(arguments[1:])
 		case "read":
 			err = a.read(arguments[1:])
 		case "listen":
@@ -142,7 +177,30 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli exchange | send --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | listen --workstream <code> [--agent <agentId>]"
+}
+
+func requestedHelp(arguments []string) (string, bool) {
+	if len(arguments) == 1 && (arguments[0] == "--help" || arguments[0] == "-h") {
+		return usage(), true
+	}
+	if len(arguments) != 2 || (arguments[1] != "--help" && arguments[1] != "-h") {
+		return "", false
+	}
+	switch arguments[0] {
+	case "exchange":
+		return "Usage: ac-cli exchange (supply the ticket on standard input)", true
+	case "send":
+		return "Usage: ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>", true
+	case "update":
+		return "Usage: ac-cli update --workstream <code> [--agent <agentId>] --body <text>", true
+	case "read":
+		return "Usage: ac-cli read --workstream <code> [--agent <agentId>]", true
+	case "listen":
+		return "Usage: ac-cli listen --workstream <code> [--agent <agentId>]", true
+	default:
+		return "", false
+	}
 }
 
 func (a *App) exchange(arguments []string) error {
@@ -209,7 +267,7 @@ func (a *App) exchange(arguments []string) error {
 
 	protected := []string{ticket, apiToken, socketKey}
 	output := fmt.Sprintf(
-		"Agent ID: %s\nUse for send/read/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
+		"Agent ID: %s\nUse for send/update/read/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentName, protected...),
@@ -227,12 +285,61 @@ func (a *App) send(arguments []string) error {
 	flags.SetOutput(io.Discard)
 	var workstreamCode string
 	var agentID string
+	var recipient string
+	var body string
+	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "sending agent ID")
+	flags.StringVar(&recipient, "to", "", "recipient agent ID or name")
+	flags.StringVar(&body, "body", "", "message body")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || strings.TrimSpace(recipient) == "" || body == "" {
+		return &publicError{message: "Usage: ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>"}
+	}
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+
+	credential, err := a.credentialFor(workstreamCode, agentID)
+	if err != nil {
+		return err
+	}
+	resolvedRecipient, err := a.resolveMessageRecipient(workstreamCode, recipient, credential)
+	if err != nil {
+		return err
+	}
+	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
+	if err != nil {
+		return &publicError{message: "Unable to generate a message idempotency ID."}
+	}
+	payload, err := json.Marshal(messageSendRequest{
+		RecipientID:   resolvedRecipient,
+		Body:          body,
+		IdempotencyID: idempotencyID,
+	})
+	if err != nil {
+		return &publicError{message: "Unable to prepare the message."}
+	}
+	path := "/agent/v1/workstreams/" + workstreamCode + "/messages"
+	response, err := a.messageRequest(path, credential.APIToken, payload)
+	if err != nil {
+		return err
+	}
+	if response.status != http.StatusCreated {
+		return messageStatusError(response.status, response.body, workstreamCode, resolvedRecipient)
+	}
+	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
+}
+
+func (a *App) update(arguments []string) error {
+	flags := flag.NewFlagSet("update", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workstreamCode string
+	var agentID string
 	var body string
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&body, "body", "", "update body")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || body == "" {
-		return &publicError{message: "Usage: ac-cli send --workstream <code> [--agent <agentId>] --body <text>"}
+		return &publicError{message: "Usage: ac-cli update --workstream <code> [--agent <agentId>] --body <text>"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -246,7 +353,7 @@ func (a *App) send(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate an update idempotency ID."}
 	}
-	payload, err := json.Marshal(sendRequest{Body: body, IdempotencyID: idempotencyID})
+	payload, err := json.Marshal(updateRequest{Body: body, IdempotencyID: idempotencyID})
 	if err != nil {
 		return &publicError{message: "Unable to prepare the workstream update."}
 	}
@@ -259,6 +366,139 @@ func (a *App) send(arguments []string) error {
 		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, true)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
+}
+
+func (a *App) resolveMessageRecipient(workstreamCode string, recipient string, credential credentials.Credential) (string, error) {
+	if strings.HasPrefix(recipient, "agm_") || strings.HasPrefix(recipient, "ac_") {
+		return recipient, nil
+	}
+	recipient = strings.TrimSpace(recipient)
+
+	path := "/agent/v1/workstreams/" + workstreamCode
+	response, err := a.request(http.MethodGet, path, credential.APIToken, nil)
+	if err != nil {
+		return "", err
+	}
+	if response.status < 200 || response.status >= 300 {
+		return "", rosterStatusError(response.status, workstreamCode)
+	}
+	roster, err := decodeWorkstreamRoster(response.body)
+	if err != nil {
+		return "", &publicError{message: "The workstream service returned an invalid roster response."}
+	}
+
+	active := make([]rosterAgent, 0)
+	for _, collaborator := range roster.Collaborators {
+		for _, agent := range collaborator.Agents {
+			if agent.Status == "active" {
+				agent.Name = strings.TrimSpace(agent.Name)
+				active = append(active, agent)
+			}
+		}
+	}
+
+	exact := matchingAgents(active, recipient, false)
+	if len(exact) == 1 {
+		return exact[0].AgentID, nil
+	}
+	if len(exact) > 1 {
+		return "", ambiguousRecipientError(recipient, exact)
+	}
+	folded := matchingAgents(active, recipient, true)
+	if len(folded) == 1 {
+		return folded[0].AgentID, nil
+	}
+	if len(folded) > 1 {
+		return "", ambiguousRecipientError(recipient, folded)
+	}
+
+	availableSet := make(map[string]struct{})
+	for _, agent := range active {
+		availableSet[agent.Name] = struct{}{}
+	}
+	available := make([]string, 0, len(availableSet))
+	for name := range availableSet {
+		available = append(available, singleLine(name))
+	}
+	sort.Strings(available)
+	if len(available) == 0 {
+		return "", &publicError{message: fmt.Sprintf("No active agent named %q was found in workstream %s. No active agent names are available.", singleLine(recipient), workstreamCode)}
+	}
+	return "", &publicError{message: fmt.Sprintf(
+		"No active agent named %q was found in workstream %s. Available active agent names: %s.",
+		singleLine(recipient),
+		workstreamCode,
+		strings.Join(available, ", "),
+	)}
+}
+
+func decodeWorkstreamRoster(body []byte) (workstreamRoster, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var roster workstreamRoster
+	if err := decoder.Decode(&roster); err != nil {
+		return workstreamRoster{}, err
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return workstreamRoster{}, err
+	}
+	for _, collaborator := range roster.Collaborators {
+		for _, agent := range collaborator.Agents {
+			if agent.AgentID == "" || strings.TrimSpace(agent.Name) == "" {
+				return workstreamRoster{}, errors.New("roster response has an incomplete agent")
+			}
+			switch agent.Status {
+			case "active", "stopped", "removed":
+			default:
+				return workstreamRoster{}, errors.New("roster response has an invalid agent status")
+			}
+		}
+	}
+	return roster, nil
+}
+
+func matchingAgents(agents []rosterAgent, name string, fold bool) []rosterAgent {
+	// Deliberately do not Unicode-normalize names. Operators use ASCII in
+	// practice; EqualFold is the only fallback after exact matching.
+	var matches []rosterAgent
+	for _, agent := range agents {
+		matched := agent.Name == name
+		if fold {
+			matched = strings.EqualFold(agent.Name, name)
+		}
+		if matched {
+			matches = append(matches, agent)
+		}
+	}
+	return matches
+}
+
+func ambiguousRecipientError(name string, matches []rosterAgent) error {
+	sort.Slice(matches, func(i int, j int) bool {
+		if matches[i].Name == matches[j].Name {
+			return matches[i].AgentID < matches[j].AgentID
+		}
+		return matches[i].Name < matches[j].Name
+	})
+	candidates := make([]string, 0, len(matches))
+	for _, match := range matches {
+		candidates = append(candidates, fmt.Sprintf("%s (%s)", singleLine(match.Name), singleLine(match.AgentID)))
+	}
+	return &publicError{message: fmt.Sprintf(
+		"Agent name %q is ambiguous. Matching active agents: %s. Re-run with --to <agentId>.",
+		singleLine(name),
+		strings.Join(candidates, ", "),
+	)}
+}
+
+func rosterStatusError(status int, workstreamCode string) error {
+	switch status {
+	case http.StatusUnauthorized:
+		return &publicError{message: fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)}
+	case http.StatusNotFound:
+		return &publicError{message: fmt.Sprintf("Workstream %s was not found or is not available to this agent.", workstreamCode)}
+	default:
+		return &publicError{message: fmt.Sprintf("Unable to read the workstream roster (HTTP %d).", status)}
+	}
 }
 
 func (a *App) read(arguments []string) error {
@@ -559,6 +799,74 @@ func exchangeStatusError(status int) error {
 	}
 }
 
+func messageStatusError(status int, body []byte, workstreamCode string, recipientID string) error {
+	response := serviceError(body)
+	recipient := singleLine(recipientID)
+	switch status {
+	case http.StatusBadRequest:
+		switch response.Message {
+		case "recipientId is required":
+			return &publicError{message: "A message recipient is required."}
+		case "message body is required":
+			return &publicError{message: "A message body is required."}
+		case "missing idempotency key":
+			return &publicError{message: "AirCommand rejected the message because its idempotency ID was missing."}
+		case "idempotency key is too long":
+			return &publicError{message: "AirCommand rejected the message because its idempotency ID was too long."}
+		default:
+			return &publicError{message: "AirCommand rejected the message request as invalid."}
+		}
+	case http.StatusUnauthorized:
+		return &publicError{message: "The sending agent is no longer authorized. Re-enroll it before sending another message."}
+	case http.StatusNotFound:
+		return &publicError{message: fmt.Sprintf("Workstream %s was not found or this agent is not bound to it.", workstreamCode)}
+	case http.StatusRequestTimeout:
+		return &publicError{message: "Message delivery is uncertain: AirCommand timed out before acceptance was confirmed after retries."}
+	case http.StatusConflict:
+		switch response.Code {
+		case "WorkstreamPaused":
+			return &publicError{message: fmt.Sprintf("Workstream %s is paused; message send rejected.", workstreamCode)}
+		case "RecipientStopped":
+			return &publicError{message: fmt.Sprintf("Recipient %s is stopped. Reconnect it before sending.", recipient)}
+		case "RecipientRemoved":
+			return &publicError{message: fmt.Sprintf("Recipient %s has been removed and cannot receive messages.", recipient)}
+		case "RecipientNotActive":
+			return &publicError{message: fmt.Sprintf("Recipient %s is not active and cannot receive messages.", recipient)}
+		case "RecipientAmbiguous":
+			return &publicError{message: fmt.Sprintf("Recipient ID %s is ambiguous in workstream %s; message send refused.", recipient, workstreamCode)}
+		case "IdempotencyConflict":
+			return &publicError{message: "AirCommand rejected the send because its idempotency ID was already used for a different message. The original message was not changed."}
+		default:
+			return &publicError{message: "AirCommand rejected the message because of a conflict (HTTP 409)."}
+		}
+	case http.StatusRequestEntityTooLarge:
+		return &publicError{message: "Message body exceeds the 32768-byte limit; shorten it and try again."}
+	case http.StatusUnprocessableEntity:
+		return &publicError{message: fmt.Sprintf("Recipient %s is not a participant of workstream %s.", recipient, workstreamCode)}
+	case http.StatusInternalServerError:
+		return &publicError{message: "AirCommand could not complete the message send after retries (HTTP 500)."}
+	case http.StatusServiceUnavailable:
+		switch response.Code {
+		case "ServiceUnavailable":
+			return &publicError{message: "Message delivery is uncertain: AirCommand authentication remained unavailable after retries."}
+		case "MessageSendUnavailable":
+			return &publicError{message: "Message delivery is uncertain: AirCommand could not confirm message acceptance after retries."}
+		default:
+			return &publicError{message: "Message delivery is uncertain: AirCommand remained unavailable after retries (HTTP 503)."}
+		}
+	default:
+		return &publicError{message: fmt.Sprintf("AirCommand message send failed (HTTP %d).", status)}
+	}
+}
+
+func serviceError(body []byte) serviceErrorResponse {
+	var response serviceErrorResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return serviceErrorResponse{}
+	}
+	return response
+}
+
 func workstreamStatusError(status int, code string, workstreamCode string, write bool) error {
 	switch status {
 	case http.StatusUnauthorized:
@@ -581,6 +889,41 @@ func responseCode(body []byte) string {
 		return ""
 	}
 	return response.Code
+}
+
+func (a *App) messageRequest(path string, apiToken string, payload []byte) (httpResult, error) {
+	attempts := a.RetryAttempts
+	if attempts <= 0 {
+		attempts = 3
+	}
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		result, err := a.singleRequest(http.MethodPost, path, apiToken, payload)
+		if err != nil {
+			var transport *transportFailure
+			if !errors.As(err, &transport) {
+				return httpResult{}, err
+			}
+			// Once a final HTTP error status is known, a response-body transport
+			// failure must not turn it into a retryable status.
+			if result.status >= 300 && !messageStatusRetryable(result.status) {
+				return result, nil
+			}
+			if attempt == attempts {
+				return httpResult{}, &publicError{message: transport.publicMessage}
+			}
+		} else {
+			if !messageStatusRetryable(result.status) || attempt == attempts {
+				return result, nil
+			}
+		}
+		a.waitBeforeRetry(attempt)
+	}
+	panic("unreachable")
+}
+
+func messageStatusRetryable(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusInternalServerError || status == http.StatusServiceUnavailable
 }
 
 func (a *App) request(method string, path string, apiToken string, payload []byte) (httpResult, error) {
@@ -639,22 +982,23 @@ func (a *App) singleRequest(method string, path string, apiToken string, payload
 
 	contents, readErr := readResponse(response.Body)
 	closeErr := response.Body.Close()
+	result := httpResult{status: response.StatusCode, body: contents}
 	if errors.Is(readErr, errResponseTooLarge) {
 		return httpResult{}, &publicError{message: "The AirCommand response is too large."}
 	}
 	if readErr != nil {
-		return httpResult{}, &transportFailure{
+		return result, &transportFailure{
 			reason:        networkErrorReason(readErr),
 			publicMessage: "Unable to read the AirCommand response.",
 		}
 	}
 	if closeErr != nil {
-		return httpResult{}, &transportFailure{
+		return result, &transportFailure{
 			reason:        networkErrorReason(closeErr),
 			publicMessage: "Unable to read the AirCommand response.",
 		}
 	}
-	return httpResult{status: response.StatusCode, body: contents}, nil
+	return result, nil
 }
 
 var errResponseTooLarge = errors.New("AirCommand response is too large")

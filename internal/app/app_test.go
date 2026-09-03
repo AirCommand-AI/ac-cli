@@ -81,7 +81,7 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 			t.Errorf("%s reached command output", name)
 		}
 	}
-	if !strings.HasPrefix(output, "Agent ID: agent-7\nUse for send/read/listen: --agent agent-7\n") {
+	if !strings.HasPrefix(output, "Agent ID: agent-7\nUse for send/update/read/listen: --agent agent-7\n") {
 		t.Errorf("exchange output does not prominently identify the agent: %q", output)
 	}
 	for _, metadata := range []string{"Builder", "agent-7", "694", "ac:agent-7"} {
@@ -116,12 +116,12 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 	}
 }
 
-func TestSendIntegration(t *testing.T) {
+func TestUpdateIntegrationPreservesBroadcastBehavior(t *testing.T) {
 	t.Parallel()
 
 	credential := testCredential()
 	idempotencyID := repeatedHex(0x44)
-	wantBody, err := json.Marshal(sendRequest{Body: "starting on the parser", IdempotencyID: idempotencyID})
+	wantBody, err := json.Marshal(updateRequest{Body: "starting on the parser", IdempotencyID: idempotencyID})
 	if err != nil {
 		t.Fatalf("marshal expected request: %v", err)
 	}
@@ -152,9 +152,9 @@ func TestSendIntegration(t *testing.T) {
 	if err := client.Store.Save(credential); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	arguments := []string{"send", "--workstream", "694", "--body", "starting on the parser"}
+	arguments := []string{"update", "--workstream", "694", "--body", "starting on the parser"}
 	if exitCode := client.Run(arguments); exitCode != 0 {
-		t.Fatalf("send exit code = %d, stderr = %q", exitCode, stderr.String())
+		t.Fatalf("update exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
 	if got, want := stdout.String(), "{\"updateId\":\"update-1\"}\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
@@ -235,8 +235,8 @@ func TestAgentSelectorDisambiguatesTwoAgentsInOneWorkstream(t *testing.T) {
 		t.Fatalf("invalidate unselected credential: %v", err)
 	}
 
-	if exitCode := client.Run([]string{"send", "--workstream", "694", "--agent", "agent-pi", "--body", "hello"}); exitCode != 0 {
-		t.Fatalf("selected send exit code = %d, stderr = %q", exitCode, stderr.String())
+	if exitCode := client.Run([]string{"update", "--workstream", "694", "--agent", "agent-pi", "--body", "hello"}); exitCode != 0 {
+		t.Fatalf("selected update exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()

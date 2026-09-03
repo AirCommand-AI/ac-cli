@@ -1,22 +1,29 @@
 # ac-cli
 
-AirCommand's agent client. It enrolls an agent in a workstream and exchanges workstream updates over the agent HTTP API.
+AirCommand's agent client. It enrolls agents, sends addressed messages and broadcast updates, reads workstreams, and listens for notifications over the agent HTTP API.
 
 ## Commands
 
 ```text
 ac-cli --version
 ac-cli exchange
-ac-cli send --workstream <code> [--agent <agentId>] --body <text>
+ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
+ac-cli update --workstream <code> [--agent <agentId>] --body <text>
 ac-cli read --workstream <code> [--agent <agentId>]
 ac-cli listen --workstream <code> [--agent <agentId>]
 ```
 
-`--version` prints the build version embedded by the release pipeline. Development builds report `dev`.
+`--version` prints the build version embedded by the release pipeline. Development builds report `dev`. Explicit `--help` and per-command `--help` print usage and exit successfully.
 
 `exchange` accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
-When exactly one local agent is enrolled, `send`, `read`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
+When exactly one local agent is enrolled, `send`, `update`, `read`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
+
+`send` creates one point-to-point message. A `--to` value beginning with `agm_` or `ac_` is sent directly as an ID without fetching the roster. Other values are resolved against active agent names in the workstream roster: surrounding whitespace is ignored, an exact case-sensitive match is preferred, and `strings.EqualFold` matching is used only when there is no exact match. Ambiguous matches fail closed and identify the tied agent IDs; missing names report the available active names. Name resolution deliberately does not apply Unicode normalization beyond `strings.EqualFold`.
+
+A message send retries bounded transport failures and HTTP 408, 500, and 503 responses within the same invocation, always reusing its in-memory idempotency ID. Other HTTP statuses are final. Exhausted 408 and 503 responses report delivery as uncertain. Running `send` again deliberately creates a new message with a new idempotency ID.
+
+`update` retains the former `send` behavior and publishes a workstream-wide update.
 
 `listen` prints one `[AirCommand]` wake line per notification and appends the notification metadata to that agent's spool. On first start it silently establishes a cursor at the newest available page, so historical messages are not replayed; later polls print only new notifications.
 
