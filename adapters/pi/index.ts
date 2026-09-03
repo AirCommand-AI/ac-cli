@@ -12,10 +12,15 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 const WORKSTREAM_FLAG = "aircommand-workstream";
 const AGENT_FLAG = "aircommand-agent";
 const CLI_FLAG = "aircommand-cli";
+const COMMAND_NAME = "aircommand";
+const CONNECT_TOOL_NAME = "aircommand_connect";
+const ENCODED_COMPONENT_PREFIX = "id-";
+const SAFE_FILENAME_COMPONENT = /^[A-Za-z0-9._-]+$/;
 
 interface Enrollment {
 	workstreamCode: string;
@@ -28,7 +33,8 @@ interface StoredCredential {
 }
 
 interface CredentialFile {
-	agents?: Record<string, StoredCredential>;
+	version?: unknown;
+	agents?: unknown;
 }
 
 interface SpoolNotification {
@@ -39,6 +45,12 @@ interface SpoolNotification {
 
 interface TailHandle {
 	close(): void;
+}
+
+interface ActiveConnection {
+	enrollment: Enrollment;
+	tail: TailHandle;
+	token: object;
 }
 
 export default function aircommandExtension(pi: ExtensionAPI) {
@@ -56,100 +68,198 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		default: join(homedir(), ".local", "bin", "ac-cli"),
 	});
 
-	let tail: TailHandle | undefined;
-	let active = false;
+	let activeConnection: ActiveConnection | undefined;
+	let sessionActive = false;
+
+	const disconnect = (): Enrollment | undefined => {
+		const connection = activeConnection;
+		activeConnection = undefined;
+		connection?.tail.close();
+		return connection?.enrollment;
+	};
+
+	const connect = (enrollment: Enrollment, ctx: ExtensionContext): "connected" | "already-connected" => {
+		if (!sessionActive) {
+			throw new Error("AirCommand cannot connect before the pi session starts.");
+		}
+		if (
+			activeConnection?.enrollment.agentId === enrollment.agentId &&
+			activeConnection.enrollment.workstreamCode === enrollment.workstreamCode
+		) {
+			return "already-connected";
+		}
+
+		const token = {};
+		const cliPath = expandHome(readStringFlag(pi, CLI_FLAG) ?? join(homedir(), ".local", "bin", "ac-cli"));
+		const readCommand = formatReadCommand(cliPath, enrollment);
+		const newTail = tailSpool(
+			spoolPath(enrollment.agentId),
+			(summary, notification) => {
+				if (!sessionActive || activeConnection?.token !== token) return;
+				pi.sendMessage(
+					{
+						customType: "aircommand-notification",
+						content: [
+							`[AirCommand] ${summary}`,
+							"This notification is a pointer, not message content. Fetch current workstream detail before acting:",
+							readCommand,
+						].join("\n"),
+						display: true,
+						details: {
+							workstreamCode: enrollment.workstreamCode,
+							agentId: enrollment.agentId,
+							type: typeof notification.type === "string" ? notification.type : undefined,
+							updateId: typeof notification.updateId === "string" ? notification.updateId : undefined,
+						},
+					},
+					{ deliverAs: "followUp", triggerTurn: true },
+				);
+			},
+			(message) => {
+				if (sessionActive && activeConnection?.token === token) notify(ctx, message, "warning");
+			},
+		);
+
+		const previous = activeConnection;
+		activeConnection = { enrollment, tail: newTail, token };
+		try {
+			previous?.tail.close();
+		} catch {
+			notify(ctx, "AirCommand could not close the previous notification spool watcher.", "warning");
+		}
+		return "connected";
+	};
+
+	pi.registerTool({
+		name: CONNECT_TOOL_NAME,
+		label: "Connect AirCommand",
+		description:
+			"Connect this running pi session to the AirCommand agent identified by an agent ID returned from ac-cli exchange. Starts watching only that agent's notification spool.",
+		promptSnippet: "Connect this running session to a freshly enrolled AirCommand agent",
+		promptGuidelines: [
+			"Use aircommand_connect immediately after ac-cli exchange succeeds, passing the exact Agent ID from its output.",
+		],
+		parameters: Type.Object({
+			agentId: Type.String({ minLength: 1, description: "Exact agent ID printed by ac-cli exchange" }),
+		}),
+		executionMode: "sequential",
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const enrollment = enrollmentFromCredential(params.agentId);
+			const result = connect(enrollment, ctx);
+			const message =
+				result === "already-connected"
+					? `AirCommand is already connected to agent ${enrollment.agentId} in workstream ${enrollment.workstreamCode}.`
+					: `AirCommand connected to agent ${enrollment.agentId} in workstream ${enrollment.workstreamCode}.`;
+			return {
+				content: [{ type: "text", text: message }],
+				details: { status: result, agentId: enrollment.agentId, workstreamCode: enrollment.workstreamCode },
+			};
+		},
+	});
+
+	pi.registerCommand(COMMAND_NAME, {
+		description: "Connect or disconnect AirCommand: /aircommand connect <agentId> | /aircommand disconnect",
+		handler: async (args, ctx) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			if (parts[0] === "connect" && parts.length === 2) {
+				try {
+					const enrollment = enrollmentFromCredential(parts[1]);
+					const result = connect(enrollment, ctx);
+					notify(
+						ctx,
+						result === "already-connected"
+							? `AirCommand is already watching workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}.`
+							: `AirCommand is watching workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}.`,
+						"info",
+					);
+				} catch (error) {
+					notify(ctx, errorMessage(error), "error");
+				}
+				return;
+			}
+			if (parts[0] === "disconnect" && parts.length === 1) {
+				try {
+					const enrollment = disconnect();
+					notify(
+						ctx,
+						enrollment
+							? `AirCommand disconnected agent ${enrollment.agentId} from this pi session.`
+							: "AirCommand is not connected in this pi session.",
+						"info",
+					);
+				} catch (error) {
+					notify(ctx, errorMessage(error), "error");
+				}
+				return;
+			}
+			notify(ctx, "Usage: /aircommand connect <agentId> | /aircommand disconnect", "warning");
+		},
+	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		active = true;
-		tail?.close();
-		tail = undefined;
+		sessionActive = true;
+		try {
+			disconnect();
+		} catch {
+			// A stale session resource must not make an unrelated session fail to start.
+		}
+
+		const requestedWorkstream = readStringFlag(pi, WORKSTREAM_FLAG);
+		const requestedAgent = readStringFlag(pi, AGENT_FLAG);
+		if (!requestedWorkstream && !requestedAgent) return;
 
 		try {
-			const enrollment = resolveEnrollment(pi);
-			const cliPath = expandHome(readStringFlag(pi, CLI_FLAG) ?? join(homedir(), ".local", "bin", "ac-cli"));
-			const spoolPath = join(homedir(), ".aircommand", "spool", `${enrollment.workstreamCode}.jsonl`);
-			const readCommand = formatReadCommand(cliPath, enrollment);
-
-			tail = tailSpool(
-				spoolPath,
-				(summary, notification) => {
-					if (!active) return;
-					pi.sendMessage(
-						{
-							customType: "aircommand-notification",
-							content: [
-								`[AirCommand] ${summary}`,
-								"This notification is a pointer, not message content. Fetch current workstream detail before acting:",
-								readCommand,
-							].join("\n"),
-							display: true,
-							details: {
-								workstreamCode: enrollment.workstreamCode,
-								agentId: enrollment.agentId,
-								type: typeof notification.type === "string" ? notification.type : undefined,
-								updateId: typeof notification.updateId === "string" ? notification.updateId : undefined,
-							},
-						},
-						{ deliverAs: "followUp", triggerTurn: true },
-					);
-				},
-				(message) => notify(ctx, message, "warning"),
-			);
-
+			if (!requestedAgent) {
+				throw new Error(`AirCommand --${AGENT_FLAG} is required when --${WORKSTREAM_FLAG} is supplied.`);
+			}
+			const enrollment = requestedWorkstream
+				? validateEnrollment({ workstreamCode: requestedWorkstream, agentId: requestedAgent })
+				: enrollmentFromCredential(requestedAgent);
+			connect(enrollment, ctx);
 			notify(
 				ctx,
 				`AirCommand is watching workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}.`,
 				"info",
 			);
 		} catch (error) {
-			const message = error instanceof Error ? error.message : "AirCommand adapter setup failed.";
-			notify(ctx, message, "error");
+			notify(ctx, errorMessage(error), "error");
 		}
 	});
 
 	pi.on("session_shutdown", async () => {
-		active = false;
-		tail?.close();
-		tail = undefined;
+		sessionActive = false;
+		try {
+			disconnect();
+		} catch {
+			// Session shutdown remains best-effort and idempotent.
+		}
 	});
 }
 
-function resolveEnrollment(pi: ExtensionAPI): Enrollment {
-	const requestedWorkstream = readStringFlag(pi, WORKSTREAM_FLAG);
-	const requestedAgent = readStringFlag(pi, AGENT_FLAG);
-	if (requestedWorkstream && requestedAgent) {
-		return validateEnrollment({ workstreamCode: requestedWorkstream, agentId: requestedAgent });
-	}
+function enrollmentFromCredential(agentIDInput: string): Enrollment {
+	const agentId = agentIDInput.trim();
+	if (!agentId) throw new Error("AirCommand agent ID is missing.");
 
-	const credentialsPath = join(homedir(), ".aircommand", "credentials.json");
+	const path = join(agentDirectory(agentId), "credentials.json");
 	let parsed: CredentialFile;
 	try {
-		parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as CredentialFile;
+		parsed = JSON.parse(readFileSync(path, "utf8")) as CredentialFile;
 	} catch {
-		throw new Error(
-			`AirCommand enrollment metadata is unavailable. Pass --${WORKSTREAM_FLAG} and --${AGENT_FLAG}.`,
-		);
+		throw new Error(`AirCommand enrollment for agent ${safeDisplay(agentId)} is unavailable. Re-enroll the agent and try again.`);
+	}
+	if (parsed.version !== 1 || !isRecord(parsed.agents)) {
+		throw new Error(`AirCommand enrollment for agent ${safeDisplay(agentId)} is invalid. Re-enroll the agent and try again.`);
 	}
 
-	const enrollments: Enrollment[] = [];
-	for (const [key, value] of Object.entries(parsed.agents ?? {})) {
-		if (typeof value?.workstreamCode !== "string") continue;
-		const agentId = typeof value.agentId === "string" ? value.agentId : key;
-		if (!agentId) continue;
-		enrollments.push({ workstreamCode: value.workstreamCode, agentId });
+	const entries = Object.entries(parsed.agents);
+	if (entries.length !== 1 || entries[0][0] !== agentId || !isRecord(entries[0][1])) {
+		throw new Error(`AirCommand enrollment for agent ${safeDisplay(agentId)} is invalid. Re-enroll the agent and try again.`);
 	}
-
-	const matches = enrollments.filter((enrollment) => {
-		if (requestedWorkstream && enrollment.workstreamCode !== requestedWorkstream) return false;
-		if (requestedAgent && enrollment.agentId !== requestedAgent) return false;
-		return true;
-	});
-	if (matches.length !== 1) {
-		throw new Error(
-			`AirCommand enrollment is ambiguous or missing. Pass --${WORKSTREAM_FLAG} and --${AGENT_FLAG}.`,
-		);
+	const stored = entries[0][1] as StoredCredential;
+	if (stored.agentId !== agentId || typeof stored.workstreamCode !== "string") {
+		throw new Error(`AirCommand enrollment for agent ${safeDisplay(agentId)} is invalid. Re-enroll the agent and try again.`);
 	}
-	return validateEnrollment(matches[0]);
+	return validateEnrollment({ workstreamCode: stored.workstreamCode, agentId });
 }
 
 function validateEnrollment(enrollment: Enrollment): Enrollment {
@@ -160,6 +270,30 @@ function validateEnrollment(enrollment: Enrollment): Enrollment {
 		throw new Error("AirCommand agent ID is missing.");
 	}
 	return enrollment;
+}
+
+function agentDirectory(agentId: string): string {
+	return join(homedir(), ".aircommand", "agents", filenameComponent(agentId));
+}
+
+function spoolPath(agentId: string): string {
+	return join(agentDirectory(agentId), "spool.jsonl");
+}
+
+function filenameComponent(value: string): string {
+	if (
+		value !== "." &&
+		value !== ".." &&
+		SAFE_FILENAME_COMPONENT.test(value) &&
+		!value.startsWith(ENCODED_COMPONENT_PREFIX)
+	) {
+		return value;
+	}
+	return ENCODED_COMPONENT_PREFIX + Buffer.from(value, "utf8").toString("base64url");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readStringFlag(pi: ExtensionAPI, name: string): string | undefined {
@@ -190,12 +324,21 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+function safeDisplay(value: string): string {
+	return value.replace(/[\u0000-\u001f\u007f]/g, " ");
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : "AirCommand adapter setup failed.";
+}
+
 function tailSpool(
 	path: string,
 	onNotification: (summary: string, notification: SpoolNotification) => void,
 	onDiagnostic: (message: string) => void,
 ): TailHandle {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	chmodSync(dirname(path), 0o700);
 	const descriptor = openSync(path, "a+", 0o600);
 	chmodSync(path, 0o600);
 	let position = fstatSync(descriptor).size;
@@ -231,7 +374,13 @@ function tailSpool(
 		}
 	};
 
-	const watcher: FSWatcher = watch(path, drain);
+	let watcher: FSWatcher;
+	try {
+		watcher = watch(path, drain);
+	} catch (error) {
+		closeSync(descriptor);
+		throw error;
+	}
 	watcher.on("error", () => {
 		onDiagnostic("AirCommand notification spool watch failed.");
 	});
