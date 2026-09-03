@@ -118,18 +118,31 @@ type exchangeResponse struct {
 }
 
 type messageNotification struct {
-	Type     string `json:"type"`
-	UpdateID string `json:"updateId"`
-	Author   string `json:"author"`
-	TaskID   string `json:"taskId"`
-	At       string `json:"at"`
-	Summary  string `json:"summary"`
+	Type         string `json:"type"`
+	MessageID    string `json:"messageId"`
+	SenderID     string `json:"senderId"`
+	SenderNature string `json:"senderNature"`
+	At           string `json:"at"`
 }
 
-type messagesResponse struct {
+type spooledMessageNotification struct {
+	Type         string `json:"type"`
+	MessageID    string `json:"messageId"`
+	SenderID     string `json:"senderId"`
+	SenderNature string `json:"senderNature"`
+	At           string `json:"at"`
+	Summary      string `json:"summary"`
+}
+
+type notificationFeedResponse struct {
 	Notifications    []messageNotification `json:"notifications"`
 	Cursor           *string               `json:"cursor"`
 	PollAfterSeconds *int                  `json:"pollAfterSeconds"`
+}
+
+type senderIdentity struct {
+	ID     string
+	Nature string
 }
 
 type httpResult struct {
@@ -567,22 +580,35 @@ func (a *App) listen(arguments []string) error {
 
 	disconnected := false
 	networkFailures := 0
+	senderNamesLoaded := false
+	var senderNames map[senderIdentity]string
 	for poll := 1; ; poll++ {
-		path := "/agent/v1/workstreams/" + workstreamCode + "/messages"
+		path := "/agent/v1/workstreams/" + workstreamCode + "/notifications"
 		if hasStoredCursor {
 			query := url.Values{"since": []string{cursor}}
 			path += "?" + query.Encode()
 		}
 		response, requestErr := a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
+		if terminalErr := a.notificationTerminalError(response.status, workstreamCode); terminalErr != nil {
+			return terminalErr
+		}
 		if requestErr != nil {
-			var transport *transportFailure
-			if !errors.As(requestErr, &transport) {
-				return requestErr
+			if response.status >= 300 && !notificationStatusRetryable(response.status) {
+				return notificationStatusError(response.status, response.body)
 			}
 
-			reason := redact(singleLine(transport.reason), credential.APIToken, credential.SocketKey, cursor)
-			if reason == "" {
-				reason = "network error"
+			reason := ""
+			if notificationStatusRetryable(response.status) {
+				reason = notificationFailureReason(response.status, response.body)
+			} else {
+				var transport *transportFailure
+				if !errors.As(requestErr, &transport) {
+					return requestErr
+				}
+				reason = redact(singleLine(transport.reason), credential.APIToken, credential.SocketKey, cursor)
+				if reason == "" {
+					reason = "network error"
+				}
 			}
 			if err := a.writeActionLine("Lost connection: " + reason); err != nil {
 				return err
@@ -595,26 +621,25 @@ func (a *App) listen(arguments []string) error {
 			a.sleepForListen(networkBackoff(networkFailures))
 			continue
 		}
-
-		switch response.status {
-		case http.StatusUnauthorized:
-			if err := a.writeActionLine(fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)); err != nil {
+		if notificationStatusRetryable(response.status) {
+			if err := a.writeActionLine("Lost connection: " + notificationFailureReason(response.status, response.body)); err != nil {
 				return err
 			}
-			return &silentError{}
-		case http.StatusNotFound:
-			if err := a.writeActionLine(fmt.Sprintf("Workstream %s no longer exists.", workstreamCode)); err != nil {
-				return err
+			disconnected = true
+			networkFailures++
+			if a.listenLimitReached(poll) {
+				return nil
 			}
-			return &silentError{}
+			a.sleepForListen(networkBackoff(networkFailures))
+			continue
 		}
-		if response.status < 200 || response.status >= 300 {
-			return &publicError{message: fmt.Sprintf("AirCommand listener request failed (HTTP %d).", response.status)}
+		if response.status != http.StatusOK {
+			return notificationStatusError(response.status, response.body)
 		}
 
-		messages, err := decodeMessagesResponse(response.body)
+		feed, err := decodeNotificationFeedResponse(response.body)
 		if err != nil {
-			return &publicError{message: "The message service returned an invalid response."}
+			return &publicError{message: "The notification service returned an invalid response."}
 		}
 		if disconnected {
 			if err := a.writeActionLine("Connection restored."); err != nil {
@@ -625,17 +650,23 @@ func (a *App) listen(arguments []string) error {
 		networkFailures = 0
 
 		if hasStoredCursor {
-			for _, notification := range messages.Notifications {
-				if err := a.ListenStore.AppendNotification(credential.AgentID, notification); err != nil {
+			if len(feed.Notifications) > 0 && !senderNamesLoaded {
+				senderNames = a.loadSenderNames(workstreamCode, credential)
+				senderNamesLoaded = true
+			}
+			for _, notification := range feed.Notifications {
+				summary := composeNotificationSummary(notification, workstreamCode, senderNames)
+				spooled := spooledNotification(notification, summary)
+				if err := a.ListenStore.AppendNotification(credential.AgentID, spooled); err != nil {
 					return storageError(err, "Unable to append the AirCommand notification spool.")
 				}
-				if err := a.writeActionLine(notification.Summary); err != nil {
+				if err := a.writeActionLine(summary); err != nil {
 					return err
 				}
 			}
 		}
 
-		nextCursor := *messages.Cursor
+		nextCursor := *feed.Cursor
 		if !hasStoredCursor || nextCursor != cursor {
 			if err := a.ListenStore.SaveCursor(credential.AgentID, nextCursor); err != nil {
 				return storageError(err, "Unable to persist the listener cursor.")
@@ -646,31 +677,133 @@ func (a *App) listen(arguments []string) error {
 		if a.listenLimitReached(poll) {
 			return nil
 		}
-		a.sleepForListen(pollDelay(messages.PollAfterSeconds))
+		a.sleepForListen(pollDelay(feed.PollAfterSeconds))
 	}
 }
 
-func decodeMessagesResponse(body []byte) (messagesResponse, error) {
+func decodeNotificationFeedResponse(body []byte) (notificationFeedResponse, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	var response messagesResponse
+	var response notificationFeedResponse
 	if err := decoder.Decode(&response); err != nil {
-		return messagesResponse{}, err
+		return notificationFeedResponse{}, err
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
-		return messagesResponse{}, err
+		return notificationFeedResponse{}, err
 	}
-	if response.Cursor == nil {
-		return messagesResponse{}, errors.New("message response is missing cursor")
+	if response.Notifications == nil || response.Cursor == nil || response.PollAfterSeconds == nil {
+		return notificationFeedResponse{}, errors.New("notification response is missing a required field")
 	}
 	for _, notification := range response.Notifications {
-		if notification.UpdateID == "" || notification.At == "" || notification.Summary == "" {
-			return messagesResponse{}, errors.New("message response has an incomplete notification")
+		if notification.Type != "message.received" ||
+			!validMessageID(notification.MessageID) ||
+			strings.TrimSpace(notification.SenderID) == "" ||
+			strings.TrimSpace(notification.At) == "" {
+			return notificationFeedResponse{}, errors.New("notification response has an incomplete notification")
 		}
-		if notification.Type != "workstream.message" && notification.Type != "task.message" {
-			return messagesResponse{}, errors.New("message response has an unsupported notification type")
+		if notification.SenderNature != "agent" && notification.SenderNature != "human" {
+			return notificationFeedResponse{}, errors.New("notification response has an invalid sender nature")
 		}
 	}
 	return response, nil
+}
+
+func (a *App) loadSenderNames(workstreamCode string, credential credentials.Credential) map[senderIdentity]string {
+	path := "/agent/v1/workstreams/" + workstreamCode
+	response, err := a.request(http.MethodGet, path, credential.APIToken, nil)
+	if err != nil || response.status < 200 || response.status >= 300 {
+		return nil
+	}
+	roster, err := decodeWorkstreamRoster(response.body)
+	if err != nil {
+		return nil
+	}
+
+	names := make(map[senderIdentity]string)
+	ambiguous := make(map[senderIdentity]bool)
+	cacheName := func(identity senderIdentity, name string) {
+		name = strings.TrimSpace(name)
+		if identity.ID == "" || name == "" || ambiguous[identity] {
+			return
+		}
+		if existing, found := names[identity]; found && existing != name {
+			delete(names, identity)
+			ambiguous[identity] = true
+			return
+		}
+		names[identity] = name
+	}
+	for _, collaborator := range roster.Collaborators {
+		cacheName(senderIdentity{ID: collaborator.AccountID, Nature: "human"}, collaborator.Name)
+		for _, agent := range collaborator.Agents {
+			cacheName(senderIdentity{ID: agent.AgentID, Nature: "agent"}, agent.Name)
+		}
+	}
+	return names
+}
+
+func composeNotificationSummary(notification messageNotification, workstreamCode string, senderNames map[senderIdentity]string) string {
+	sender := notification.SenderID
+	if name := senderNames[senderIdentity{ID: notification.SenderID, Nature: notification.SenderNature}]; name != "" {
+		sender = name
+	}
+	return fmt.Sprintf(
+		"New message from %s (%s) in workstream %s: %s; run ac-cli inbox.",
+		singleLine(sender),
+		notification.SenderNature,
+		workstreamCode,
+		notification.MessageID,
+	)
+}
+
+func spooledNotification(notification messageNotification, summary string) spooledMessageNotification {
+	return spooledMessageNotification{
+		Type:         notification.Type,
+		MessageID:    notification.MessageID,
+		SenderID:     notification.SenderID,
+		SenderNature: notification.SenderNature,
+		At:           notification.At,
+		Summary:      summary,
+	}
+}
+
+func (a *App) notificationTerminalError(status int, workstreamCode string) error {
+	switch status {
+	case http.StatusUnauthorized:
+		if err := a.writeActionLine(fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)); err != nil {
+			return err
+		}
+		return &silentError{}
+	case http.StatusNotFound:
+		if err := a.writeActionLine(fmt.Sprintf("Workstream %s no longer exists.", workstreamCode)); err != nil {
+			return err
+		}
+		return &silentError{}
+	default:
+		return nil
+	}
+}
+
+func notificationStatusRetryable(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusInternalServerError || status == http.StatusServiceUnavailable
+}
+
+func notificationFailureReason(status int, body []byte) string {
+	if status == http.StatusServiceUnavailable {
+		switch serviceError(body).Code {
+		case "ServiceUnavailable":
+			return "AirCommand authentication service unavailable (HTTP 503)"
+		case "NotificationFeedUnavailable":
+			return "AirCommand notification feed unavailable (HTTP 503)"
+		}
+	}
+	return fmt.Sprintf("AirCommand notification request failed (HTTP %d)", status)
+}
+
+func notificationStatusError(status int, body []byte) error {
+	if status == http.StatusBadRequest && serviceError(body).Code == "InvalidNotificationCursor" {
+		return &publicError{message: "The stored notification cursor is invalid. Restore a server-issued cursor or remove this agent's state.json to establish a new silent baseline."}
+	}
+	return &publicError{message: fmt.Sprintf("AirCommand listener request failed (HTTP %d).", status)}
 }
 
 func (a *App) writeActionLine(message string) error {
@@ -1007,7 +1140,7 @@ func (a *App) singleRequestWithResponseLimit(method string, path string, apiToke
 	closeErr := response.Body.Close()
 	result := httpResult{status: response.StatusCode, body: contents}
 	if errors.Is(readErr, errResponseTooLarge) {
-		return httpResult{}, &publicError{message: "The AirCommand response is too large."}
+		return result, &publicError{message: "The AirCommand response is too large."}
 	}
 	if readErr != nil {
 		return result, &transportFailure{

@@ -33,7 +33,19 @@ A message send retries bounded transport failures and HTTP 408, 500, and 503 res
 
 Inbox and acknowledgement requests retry bounded transport failures and HTTP 408, 500, and 503 responses with backoff. Other statuses are final. Message bodies are emitted only in the direct JSON output requested through `inbox`; they are never written to a spool, log, or error string.
 
-`listen` prints one `[AirCommand]` wake line per notification and appends the notification metadata to that agent's spool. On first start it silently establishes a cursor at the newest available page, so historical messages are not replayed; later polls print only new notifications.
+`listen` polls `/agent/v1/workstreams/<code>/notifications`, which contains only incoming, unacknowledged message pointers for that agent. It prints exactly one sparse wake line per notification:
+
+```text
+[AirCommand] New message from <sender-name-or-id> (<agent|human>) in workstream <code>: <messageId>; run ac-cli inbox.
+```
+
+Sender names come from one lazy, invocation-local workstream roster cache; the listener does not fetch the roster on every poll and falls back to the structural sender ID when no name is available. The server notification has no presentation text, so the client composes the line and adds it as `summary` to the per-agent spool entry:
+
+```json
+{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_11111111111111111111111111111111","senderNature":"agent","at":"2026-09-04T12:34:56.123456789Z","summary":"New message from Pi (agent) in workstream 694: 0123456789abcdef; run ac-cli inbox."}
+```
+
+No message body is fetched or spooled. On first start, `listen` silently discards the baseline page and persists its cursor; an empty baseline continues with an explicitly present `?since=`. Later successful polls spool and print only post-baseline notifications. The client preserves the five-second polling floor, visibly reports transport and retryable HTTP failures, retries with backoff without advancing the cursor, reports recovery, and stops after the existing 401/404 terminal lines.
 
 Every agent owns one isolated storage directory:
 
