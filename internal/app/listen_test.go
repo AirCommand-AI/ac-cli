@@ -71,7 +71,7 @@ func TestListenEstablishesSilentBaselineThenWakesOnceWithoutRestartDuplicate(t *
 	client, stdout, stderr := listenerApp(server.URL, home)
 	client.ListenPollLimit = 2
 	client.ListenSleep = func(_ time.Duration) {
-		cursor, found, err := stateStore.LoadCursor("694", credential.AgentID)
+		cursor, found, err := stateStore.LoadCursor(credential.AgentID)
 		if err != nil {
 			t.Fatalf("LoadCursor after baseline: %v", err)
 		}
@@ -81,7 +81,7 @@ func TestListenEstablishesSilentBaselineThenWakesOnceWithoutRestartDuplicate(t *
 		if stdout.Len() != 0 {
 			t.Fatalf("first poll replayed history: %q", stdout.String())
 		}
-		if _, err := os.Stat(stateStore.SpoolPath("694")); !os.IsNotExist(err) {
+		if _, err := os.Stat(stateStore.SpoolPath(credential.AgentID)); !os.IsNotExist(err) {
 			t.Fatalf("first poll created a notification spool, stat error = %v", err)
 		}
 		messagePosted = true
@@ -115,15 +115,15 @@ func TestListenEstablishesSilentBaselineThenWakesOnceWithoutRestartDuplicate(t *
 		t.Fatalf("new notification output count != 1: %q", combinedOutput)
 	}
 
-	cursor, found, err := stateStore.LoadCursor("694", credential.AgentID)
+	cursor, found, err := stateStore.LoadCursor(credential.AgentID)
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}
 	if !found || cursor != messageCursor {
 		t.Fatalf("persisted cursor = %q, found = %v; want %q, true", cursor, found, messageCursor)
 	}
-	statePath := stateStore.StatePath("694", credential.AgentID)
-	if want := filepath.Join(home, ".aircommand", "state", "694-agent-7.json"); statePath != want {
+	statePath := stateStore.StatePath(credential.AgentID)
+	if want := filepath.Join(home, ".aircommand", "agents", "agent-7", "state.json"); statePath != want {
 		t.Fatalf("state path = %q, want %q", statePath, want)
 	}
 	stateInfo, err := os.Stat(statePath)
@@ -134,7 +134,7 @@ func TestListenEstablishesSilentBaselineThenWakesOnceWithoutRestartDuplicate(t *
 		t.Fatalf("cursor state mode = %o, want 600", got)
 	}
 
-	spoolPath := stateStore.SpoolPath("694")
+	spoolPath := stateStore.SpoolPath(credential.AgentID)
 	spool, err := os.ReadFile(spoolPath)
 	if err != nil {
 		t.Fatalf("read spool: %v", err)
@@ -185,7 +185,7 @@ func TestListenEmptyPollPrintsNothing(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("empty poll output = %q, want empty", stdout.String())
 	}
-	cursor, found, err := listenstore.NewStore(home).LoadCursor("694", testCredential().AgentID)
+	cursor, found, err := listenstore.NewStore(home).LoadCursor(testCredential().AgentID)
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}

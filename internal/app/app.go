@@ -18,6 +18,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
+	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
 const (
@@ -151,6 +152,9 @@ func (a *App) exchange(arguments []string) error {
 	if a.Store == nil {
 		return &publicError{message: "Credential storage is unavailable."}
 	}
+	if err := a.Store.CheckLayout(); err != nil {
+		return storageError(err, "Credential storage is unavailable.")
+	}
 
 	ticket, err := readTicket(a.inputReader())
 	if err != nil {
@@ -200,7 +204,7 @@ func (a *App) exchange(arguments []string) error {
 		SocketAddress:  result.SocketAddress,
 	}
 	if err := a.Store.Save(credential); err != nil {
-		return &publicError{message: "Enrollment succeeded, but the credential file could not be saved securely."}
+		return storageError(err, "Enrollment succeeded, but the credential file could not be saved securely.")
 	}
 
 	protected := []string{ticket, apiToken, socketKey}
@@ -307,9 +311,9 @@ func (a *App) listen(arguments []string) error {
 		return &publicError{message: "Listener state storage is unavailable."}
 	}
 
-	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(workstreamCode, credential.AgentID)
+	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(credential.AgentID)
 	if err != nil {
-		return &publicError{message: "Unable to read the listener cursor state."}
+		return storageError(err, "Unable to read the listener cursor state.")
 	}
 
 	disconnected := false
@@ -373,8 +377,8 @@ func (a *App) listen(arguments []string) error {
 
 		if hasStoredCursor {
 			for _, notification := range messages.Notifications {
-				if err := a.ListenStore.AppendNotification(workstreamCode, notification); err != nil {
-					return &publicError{message: "Unable to append the AirCommand notification spool."}
+				if err := a.ListenStore.AppendNotification(credential.AgentID, notification); err != nil {
+					return storageError(err, "Unable to append the AirCommand notification spool.")
 				}
 				if err := a.writeActionLine(notification.Summary); err != nil {
 					return err
@@ -384,8 +388,8 @@ func (a *App) listen(arguments []string) error {
 
 		nextCursor := *messages.Cursor
 		if !hasStoredCursor || nextCursor != cursor {
-			if err := a.ListenStore.SaveCursor(workstreamCode, credential.AgentID, nextCursor); err != nil {
-				return &publicError{message: "Unable to persist the listener cursor."}
+			if err := a.ListenStore.SaveCursor(credential.AgentID, nextCursor); err != nil {
+				return storageError(err, "Unable to persist the listener cursor.")
 			}
 			cursor = nextCursor
 			hasStoredCursor = true
@@ -495,6 +499,9 @@ func (a *App) credentialFor(workstreamCode string, agentID string) (credentials.
 	if agentID != "" {
 		credential, err := a.Store.FindByAgent(workstreamCode, agentID)
 		if err != nil {
+			if legacy := legacyStorageError(err); legacy != nil {
+				return credentials.Credential{}, legacy
+			}
 			return credentials.Credential{}, &publicError{message: fmt.Sprintf(
 				"No stored credential matches agent %s in workstream %s.",
 				singleLine(agentID),
@@ -508,6 +515,9 @@ func (a *App) credentialFor(workstreamCode string, agentID string) (credentials.
 	if err == nil {
 		return credential, nil
 	}
+	if legacy := legacyStorageError(err); legacy != nil {
+		return credentials.Credential{}, legacy
+	}
 	var multiple *credentials.MultipleAgentsError
 	if errors.As(err, &multiple) {
 		agentIDs := make([]string, 0, len(multiple.AgentIDs))
@@ -515,12 +525,27 @@ func (a *App) credentialFor(workstreamCode string, agentID string) (credentials.
 			agentIDs = append(agentIDs, singleLine(availableAgentID))
 		}
 		return credentials.Credential{}, &publicError{message: fmt.Sprintf(
-			"Multiple credentials match workstream %s. Available agent IDs: %s. Re-run with --agent <agentId>.",
-			workstreamCode,
+			"Multiple agents are enrolled on this machine. Available agent IDs: %s. Re-run for workstream %s with --agent <agentId>.",
 			strings.Join(agentIDs, ", "),
+			workstreamCode,
 		)}
 	}
 	return credentials.Credential{}, &publicError{message: fmt.Sprintf("No stored credentials match workstream %s.", workstreamCode)}
+}
+
+func storageError(err error, fallback string) error {
+	if legacy := legacyStorageError(err); legacy != nil {
+		return legacy
+	}
+	return &publicError{message: fallback}
+}
+
+func legacyStorageError(err error) error {
+	var legacy *storagepath.LegacyLayoutError
+	if !errors.As(err, &legacy) {
+		return nil
+	}
+	return &publicError{message: "The old AirCommand storage layout was found under ~/.aircommand. It will not be read or migrated. Remove the old credentials.json, state, and spool entries, then re-enroll this agent."}
 }
 
 func exchangeStatusError(status int) error {

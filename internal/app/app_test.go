@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -86,6 +88,16 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 		if !strings.Contains(output, metadata) {
 			t.Errorf("exchange output %q does not contain %q", output, metadata)
 		}
+	}
+
+	credentialPath := client.Store.Path("agent-7")
+	if wantSuffix := filepath.Join(".aircommand", "agents", "agent-7", "credentials.json"); !strings.HasSuffix(credentialPath, wantSuffix) {
+		t.Fatalf("exchange credential path = %q, want suffix %q", credentialPath, wantSuffix)
+	}
+	if info, err := os.Stat(credentialPath); err != nil {
+		t.Fatalf("stat exchanged credential: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("exchanged credential mode = %o, want 600", got)
 	}
 
 	stored, err := client.Store.FindByWorkstream("694")
@@ -219,6 +231,9 @@ func TestAgentSelectorDisambiguatesTwoAgentsInOneWorkstream(t *testing.T) {
 			t.Fatalf("Save(%s): %v", credential.AgentID, err)
 		}
 	}
+	if err := os.WriteFile(client.Store.Path(claude.AgentID), []byte("unselected credential must not be read"), 0o600); err != nil {
+		t.Fatalf("invalidate unselected credential: %v", err)
+	}
 
 	if exitCode := client.Run([]string{"send", "--workstream", "694", "--agent", "agent-pi", "--body", "hello"}); exitCode != 0 {
 		t.Fatalf("selected send exit code = %d, stderr = %q", exitCode, stderr.String())
@@ -244,6 +259,47 @@ func TestAgentSelectorDisambiguatesTwoAgentsInOneWorkstream(t *testing.T) {
 	for _, expected := range []string{"agent-claude", "agent-pi", "--agent <agentId>"} {
 		if !strings.Contains(message, expected) {
 			t.Errorf("ambiguous error %q does not contain %q", message, expected)
+		}
+	}
+}
+
+func TestOldLayoutStopsExchangeBeforeTicketUseWithReenrollmentGuidance(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".aircommand", "spool"), 0o700); err != nil {
+		t.Fatalf("create old spool: %v", err)
+	}
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer server.Close()
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	client := &App{
+		BaseURL:     server.URL,
+		HTTPClient:  http.DefaultClient,
+		Store:       credentials.NewStore(home),
+		ListenStore: listenstore.NewStore(home),
+		Stdin:       strings.NewReader("setup_ticket"),
+		Stdout:      stdout,
+		Stderr:      stderr,
+	}
+	if exitCode := client.Run([]string{"exchange"}); exitCode == 0 {
+		t.Fatal("exchange with old storage unexpectedly succeeded")
+	}
+	if called {
+		t.Fatal("exchange consumed the ticket before rejecting old storage")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("exchange stdout = %q, want empty", stdout.String())
+	}
+	message := stderr.String()
+	for _, expected := range []string{"old AirCommand storage layout", "will not be read or migrated", "re-enroll"} {
+		if !strings.Contains(message, expected) {
+			t.Errorf("legacy storage error %q does not contain %q", message, expected)
 		}
 	}
 }

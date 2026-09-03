@@ -1,19 +1,17 @@
 package listenstore
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+
+	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
-var safeFilenameComponent = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
 type Store struct {
-	root string
+	home string
 }
 
 type cursorState struct {
@@ -21,20 +19,22 @@ type cursorState struct {
 }
 
 func NewStore(home string) *Store {
-	return &Store{root: filepath.Join(home, ".aircommand")}
+	return &Store{home: home}
 }
 
-func (s *Store) StatePath(workstreamCode string, agentID string) string {
-	name := filenameComponent(workstreamCode) + "-" + filenameComponent(agentID) + ".json"
-	return filepath.Join(s.root, "state", name)
+func (s *Store) StatePath(agentID string) string {
+	return filepath.Join(storagepath.AgentDirectory(s.home, agentID), "state.json")
 }
 
-func (s *Store) SpoolPath(workstreamCode string) string {
-	return filepath.Join(s.root, "spool", filenameComponent(workstreamCode)+".jsonl")
+func (s *Store) SpoolPath(agentID string) string {
+	return filepath.Join(storagepath.AgentDirectory(s.home, agentID), "spool.jsonl")
 }
 
-func (s *Store) LoadCursor(workstreamCode string, agentID string) (string, bool, error) {
-	contents, err := os.ReadFile(s.StatePath(workstreamCode, agentID))
+func (s *Store) LoadCursor(agentID string) (string, bool, error) {
+	if err := storagepath.CheckLegacyLayout(s.home); err != nil {
+		return "", false, err
+	}
+	contents, err := os.ReadFile(s.StatePath(agentID))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil
 	}
@@ -49,9 +49,9 @@ func (s *Store) LoadCursor(workstreamCode string, agentID string) (string, bool,
 	return state.Cursor, true, nil
 }
 
-func (s *Store) SaveCursor(workstreamCode string, agentID string, cursor string) error {
-	directory := filepath.Dir(s.StatePath(workstreamCode, agentID))
-	if err := s.ensureDirectory(directory); err != nil {
+func (s *Store) SaveCursor(agentID string, cursor string) error {
+	directory, err := storagepath.EnsureAgentDirectory(s.home, agentID)
+	if err != nil {
 		return err
 	}
 
@@ -78,7 +78,7 @@ func (s *Store) SaveCursor(workstreamCode string, agentID string, cursor string)
 		return fmt.Errorf("close cursor state: %w", err)
 	}
 
-	path := s.StatePath(workstreamCode, agentID)
+	path := s.StatePath(agentID)
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace cursor state: %w", err)
 	}
@@ -88,11 +88,11 @@ func (s *Store) SaveCursor(workstreamCode string, agentID string, cursor string)
 	return nil
 }
 
-func (s *Store) AppendNotification(workstreamCode string, notification any) error {
-	path := s.SpoolPath(workstreamCode)
-	if err := s.ensureDirectory(filepath.Dir(path)); err != nil {
+func (s *Store) AppendNotification(agentID string, notification any) error {
+	if _, err := storagepath.EnsureAgentDirectory(s.home, agentID); err != nil {
 		return err
 	}
+	path := s.SpoolPath(agentID)
 
 	encoded, err := json.Marshal(notification)
 	if err != nil {
@@ -120,24 +120,4 @@ func (s *Store) AppendNotification(workstreamCode string, notification any) erro
 		return fmt.Errorf("close notification spool: %w", err)
 	}
 	return nil
-}
-
-func (s *Store) ensureDirectory(directory string) error {
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return fmt.Errorf("create AirCommand data directory: %w", err)
-	}
-	if err := os.Chmod(s.root, 0o700); err != nil {
-		return fmt.Errorf("secure AirCommand data directory: %w", err)
-	}
-	if err := os.Chmod(directory, 0o700); err != nil {
-		return fmt.Errorf("secure AirCommand subdirectory: %w", err)
-	}
-	return nil
-}
-
-func filenameComponent(value string) string {
-	if safeFilenameComponent.MatchString(value) {
-		return value
-	}
-	return "id-" + base64.RawURLEncoding.EncodeToString([]byte(value))
 }
