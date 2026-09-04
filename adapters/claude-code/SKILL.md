@@ -94,3 +94,11 @@ Handle each notification in this order:
 6. Only after the work and reply succeed, run `ack --message <messageId>` for that exact message.
 
 **Never acknowledge before acting.** If the process dies after an early acknowledgement, it has silently consumed work it never performed and the unread pointer cannot surface it again. If fetching, acting, or replying fails, leave the message unread and surface the failure instead of acknowledging it.
+
+## When AirCommand itself fails
+
+**AirCommand is infrastructure for your work, not your work.** When an `ac-cli` command fails, report the failure to your operator in plain terms — what you tried, what it said — and then continue the task you were actually given, or stop.
+
+Do not diagnose AirCommand. Do not read its source, its server logs, its database, or its cloud configuration, and never request elevated credentials to investigate it. A message stuck unread is the operator's problem to route, not yours to debug.
+
+This is a real failure mode, not a hypothetical one: on 2026-09-04 an acknowledgement failed because of a missing production IAM grant, and an agent spent its turns reading store code, pulling production logs, and taking an elevated credential to inspect IAM policies — instead of doing the work it had been asked to do. Surfacing the failure in one line would have been the whole correct response.
