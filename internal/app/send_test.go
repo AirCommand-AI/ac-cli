@@ -162,7 +162,7 @@ func TestSendDoesNotResolveHumanCollaboratorNames(t *testing.T) {
 			posts++
 			return
 		}
-		_, _ = writer.Write([]byte(`{"code":"694","collaborators":[{"accountId":"ac_human","name":"Operator","agents":[]}]}`))
+		_, _ = writer.Write([]byte(`{"workstream":{"code":"694","collaborators":[{"accountId":"ac_human","name":"Operator","agents":[]}]},"tasks":[],"updates":[]}`))
 	}))
 	defer server.Close()
 
@@ -512,9 +512,30 @@ func (readFailureBody) Read([]byte) (int, error) {
 }
 func (readFailureBody) Close() error { return nil }
 
+// rosterResponseBody mirrors the agent API's workstream detail response, which
+// nests the roster under "workstream" alongside "tasks" and "updates". It is
+// deliberately built from a literal map rather than by marshalling
+// workstreamRoster: marshalling the same struct the decoder reads makes the test
+// a self-consistent round trip that cannot detect a mismatch with the real API,
+// which is exactly how a flat-roster decoder shipped while every test passed.
 func rosterResponseBody(agents ...rosterAgent) []byte {
-	contents, err := json.Marshal(workstreamRoster{
-		Collaborators: []rosterCollaborator{{Agents: agents}},
+	rosterAgents := make([]map[string]any, 0, len(agents))
+	for _, agent := range agents {
+		rosterAgents = append(rosterAgents, map[string]any{
+			"agentId": agent.AgentID,
+			"name":    agent.Name,
+			"status":  agent.Status,
+		})
+	}
+	contents, err := json.Marshal(map[string]any{
+		"workstream": map[string]any{
+			"code": "694",
+			"collaborators": []map[string]any{
+				{"accountId": "ac_operator", "name": "Operator", "agents": rosterAgents},
+			},
+		},
+		"tasks":   []any{},
+		"updates": []any{},
 	})
 	if err != nil {
 		panic(err)
@@ -543,5 +564,41 @@ func saveTestCredential(t *testing.T, client *App, credential credentials.Creden
 	t.Helper()
 	if err := client.Store.Save(credential); err != nil {
 		t.Fatalf("Save credential: %v", err)
+	}
+}
+
+// TestDecodeWorkstreamRosterAcceptsProductionResponse guards against the roster
+// decoder drifting from the real agent API. The body below is a verbatim
+// production response captured from
+// GET /agent/v1/workstreams/{code} on 2026-09-04, trimmed only of unrelated
+// fields. It is deliberately a raw string rather than anything marshalled from
+// this package's own types: the original defect was a decoder expecting
+// "collaborators" at the top level while the API nests it under "workstream",
+// and every existing test passed because the fixtures were generated from the
+// same wrong struct. Name resolution silently failed for every agent.
+func TestDecodeWorkstreamRosterAcceptsProductionResponse(t *testing.T) {
+	t.Parallel()
+
+	const production = `{"workstream":{"code":"493","name":"Demo 1","description":"","status":"active","collaborators":[{"accountId":"ac_9flvj6ff80hq","name":"rsingh@arrsingh.com","agents":[{"agentId":"agm_caf16d31b0ed1b0bac73429f329224c8","name":"Pi","status":"active","socketAddress":"ac:agm_caf16d31b0ed1b0bac73429f329224c8","generation":1,"createdAt":"2026-09-04T20:54:11.000000000Z","updatedAt":"2026-09-04T20:54:11.000000000Z"},{"agentId":"agm_77330edc1aa628398f6626a529fc66d1","name":"Claude","status":"active","socketAddress":"ac:agm_77330edc1aa628398f6626a529fc66d1","generation":1,"createdAt":"2026-09-04T20:54:20.000000000Z","updatedAt":"2026-09-04T20:54:20.000000000Z"}]}],"createdAt":"2026-09-04T20:53:00.000000000Z","updatedAt":"2026-09-04T20:54:20.000000000Z"},"tasks":[],"updates":[]}`
+
+	roster, err := decodeWorkstreamRoster([]byte(production))
+	if err != nil {
+		t.Fatalf("decode production roster: %v", err)
+	}
+
+	found := map[string]string{}
+	for _, collaborator := range roster.Collaborators {
+		for _, agent := range collaborator.Agents {
+			found[agent.Name] = agent.AgentID
+		}
+	}
+	if len(found) != 2 {
+		t.Fatalf("decoded %d agents from the production roster, want 2: %+v", len(found), found)
+	}
+	if got := found["Pi"]; got != "agm_caf16d31b0ed1b0bac73429f329224c8" {
+		t.Errorf("agent \"Pi\" = %q", got)
+	}
+	if got := found["Claude"]; got != "agm_77330edc1aa628398f6626a529fc66d1" {
+		t.Errorf("agent \"Claude\" = %q", got)
 	}
 }

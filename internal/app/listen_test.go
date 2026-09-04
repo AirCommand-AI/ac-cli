@@ -44,7 +44,7 @@ func TestListenEstablishesSilentBaselineThenComposesAndSpoolsOneWake(t *testing.
 		switch request.URL.Path {
 		case "/agent/v1/workstreams/694":
 			rosterRequests++
-			_, _ = writer.Write([]byte(`{"code":"694","collaborators":[{"accountId":"ac_operator","name":"Operator","agents":[{"agentId":"agm_sender","name":" TestBar ","status":"active"}]}]}`))
+			_, _ = writer.Write([]byte(`{"workstream":{"code":"694","collaborators":[{"accountId":"ac_operator","name":"Operator","agents":[{"agentId":"agm_sender","name":" TestBar ","status":"active"}]}]},"tasks":[],"updates":[]}`))
 		case "/agent/v1/workstreams/694/notifications":
 			notificationRequests++
 			since, hasSince := request.URL.Query()["since"]
@@ -188,7 +188,7 @@ func TestListenCachesRosterNamesAndFallsBackToUnknownSenderID(t *testing.T) {
 		switch request.URL.Path {
 		case "/agent/v1/workstreams/694":
 			rosterRequests++
-			_, _ = writer.Write([]byte(`{"code":"694","collaborators":[{"accountId":"ac_alice","name":" Alice ","agents":[{"agentId":"agm_pi","name":" Pi ","status":"stopped"}]}]}`))
+			_, _ = writer.Write([]byte(`{"workstream":{"code":"694","collaborators":[{"accountId":"ac_alice","name":" Alice ","agents":[{"agentId":"agm_pi","name":" Pi ","status":"stopped"}]}]},"tasks":[],"updates":[]}`))
 		case "/agent/v1/workstreams/694/notifications":
 			feedRequests++
 			notifications := []string{

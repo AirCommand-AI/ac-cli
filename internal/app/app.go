@@ -85,6 +85,15 @@ type messageSendRequest struct {
 	IdempotencyID string `json:"idempotencyId"`
 }
 
+// workstreamRosterEnvelope matches the agent API's workstream detail response,
+// which nests the roster under "workstream" alongside "tasks" and "updates".
+// Decoding straight into workstreamRoster silently yields an empty roster,
+// because encoding/json ignores unknown fields — so every name lookup fails and
+// only literal agent IDs resolve.
+type workstreamRosterEnvelope struct {
+	Workstream workstreamRoster `json:"workstream"`
+}
+
 type workstreamRoster struct {
 	Collaborators []rosterCollaborator `json:"collaborators"`
 }
@@ -456,13 +465,14 @@ func (a *App) resolveMessageRecipient(workstreamCode string, recipient string, c
 
 func decodeWorkstreamRoster(body []byte) (workstreamRoster, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	var roster workstreamRoster
-	if err := decoder.Decode(&roster); err != nil {
+	var envelope workstreamRosterEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
 		return workstreamRoster{}, err
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
 		return workstreamRoster{}, err
 	}
+	roster := envelope.Workstream
 	for _, collaborator := range roster.Collaborators {
 		for _, agent := range collaborator.Agents {
 			if agent.AgentID == "" || strings.TrimSpace(agent.Name) == "" {
