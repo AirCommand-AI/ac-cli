@@ -243,6 +243,8 @@ func (a *App) tasks(arguments []string) error {
 	}
 
 	protected := []string{credential.APIToken, credential.SocketKey}
+	writer := a.outputWriter()
+	matches := 0
 	for _, task := range tasks {
 		if mine && task.Assignee != credential.AgentID {
 			continue
@@ -250,12 +252,13 @@ func (a *App) tasks(arguments []string) error {
 		if status != "" && task.Status != status {
 			continue
 		}
+		matches++
 		assignee := task.Assignee
 		if assignee == "" {
 			assignee = "-"
 		}
 		if _, err := fmt.Fprintf(
-			a.outputWriter(),
+			writer,
 			"%s\t%s\t%s\t%s\n",
 			safeMetadata(task.ID, protected...),
 			safeMetadata(task.Status, protected...),
@@ -265,7 +268,25 @@ func (a *App) tasks(arguments []string) error {
 			return &publicError{message: "Unable to write task output."}
 		}
 	}
+	if matches == 0 {
+		if _, err := fmt.Fprintln(writer, emptyTaskListMessage(workstreamCode, status, mine)); err != nil {
+			return &publicError{message: "Unable to write task output."}
+		}
+	}
 	return nil
+}
+
+func emptyTaskListMessage(workstreamCode string, status string, mine bool) string {
+	switch {
+	case mine && status != "":
+		return fmt.Sprintf("No tasks assigned to this agent with status %s in workstream %s.", status, workstreamCode)
+	case mine:
+		return fmt.Sprintf("No tasks assigned to this agent in workstream %s.", workstreamCode)
+	case status != "":
+		return fmt.Sprintf("No tasks with status %s in workstream %s.", status, workstreamCode)
+	default:
+		return fmt.Sprintf("No tasks in workstream %s.", workstreamCode)
+	}
 }
 
 // localAgentsByWorkstream names the agents this machine already owns, keyed by

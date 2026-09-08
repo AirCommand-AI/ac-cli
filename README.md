@@ -43,7 +43,7 @@ A message send retries bounded transport failures and HTTP 408, 500, and 503 res
 
 `update` retains the former `send` behavior and publishes a workstream-wide update.
 
-`tasks` reads the existing workstream detail endpoint and prints one tab-separated line per matching task in API order: task ID, status, canonical assignee ID, and title. An unassigned task prints `-` in the assignee column. `--mine` keeps only tasks assigned to the selected local agent ID. `--status` accepts `todo`, `in_flight`, `blocked`, or `landed`; any other value is rejected before an HTTP request is made. The two filters can be combined.
+`tasks` reads the existing workstream detail endpoint and prints one tab-separated line per matching task in API order: task ID, status, canonical assignee ID, and title. An unassigned task prints `-` in the assignee column. `--mine` keeps only tasks assigned to the selected local agent ID. `--status` accepts `todo`, `in_flight`, `blocked`, or `landed`; any other value is rejected before an HTTP request is made. The two filters can be combined. When nothing matches, the command prints a filter-aware message instead of returning silent output.
 
 `inbox` returns one oldest-first JSON page. It lists unread messages by default; `--all` lists both read and unread messages across the bound workstream. The optional limit is from 1 through 100 and defaults server-side to 50. When another page exists, the JSON includes `nextCursor`; pass that opaque value back through `--cursor` with the same inbox mode. The command never follows the cursor automatically and never acknowledges a message.
 

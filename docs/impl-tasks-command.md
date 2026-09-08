@@ -11,3 +11,9 @@ Add a read-only task listing command over the existing agent workstream detail e
 - [x] Create a conventional commit without pushing or deploying.
 
 Output is tab-separated in API order, with `-` representing an unassigned task. Response fields are flattened to one line and local credential secrets are redacted before display.
+
+## Review follow-up
+
+- [x] Print a filter-aware stdout message when no tasks match.
+- [x] Cover unfiltered, `--mine`, `--status`, and combined empty results.
+- [x] Update the README, rerun validation, and create a follow-up conventional commit.

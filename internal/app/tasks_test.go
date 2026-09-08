@@ -44,8 +44,14 @@ func TestTasksListsAndFiltersWorkstreamDetail(t *testing.T) {
 			want: "task-4\tlanded\tagent-7\tOwn landed\n",
 		},
 		{
-			name: "no matches",
+			name: "no status matches",
+			args: []string{"--status", "in_flight"},
+			want: "No tasks with status in_flight in workstream 694.\n",
+		},
+		{
+			name: "no combined matches",
 			args: []string{"--mine", "--status", "blocked"},
+			want: "No tasks assigned to this agent with status blocked in workstream 694.\n",
 		},
 	}
 
@@ -69,6 +75,46 @@ func TestTasksListsAndFiltersWorkstreamDetail(t *testing.T) {
 
 			client, stdout, stderr := testApp(t, server.URL, "", nil)
 			saveTestCredential(t, client, credential)
+			arguments := append([]string{"tasks", "--workstream", "694"}, test.args...)
+			if exitCode := client.Run(arguments); exitCode != 0 {
+				t.Fatalf("tasks exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+			if requests != 1 {
+				t.Fatalf("requests = %d, want 1", requests)
+			}
+			if got := stdout.String(); got != test.want {
+				t.Fatalf("stdout = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTasksExplainsEmptyResults(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "unfiltered", want: "No tasks in workstream 694.\n"},
+		{name: "mine", args: []string{"--mine"}, want: "No tasks assigned to this agent in workstream 694.\n"},
+		{name: "status", args: []string{"--status", "todo"}, want: "No tasks with status todo in workstream 694.\n"},
+		{name: "combined", args: []string{"--mine", "--status", "todo"}, want: "No tasks assigned to this agent with status todo in workstream 694.\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				requests++
+				_, _ = writer.Write([]byte(`{"workstream":{"code":"694"},"tasks":[],"updates":[]}`))
+			}))
+			defer server.Close()
+
+			client, stdout, stderr := testApp(t, server.URL, "", nil)
+			saveTestCredential(t, client, testCredential())
 			arguments := append([]string{"tasks", "--workstream", "694"}, test.args...)
 			if exitCode := client.Run(arguments); exitCode != 0 {
 				t.Fatalf("tasks exit code = %d, stderr = %q", exitCode, stderr.String())
