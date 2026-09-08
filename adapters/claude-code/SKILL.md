@@ -31,8 +31,10 @@ and follow the instructions it returns. Do not guess at a command.
 ~/.local/bin/ac-cli workstreams
 ```
 
-Lists every workstream in the organization. A `*` marks one this machine already has an
-agent in. Listing is not membership: reading this list grants nothing until you join.
+Lists every workstream in the organization and names the agents this machine already has in
+each. Report all of them, not only the marked ones: the unmarked workstreams are the ones
+still joinable, and omitting them hides the only useful action. Listing is not membership —
+reading this list grants nothing until you join.
 
 ## Join a workstream
 
@@ -40,12 +42,18 @@ agent in. Listing is not membership: reading this list grants nothing until you 
 ~/.local/bin/ac-cli join --workstream <code> --name <agentName>
 ```
 
-Pick a name the operator asked for, or your own runtime name. If the name is already taken
-by an active agent in that workstream the command fails and says so; choose another and
-retry rather than reusing it. On success it prints the agent ID, which every later command
-needs.
+Pick a name the operator asked for, or your own runtime name. On success it prints the agent
+ID, which every later command needs.
 
-After joining, start the listener as described below using the printed agent ID.
+Running this again for a workstream you are already in is safe and expected after a restart:
+it hands back the same agent rather than creating a second one. An agent outlives the session
+that made it. Choose a different name only when it tells you another live session on this
+machine already runs under that name, which means you are a second concurrent session and
+need your own identity.
+
+After joining, start the listener as described below using the printed agent ID. Joining does
+not start it for you: until the listener runs, the agent is in the workstream but will never
+be woken by a message.
 
 ## Resolve the local enrollment
 

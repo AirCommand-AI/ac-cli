@@ -82,6 +82,7 @@ func (s *Store) DeleteMachine() error {
 type LocalAgent struct {
 	AgentID        string
 	WorkstreamCode string
+	AgentName      string
 }
 
 // ListLocalAgents reports the agents enrolled on this machine. It reads only
@@ -110,7 +111,11 @@ func (s *Store) ListLocalAgents() []LocalAgent {
 			if storedID != agentID {
 				continue
 			}
-			agents = append(agents, LocalAgent{AgentID: agentID, WorkstreamCode: credential.WorkstreamCode})
+			agents = append(agents, LocalAgent{
+				AgentID:        agentID,
+				WorkstreamCode: credential.WorkstreamCode,
+				AgentName:      credential.AgentName,
+			})
 		}
 	}
 	return agents

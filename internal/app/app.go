@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
@@ -301,6 +302,7 @@ func (a *App) exchange(arguments []string) error {
 		APIToken:       apiToken,
 		SocketKey:      socketKey,
 		WorkstreamCode: result.WorkstreamCode,
+		AgentName:      result.AgentName,
 		AgentID:        result.AgentID,
 		SocketAddress:  result.SocketAddress,
 	}
@@ -594,6 +596,20 @@ func (a *App) listen(arguments []string) error {
 	if a.ListenStore == nil {
 		return &publicError{message: "Listener state storage is unavailable."}
 	}
+
+	// One listener per agent. Two would share the stored cursor, so whichever
+	// polled first would consume a notification and advance past it while the
+	// other never learned the message existed.
+	lock, err := agentlock.Acquire(a.Store.Home(), credential.AgentID)
+	if err != nil {
+		if errors.Is(err, agentlock.ErrHeld) {
+			return &publicError{message: fmt.Sprintf(
+				"This machine is already listening for agent %s. Stop that listener before starting another.",
+				credential.AgentID)}
+		}
+		return storageError(err, "Unable to claim this agent for listening.")
+	}
+	defer func() { _ = lock.Release() }()
 
 	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(credential.AgentID)
 	if err != nil {

@@ -19,6 +19,11 @@ type Credential struct {
 	WorkstreamCode string `json:"workstreamCode"`
 	AgentID        string `json:"agentId"`
 	SocketAddress  string `json:"socketAddress"`
+	// AgentName is the name this agent answers to in its workstream. It is
+	// optional because credentials written before joining existed do not
+	// carry it, and it is never used for authentication -- only to recognise
+	// an agent this machine already owns and to label it for a human.
+	AgentName string `json:"agentName,omitempty"`
 }
 
 type File struct {
@@ -41,6 +46,11 @@ func (e *MultipleAgentsError) Error() string {
 func NewStore(home string) *Store {
 	return &Store{home: home}
 }
+
+// Home is the storage root this store was built for. Callers that need to
+// reach sibling per-agent files, such as the agent lock, resolve them from it
+// rather than guessing at the user's home directory again.
+func (s *Store) Home() string { return s.home }
 
 func (s *Store) Path(agentID string) string {
 	return filepath.Join(storagepath.AgentDirectory(s.home, agentID), "credentials.json")

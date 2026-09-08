@@ -110,6 +110,9 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 		WorkstreamCode: "694",
 		AgentID:        "agent-7",
 		SocketAddress:  "ac:agent-7",
+		// Storing the name is what lets a restarted runtime recognise this
+		// agent as its own rather than joining again as a duplicate.
+		AgentName: "Builder",
 	}
 	if stored != wantCredential {
 		t.Fatalf("stored credential = %#v, want %#v", stored, wantCredential)

@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 
 	"strings"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
@@ -168,23 +170,53 @@ func (a *App) workstreams(arguments []string) error {
 	if err := json.Unmarshal(response.body, &list); err != nil {
 		return &publicError{message: "The AirCommand service returned an invalid response."}
 	}
-	joined := a.joinedWorkstreamCodes()
+	// Name any agent stored before the name was kept locally, so the listing
+	// says "you are Pi here" rather than printing a bare identifier.
+	for _, workstream := range list.Workstreams {
+		a.backfillAgentNames(workstream.Code)
+	}
+	local := a.localAgentsByWorkstream()
 	writer := a.outputWriter()
 	if len(list.Workstreams) == 0 {
 		fmt.Fprintln(writer, "No workstreams in this organization.")
 		return nil
 	}
+	// Every workstream is listed, including ones with no local agent -- those
+	// are the joinable ones, and omitting them hides the only useful action.
 	for _, workstream := range list.Workstreams {
 		marker := " "
-		if _, ok := joined[workstream.Code]; ok {
+		suffix := ""
+		if names := local[workstream.Code]; len(names) > 0 {
 			marker = "*"
+			suffix = "  (you are " + strings.Join(names, ", ") + " here)"
 		}
-		fmt.Fprintf(writer, "%s %-8s %s\n", marker, workstream.Code, workstream.Name)
+		fmt.Fprintf(writer, "%s %-8s %s%s\n", marker, workstream.Code, workstream.Name, suffix)
 	}
-	if len(joined) > 0 {
-		fmt.Fprintln(writer, "\n* this machine already has an agent in this workstream")
+	if len(local) > 0 {
+		fmt.Fprintln(writer, "\n* this machine already has an agent here; join is only needed for the unmarked ones")
 	}
 	return nil
+}
+
+// localAgentsByWorkstream names the agents this machine already owns, keyed by
+// workstream. Naming them rather than only marking the row is what lets an
+// agent recognise its own prior identity instead of inferring it.
+func (a *App) localAgentsByWorkstream() map[string][]string {
+	names := map[string][]string{}
+	if a.Store == nil {
+		return names
+	}
+	for _, agent := range a.Store.ListLocalAgents() {
+		name := strings.TrimSpace(agent.AgentName)
+		if name == "" {
+			name = agent.AgentID
+		}
+		names[agent.WorkstreamCode] = append(names[agent.WorkstreamCode], name)
+	}
+	for code := range names {
+		sort.Strings(names[code])
+	}
+	return names
 }
 
 // join creates an agent in a workstream and activates it. Its output matches
@@ -213,6 +245,20 @@ func (a *App) join(arguments []string) error {
 	}
 	if err := a.Store.CheckLayout(); err != nil {
 		return storageError(err, "Credential storage is unavailable.")
+	}
+
+	// An agent outlives the session that created it. A restarted runtime
+	// asking to join again means "give me my agent back", so reuse it rather
+	// than creating a second one that strands the first with an inbox nobody
+	// reads. Only a live holder forces a new identity.
+	if existing, found := a.reusableLocalAgent(workstreamCode, agentName); found {
+		a.printAgentIdentity(existing.AgentID, existing.AgentName, workstreamCode, socketAddressForAgentID(existing.AgentID))
+		return nil
+	}
+	if held, name := a.heldLocalAgent(workstreamCode, agentName); held {
+		return &publicError{message: fmt.Sprintf(
+			"This machine is already running an agent called %s in workstream %s. Choose a different name for this session.",
+			name, workstreamCode)}
 	}
 
 	random := a.randomReader()
@@ -263,18 +309,116 @@ func (a *App) join(arguments []string) error {
 		WorkstreamCode: joined.WorkstreamCode,
 		AgentID:        joined.AgentID,
 		SocketAddress:  joined.SocketAddress,
+		AgentName:      joined.AgentName,
 	}); err != nil {
 		return &publicError{message: "Joined the workstream but could not store the agent credential."}
 	}
 
-	writer := a.outputWriter()
-	fmt.Fprintf(writer, "Agent ID: %s\n", joined.AgentID)
-	fmt.Fprintf(writer, "Use for send/update/read/inbox/ack/listen: --agent %s\n", joined.AgentID)
-	fmt.Fprintf(writer, "Agent name: %s\n", joined.AgentName)
-	fmt.Fprintf(writer, "Workstream: %s\n", joined.WorkstreamCode)
-	fmt.Fprintf(writer, "Socket address: %s\n", joined.SocketAddress)
+	a.printAgentIdentity(joined.AgentID, joined.AgentName, joined.WorkstreamCode, joined.SocketAddress)
 	return nil
 }
+
+// printAgentIdentity is the one identity block both joining and reuse emit, so
+// a runtime adapter parses either outcome identically.
+func (a *App) printAgentIdentity(agentID, agentName, workstreamCode, socketAddress string) {
+	writer := a.outputWriter()
+	fmt.Fprintf(writer, "Agent ID: %s\n", agentID)
+	fmt.Fprintf(writer, "Use for send/update/read/inbox/ack/listen: --agent %s\n", agentID)
+	fmt.Fprintf(writer, "Agent name: %s\n", agentName)
+	fmt.Fprintf(writer, "Workstream: %s\n", workstreamCode)
+	fmt.Fprintf(writer, "Socket address: %s\n", socketAddress)
+}
+
+// reusableLocalAgent finds an agent this machine already owns for the same
+// workstream and name, provided no live process holds it.
+func (a *App) reusableLocalAgent(workstreamCode string, agentName string) (credentials.LocalAgent, bool) {
+	a.backfillAgentNames(workstreamCode)
+	for _, agent := range a.localAgentsNamed(workstreamCode, agentName) {
+		if !agentlock.Held(a.Store.Home(), agent.AgentID) {
+			return agent, true
+		}
+	}
+	return credentials.LocalAgent{}, false
+}
+
+// backfillAgentNames records the name of any stored agent saved before the name
+// was kept locally. Without it a restarted runtime cannot recognise an agent it
+// enrolled through the older setup-link flow, and would join again as a
+// duplicate. Each agent asks only about itself, using its own credential, and
+// any failure is left alone rather than blocking the join.
+func (a *App) backfillAgentNames(workstreamCode string) {
+	if a.Store == nil {
+		return
+	}
+	for _, agent := range a.Store.ListLocalAgents() {
+		if agent.WorkstreamCode != workstreamCode || strings.TrimSpace(agent.AgentName) != "" {
+			continue
+		}
+		credential, err := a.Store.FindByAgent(workstreamCode, agent.AgentID)
+		if err != nil {
+			continue
+		}
+		response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
+		if err != nil || response.status < 200 || response.status >= 300 {
+			continue
+		}
+		roster, err := decodeWorkstreamRoster(response.body)
+		if err != nil {
+			continue
+		}
+		name, found := rosterNameFor(roster, agent.AgentID)
+		if !found {
+			continue
+		}
+		credential.AgentName = name
+		_ = a.Store.Save(credential)
+	}
+}
+
+// rosterNameFor finds one agent's own name in a workstream roster.
+func rosterNameFor(roster workstreamRoster, agentID string) (string, bool) {
+	for _, collaborator := range roster.Collaborators {
+		for _, agent := range collaborator.Agents {
+			if agent.AgentID == agentID {
+				return agent.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
+// heldLocalAgent reports an agent of the same name in the same workstream that
+// a live process is currently using.
+func (a *App) heldLocalAgent(workstreamCode string, agentName string) (bool, string) {
+	for _, agent := range a.localAgentsNamed(workstreamCode, agentName) {
+		if agentlock.Held(a.Store.Home(), agent.AgentID) {
+			return true, agent.AgentName
+		}
+	}
+	return false, ""
+}
+
+// localAgentsNamed selects stored agents in one workstream answering to one
+// name. Matching is case-insensitive because addressing a message by name is,
+// so two agents differing only in case could not both be addressed.
+func (a *App) localAgentsNamed(workstreamCode string, agentName string) []credentials.LocalAgent {
+	var matches []credentials.LocalAgent
+	if a.Store == nil {
+		return matches
+	}
+	for _, agent := range a.Store.ListLocalAgents() {
+		if agent.WorkstreamCode != workstreamCode {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(agent.AgentName), agentName) {
+			continue
+		}
+		matches = append(matches, agent)
+	}
+	return matches
+}
+
+func socketAddressForAgentID(agentID string) string { return "ac:" + agentID }
 
 func (a *App) machineCredential() (credentials.Machine, error) {
 	if a.Store == nil {
@@ -288,19 +432,6 @@ func (a *App) machineCredential() (credentials.Machine, error) {
 		return credentials.Machine{}, &publicError{message: "Unable to read this machine's login."}
 	}
 	return machine, nil
-}
-
-// joinedWorkstreamCodes reports which workstreams already have a local agent.
-// It reads only the non-secret workstream code from each stored credential.
-func (a *App) joinedWorkstreamCodes() map[string]struct{} {
-	codes := map[string]struct{}{}
-	if a.Store == nil {
-		return codes
-	}
-	for _, agent := range a.Store.ListLocalAgents() {
-		codes[agent.WorkstreamCode] = struct{}{}
-	}
-	return codes
 }
 
 func (a *App) sleep(delay time.Duration) {
