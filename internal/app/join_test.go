@@ -107,12 +107,86 @@ func TestJoinDoesNotReuseAnAgentFromAnotherWorkstreamOrName(t *testing.T) {
 
 	// Neither a different workstream nor a different name is this agent, so
 	// both must fall through to a real join rather than silently reusing it.
-	for _, arguments := range [][]string{
-		{"join", "--workstream", "165", "--name", "Pi"},
-		{"join", "--workstream", "694", "--name", "Claude"},
-	} {
-		if _, reused := client.reusableLocalAgent(arguments[2], arguments[4]); reused {
-			t.Fatalf("%v reused an unrelated agent", arguments)
+	for _, pair := range [][2]string{{"165", "Pi"}, {"694", "Claude"}} {
+		resumed, err := client.agentToResume(pair[0], pair[1])
+		if err != nil {
+			t.Fatalf("agentToResume(%q, %q): %v", pair[0], pair[1], err)
 		}
+		if resumed != nil {
+			t.Fatalf("workstream %q name %q reused unrelated agent %q", pair[0], pair[1], resumed.AgentID)
+		}
+	}
+}
+
+func TestJoinWithoutANameResumesTheOnlyAgentThisMachineHasThere(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("join called the server instead of resuming the stored agent")
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedAgent(t, client, "agm_existing", "694", "Reviewer")
+
+	// "Rejoin 694" carries no name, and the runtime cannot be expected to
+	// remember a name its operator chose in an earlier session.
+	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode != 0 {
+		t.Fatalf("join exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Agent name: Reviewer") {
+		t.Fatalf("nameless join did not resume the stored agent: %q", stdout.String())
+	}
+}
+
+func TestJoinWithoutANameAsksWhichAgentWhenSeveralCouldMatch(t *testing.T) {
+	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
+	storedAgent(t, client, "agm_one", "694", "Claude")
+	storedAgent(t, client, "agm_two", "694", "Pi")
+
+	// Picking one would strand the other: still active, still addressable,
+	// with nobody listening as it.
+	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode == 0 {
+		t.Fatal("nameless join silently picked one of several agents")
+	}
+	message := stderr.String()
+	for _, want := range []string{"more than one agent", "Claude", "Pi", "--name"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("ambiguous join message %q is missing %q", message, want)
+		}
+	}
+}
+
+func TestJoinWithoutANameRequiresOneWhenNothingCanBeResumed(t *testing.T) {
+	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
+	if err := client.Store.SaveMachine(credentials.Machine{
+		APIToken:       "sk-ac-abcdefghijklmnopqrstuvwxyz012345",
+		OrganizationID: "org_test",
+	}); err != nil {
+		t.Fatalf("SaveMachine: %v", err)
+	}
+
+	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode == 0 {
+		t.Fatal("join created an agent without being given a name")
+	}
+	if !strings.Contains(stderr.String(), "Pass --name") {
+		t.Fatalf("first-join message does not ask for a name: %q", stderr.String())
+	}
+}
+
+func TestJoinWithoutANameRefusesWhenEveryLocalAgentIsInUse(t *testing.T) {
+	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
+	storedAgent(t, client, "agm_existing", "694", "Pi")
+
+	lock, err := agentlock.Acquire(client.Store.Home(), "agm_existing")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode == 0 {
+		t.Fatal("nameless join handed over an agent a live session was using")
+	}
+	message := stderr.String()
+	if !strings.Contains(message, "in use by a live session") || !strings.Contains(message, "Pass --name") {
+		t.Fatalf("in-use message does not say what to do next: %q", message)
 	}
 }

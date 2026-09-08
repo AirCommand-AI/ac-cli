@@ -17,6 +17,8 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
+const joinUsage = "Usage: ac-cli join --workstream <code> [--name <agentName>]"
+
 const (
 	defaultDevicePollInterval = 5 * time.Second
 	maxDevicePollDuration     = 10 * time.Minute
@@ -229,12 +231,12 @@ func (a *App) join(arguments []string) error {
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentName, "name", "", "name this agent takes in the workstream")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
-		return &publicError{message: "Usage: ac-cli join --workstream <code> --name <agentName>"}
+		return &publicError{message: joinUsage}
 	}
 	workstreamCode = strings.TrimSpace(workstreamCode)
 	agentName = strings.TrimSpace(agentName)
-	if workstreamCode == "" || agentName == "" {
-		return &publicError{message: "Usage: ac-cli join --workstream <code> --name <agentName>"}
+	if workstreamCode == "" {
+		return &publicError{message: joinUsage}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -251,14 +253,18 @@ func (a *App) join(arguments []string) error {
 	// asking to join again means "give me my agent back", so reuse it rather
 	// than creating a second one that strands the first with an inbox nobody
 	// reads. Only a live holder forces a new identity.
-	if existing, found := a.reusableLocalAgent(workstreamCode, agentName); found {
+	existing, err := a.agentToResume(workstreamCode, agentName)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
 		a.printAgentIdentity(existing.AgentID, existing.AgentName, workstreamCode, socketAddressForAgentID(existing.AgentID))
 		return nil
 	}
-	if held, name := a.heldLocalAgent(workstreamCode, agentName); held {
+	if agentName == "" {
 		return &publicError{message: fmt.Sprintf(
-			"This machine is already running an agent called %s in workstream %s. Choose a different name for this session.",
-			name, workstreamCode)}
+			"This machine has no agent in workstream %s yet. Pass --name to say what this agent should be called.",
+			workstreamCode)}
 	}
 
 	random := a.randomReader()
@@ -329,16 +335,96 @@ func (a *App) printAgentIdentity(agentID, agentName, workstreamCode, socketAddre
 	fmt.Fprintf(writer, "Socket address: %s\n", socketAddress)
 }
 
-// reusableLocalAgent finds an agent this machine already owns for the same
-// workstream and name, provided no live process holds it.
-func (a *App) reusableLocalAgent(workstreamCode string, agentName string) (credentials.LocalAgent, bool) {
+// agentToResume decides which stored agent, if any, this join should hand
+// back. A nil agent with no error means nothing here can be resumed and a
+// fresh one should be created.
+//
+// Without a name it answers only when there is exactly one candidate. Guessing
+// between several would silently strand whichever agent it did not pick,
+// leaving that one active and addressable with nobody listening as it, so it
+// asks instead.
+func (a *App) agentToResume(workstreamCode string, agentName string) (*credentials.LocalAgent, error) {
 	a.backfillAgentNames(workstreamCode)
-	for _, agent := range a.localAgentsNamed(workstreamCode, agentName) {
-		if !agentlock.Held(a.Store.Home(), agent.AgentID) {
-			return agent, true
+
+	candidates := a.localAgentsIn(workstreamCode)
+	if agentName != "" {
+		candidates = filterAgentsNamed(candidates, agentName)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	var free []credentials.LocalAgent
+	var held []credentials.LocalAgent
+	for _, agent := range candidates {
+		if agentlock.Held(a.Store.Home(), agent.AgentID) {
+			held = append(held, agent)
+			continue
+		}
+		free = append(free, agent)
+	}
+
+	if len(free) == 1 {
+		agent := free[0]
+		return &agent, nil
+	}
+	if len(free) > 1 {
+		return nil, &publicError{message: fmt.Sprintf(
+			"This machine has more than one agent in workstream %s: %s. Pass --name to say which one this session is.",
+			workstreamCode, strings.Join(agentLabels(free), ", "))}
+	}
+	// Everything that matched is in use by a live session, so this session
+	// needs an identity of its own rather than one of theirs.
+	if agentName != "" {
+		return nil, &publicError{message: fmt.Sprintf(
+			"This machine is already running an agent called %s in workstream %s. Choose a different name for this session.",
+			held[0].AgentName, workstreamCode)}
+	}
+	return nil, &publicError{message: fmt.Sprintf(
+		"Every agent this machine has in workstream %s is in use by a live session: %s. Pass --name to join as a new one.",
+		workstreamCode, strings.Join(agentLabels(held), ", "))}
+}
+
+// localAgentsIn lists the stored agents this machine holds in one workstream.
+func (a *App) localAgentsIn(workstreamCode string) []credentials.LocalAgent {
+	var matches []credentials.LocalAgent
+	if a.Store == nil {
+		return matches
+	}
+	for _, agent := range a.Store.ListLocalAgents() {
+		if agent.WorkstreamCode == workstreamCode {
+			matches = append(matches, agent)
 		}
 	}
-	return credentials.LocalAgent{}, false
+	return matches
+}
+
+// filterAgentsNamed selects agents answering to one name. Matching ignores
+// case because addressing a message by name does, so two agents differing only
+// in case could not both be addressed.
+func filterAgentsNamed(agents []credentials.LocalAgent, agentName string) []credentials.LocalAgent {
+	var matches []credentials.LocalAgent
+	for _, agent := range agents {
+		if strings.EqualFold(strings.TrimSpace(agent.AgentName), agentName) {
+			matches = append(matches, agent)
+		}
+	}
+	return matches
+}
+
+// agentLabels names agents for a human, falling back to the identifier for one
+// stored before names were kept.
+func agentLabels(agents []credentials.LocalAgent) []string {
+	labels := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		if name := strings.TrimSpace(agent.AgentName); name != "" {
+			labels = append(labels, name)
+			continue
+		}
+		labels = append(labels, agent.AgentID)
+	}
+	sort.Strings(labels)
+	return labels
 }
 
 // backfillAgentNames records the name of any stored agent saved before the name
@@ -385,37 +471,6 @@ func rosterNameFor(roster workstreamRoster, agentID string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// heldLocalAgent reports an agent of the same name in the same workstream that
-// a live process is currently using.
-func (a *App) heldLocalAgent(workstreamCode string, agentName string) (bool, string) {
-	for _, agent := range a.localAgentsNamed(workstreamCode, agentName) {
-		if agentlock.Held(a.Store.Home(), agent.AgentID) {
-			return true, agent.AgentName
-		}
-	}
-	return false, ""
-}
-
-// localAgentsNamed selects stored agents in one workstream answering to one
-// name. Matching is case-insensitive because addressing a message by name is,
-// so two agents differing only in case could not both be addressed.
-func (a *App) localAgentsNamed(workstreamCode string, agentName string) []credentials.LocalAgent {
-	var matches []credentials.LocalAgent
-	if a.Store == nil {
-		return matches
-	}
-	for _, agent := range a.Store.ListLocalAgents() {
-		if agent.WorkstreamCode != workstreamCode {
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(agent.AgentName), agentName) {
-			continue
-		}
-		matches = append(matches, agent)
-	}
-	return matches
 }
 
 func socketAddressForAgentID(agentID string) string { return "ac:" + agentID }

@@ -39,17 +39,20 @@ reading this list grants nothing until you join.
 ## Join a workstream
 
 ```text
-~/.local/bin/ac-cli join --workstream <code> --name <agentName>
+~/.local/bin/ac-cli join --workstream <code> [--name <agentName>]
 ```
 
-Pick a name the operator asked for, or your own runtime name. On success it prints the agent
-ID, which every later command needs.
+On success it prints the agent ID, which every later command needs.
 
-Running this again for a workstream you are already in is safe and expected after a restart:
-it hands back the same agent rather than creating a second one. An agent outlives the session
-that made it. Choose a different name only when it tells you another live session on this
-machine already runs under that name, which means you are a second concurrent session and
-need your own identity.
+**Rejoining after a restart: leave `--name` off.** An agent outlives the session that made
+it, and you cannot be expected to remember a name your operator chose in an earlier session.
+With no name the command hands back the agent this machine already has there, whatever it is
+called. It never creates a second one silently: if several could match, or if the only one is
+in use by another live session, it says so and asks you to name which.
+
+Pass `--name` when joining a workstream for the first time, or when a message tells you a
+live session already runs under that name — that means you are a second concurrent session
+and need an identity of your own.
 
 After joining, start the listener as described below using the printed agent ID. Joining does
 not start it for you: until the listener runs, the agent is in the workstream but will never
