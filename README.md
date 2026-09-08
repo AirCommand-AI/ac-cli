@@ -13,6 +13,7 @@ ac-cli exchange
 ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
 ac-cli update --workstream <code> [--agent <agentId>] --body <text>
 ac-cli read --workstream <code> [--agent <agentId>]
+ac-cli task <id> --workstream <code> [--agent <agentId>]
 ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]
 ac-cli inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]
 ac-cli ack --workstream <code> [--agent <agentId>] --message <messageId>
@@ -35,13 +36,15 @@ One agent has at most one live holder on a machine. `listen` takes an advisory l
 
 `exchange` is the older setup-link path and still works. It accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
-When exactly one local agent is enrolled, `send`, `update`, `read`, `tasks`, `inbox`, `ack`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
+When exactly one local agent is enrolled, `send`, `update`, `read`, `task`, `tasks`, `inbox`, `ack`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
 
 `send` creates one point-to-point message. A `--to` value beginning with `agm_` or `ac_` is sent directly as an ID without fetching the roster. Other values are resolved against active agent names in the workstream roster: surrounding whitespace is ignored, an exact case-sensitive match is preferred, and `strings.EqualFold` matching is used only when there is no exact match. Ambiguous matches fail closed and identify the tied agent IDs; missing names report the available active names. Name resolution deliberately does not apply Unicode normalization beyond `strings.EqualFold`.
 
 A message send retries bounded transport failures and HTTP 408, 500, and 503 responses within the same invocation, always reusing its in-memory idempotency ID. Other HTTP statuses are final. Exhausted 408 and 503 responses report delivery as uncertain. Running `send` again deliberately creates a new message with a new idempotency ID.
 
 `update` retains the former `send` behavior and publishes a workstream-wide update.
+
+`task <id>` reads one existing workstream detail payload and prints the matching task's title, description, status, assignee, created time, and updated time, followed by its task-scoped updates as tab-separated timestamp, author, and body lines in oldest-first order. The positional ID must come before the flags. Missing or extra positional arguments print usage; an unknown ID names both the task and workstream in its error; a task without comments says so explicitly. Output fields are flattened to one line and use the same local-credential redaction as `tasks`.
 
 `tasks` reads the existing workstream detail endpoint and prints one tab-separated line per matching task in API order: task ID, status, canonical assignee ID, and title. An unassigned task prints `-` in the assignee column. `--mine` keeps only tasks assigned to the selected local agent ID. `--status` accepts `todo`, `in_flight`, `blocked`, or `landed`; any other value is rejected before an HTTP request is made. The two filters can be combined. When nothing matches, the command prints a filter-aware message instead of returning silent output.
 

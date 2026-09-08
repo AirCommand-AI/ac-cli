@@ -96,14 +96,26 @@ type workstreamRosterEnvelope struct {
 }
 
 type taskListEnvelope struct {
-	Tasks []taskListItem `json:"tasks"`
+	Tasks   []taskListItem    `json:"tasks"`
+	Updates []taskCommentItem `json:"updates"`
 }
 
 type taskListItem struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	Assignee string `json:"assignee"`
-	Title    string `json:"title"`
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	Assignee    string `json:"assignee"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type taskCommentItem struct {
+	ID        string `json:"id"`
+	TaskID    string `json:"taskId"`
+	Author    string `json:"author"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type workstreamRoster struct {
@@ -196,6 +208,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.update(arguments[1:])
 		case "read":
 			err = a.read(arguments[1:])
+		case "task":
+			err = a.task(arguments[1:])
 		case "tasks":
 			err = a.tasks(arguments[1:])
 		case "inbox":
@@ -224,7 +238,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -249,6 +263,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "Usage: ac-cli update --workstream <code> [--agent <agentId>] --body <text>", true
 	case "read":
 		return "Usage: ac-cli read --workstream <code> [--agent <agentId>]", true
+	case "task":
+		return taskUsage, true
 	case "tasks":
 		return tasksUsage, true
 	case "inbox":
@@ -327,7 +343,7 @@ func (a *App) exchange(arguments []string) error {
 
 	protected := []string{ticket, apiToken, socketKey}
 	output := fmt.Sprintf(
-		"Agent ID: %s\nUse for send/update/read/tasks/inbox/ack/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
+		"Agent ID: %s\nUse for send/update/read/task/tasks/inbox/ack/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentName, protected...),
@@ -563,23 +579,62 @@ func rosterStatusError(status int, workstreamCode string) error {
 }
 
 func decodeTaskList(body []byte) ([]taskListItem, error) {
+	envelope, err := decodeTaskEnvelope(body)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateTaskItems(envelope.Tasks); err != nil {
+		return nil, err
+	}
+	return envelope.Tasks, nil
+}
+
+func decodeTaskDetail(body []byte) (taskListEnvelope, error) {
+	envelope, err := decodeTaskEnvelope(body)
+	if err != nil {
+		return taskListEnvelope{}, err
+	}
+	if err := validateTaskItems(envelope.Tasks); err != nil {
+		return taskListEnvelope{}, err
+	}
+	if envelope.Updates == nil {
+		return taskListEnvelope{}, errors.New("task response is missing updates")
+	}
+	for _, task := range envelope.Tasks {
+		if strings.TrimSpace(task.CreatedAt) == "" || strings.TrimSpace(task.UpdatedAt) == "" {
+			return taskListEnvelope{}, errors.New("task response has incomplete task detail")
+		}
+	}
+	for _, update := range envelope.Updates {
+		if strings.TrimSpace(update.ID) == "" || strings.TrimSpace(update.Body) == "" || strings.TrimSpace(update.CreatedAt) == "" {
+			return taskListEnvelope{}, errors.New("task response has an invalid update")
+		}
+	}
+	return envelope, nil
+}
+
+func decodeTaskEnvelope(body []byte) (taskListEnvelope, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	var envelope taskListEnvelope
 	if err := decoder.Decode(&envelope); err != nil {
-		return nil, err
+		return taskListEnvelope{}, err
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
-		return nil, err
+		return taskListEnvelope{}, err
 	}
-	if envelope.Tasks == nil {
-		return nil, errors.New("task response is missing tasks")
+	return envelope, nil
+}
+
+func validateTaskItems(tasks []taskListItem) error {
+	if tasks == nil {
+		return errors.New("task response is missing tasks")
 	}
-	for _, task := range envelope.Tasks {
+	for _, task := range tasks {
 		if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.Title) == "" || !validTaskListStatus(task.Status) {
-			return nil, errors.New("task response has an invalid task")
+			return errors.New("task response has an invalid task")
 		}
 	}
-	return envelope.Tasks, nil
+	return nil
 }
 
 func validTaskListStatus(status string) bool {

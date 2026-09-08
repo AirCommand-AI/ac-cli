@@ -19,6 +19,7 @@ import (
 
 const (
 	joinUsage  = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
+	taskUsage  = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>]"
 	tasksUsage = "Usage: ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
 )
 
@@ -199,6 +200,99 @@ func (a *App) workstreams(arguments []string) error {
 	}
 	if len(local) > 0 {
 		fmt.Fprintln(writer, "\n* this machine already has an agent here; join is only needed for the unmarked ones")
+	}
+	return nil
+}
+
+// task reads one workstream detail payload and renders the selected task plus
+// its task-scoped updates. The positional ID must precede all flags.
+func (a *App) task(arguments []string) error {
+	if len(arguments) == 0 || strings.HasPrefix(arguments[0], "-") {
+		return &publicError{message: taskUsage}
+	}
+	taskID := strings.TrimSpace(arguments[0])
+	flags := flag.NewFlagSet("task", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workstreamCode string
+	var agentID string
+	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
+	if taskID == "" || flags.Parse(arguments[1:]) != nil || flags.NArg() != 0 || workstreamCode == "" {
+		return &publicError{message: taskUsage}
+	}
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+
+	credential, err := a.credentialFor(workstreamCode, agentID)
+	if err != nil {
+		return err
+	}
+	response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, false)
+	}
+	detail, err := decodeTaskDetail(response.body)
+	if err != nil {
+		return &publicError{message: "The workstream service returned an invalid task response."}
+	}
+
+	var selected *taskListItem
+	for index := range detail.Tasks {
+		if detail.Tasks[index].ID == taskID {
+			selected = &detail.Tasks[index]
+			break
+		}
+	}
+	protected := []string{credential.APIToken, credential.SocketKey}
+	if selected == nil {
+		return &publicError{message: fmt.Sprintf(
+			"Task %s was not found in workstream %s.",
+			safeMetadata(taskID, protected...),
+			safeMetadata(workstreamCode, protected...),
+		)}
+	}
+
+	comments := make([]taskCommentItem, 0)
+	for _, update := range detail.Updates {
+		if update.TaskID == taskID {
+			comments = append(comments, update)
+		}
+	}
+	sort.SliceStable(comments, func(i int, j int) bool {
+		if comments[i].CreatedAt == comments[j].CreatedAt {
+			return comments[i].ID < comments[j].ID
+		}
+		return comments[i].CreatedAt < comments[j].CreatedAt
+	})
+
+	safe := func(value string) string { return safeMetadata(value, protected...) }
+	orDash := func(value string) string {
+		if value == "" {
+			return "-"
+		}
+		return safe(value)
+	}
+	var output strings.Builder
+	fmt.Fprintf(&output, "Title: %s\n", safe(selected.Title))
+	fmt.Fprintf(&output, "Description: %s\n", orDash(selected.Description))
+	fmt.Fprintf(&output, "Status: %s\n", safe(selected.Status))
+	fmt.Fprintf(&output, "Assignee: %s\n", orDash(selected.Assignee))
+	fmt.Fprintf(&output, "Created: %s\n", safe(selected.CreatedAt))
+	fmt.Fprintf(&output, "Updated: %s\n", safe(selected.UpdatedAt))
+	output.WriteString("Comments:\n")
+	if len(comments) == 0 {
+		fmt.Fprintf(&output, "No comments for task %s.\n", safe(taskID))
+	} else {
+		for _, comment := range comments {
+			fmt.Fprintf(&output, "%s\t%s\t%s\n", safe(comment.CreatedAt), orDash(comment.Author), safe(comment.Body))
+		}
+	}
+	if _, err := io.WriteString(a.outputWriter(), output.String()); err != nil {
+		return &publicError{message: "Unable to write task output."}
 	}
 	return nil
 }
@@ -437,7 +531,7 @@ func (a *App) reportAgentIdentity(listening bool, agentID, agentName, workstream
 // so a runtime adapter parses either outcome identically.
 func (a *App) writeAgentIdentity(writer io.Writer, agentID, agentName, workstreamCode, socketAddress string) {
 	fmt.Fprintf(writer, "Agent ID: %s\n", agentID)
-	fmt.Fprintf(writer, "Use for send/update/read/tasks/inbox/ack/listen: --agent %s\n", agentID)
+	fmt.Fprintf(writer, "Use for send/update/read/task/tasks/inbox/ack/listen: --agent %s\n", agentID)
 	fmt.Fprintf(writer, "Agent name: %s\n", agentName)
 	fmt.Fprintf(writer, "Workstream: %s\n", workstreamCode)
 	fmt.Fprintf(writer, "Socket address: %s\n", socketAddress)
