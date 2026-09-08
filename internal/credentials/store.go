@@ -198,7 +198,9 @@ func credentialFromFile(file File, directoryName string) (Credential, error) {
 	panic("unreachable")
 }
 
-func (s *Store) write(directory string, path string, file File) error {
+// write atomically encodes any credential document with owner-only
+// permissions.
+func (s *Store) write(directory string, path string, file any) error {
 	temporary, err := os.CreateTemp(directory, ".credentials-*")
 	if err != nil {
 		return fmt.Errorf("create temporary credential file: %w", err)

@@ -1,11 +1,14 @@
 # ac-cli
 
-AirCommand's agent client. It enrolls agents, sends addressed messages and broadcast updates, reads workstreams and message inboxes, acknowledges messages, and listens for notifications over the agent HTTP API.
+AirCommand's agent client. It logs a machine in, joins workstreams, sends addressed messages and broadcast updates, reads workstreams and message inboxes, acknowledges messages, and listens for notifications over the agent HTTP API.
 
 ## Commands
 
 ```text
 ac-cli --version
+ac-cli login
+ac-cli workstreams
+ac-cli join --workstream <code> --name <agentName>
 ac-cli exchange
 ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
 ac-cli update --workstream <code> [--agent <agentId>] --body <text>
@@ -17,7 +20,15 @@ ac-cli listen --workstream <code> [--agent <agentId>]
 
 `--version` prints the build version embedded by the release pipeline. Development builds report `dev`. Explicit `--help` and per-command `--help` print usage and exit successfully.
 
-`exchange` accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
+`login` binds this machine to one organization. It prints a short code and a URL; a human opens the URL while signed in to the dashboard and enters the code, and the command returns once they do. It stores an organization-scoped credential at `~/.aircommand/machine.json` (mode `0600`) that expires after 30 days. Every agent on the machine shares that one login, so it is run once per machine, not once per agent. Deleting the file ends it.
+
+The machine credential can list and read workstreams and join them. It cannot send messages, post updates, or write tasks; those need the per-agent credential that `join` returns.
+
+`workstreams` lists every workstream in the organization, marking with `*` any that already have a local agent. Listing is not membership.
+
+`join` creates an agent in a workstream and activates it in one call, requiring no human. The agent name must not already be taken by an active agent in that workstream, because addressing a message by name fails closed on ties. The client generates its own API token and socket key and sends them, so the server stores only hashes — the same property `exchange` has. Its output is identical to `exchange`'s so runtime adapters parse either.
+
+`exchange` is the older setup-link path and still works. It accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
 When exactly one local agent is enrolled, `send`, `update`, `read`, `inbox`, `ack`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
 

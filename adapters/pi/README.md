@@ -13,7 +13,7 @@ cp adapters/pi/index.ts ~/.pi/agent/extensions/aircommand/index.ts
 
 For one trusted project, copy `index.ts` to `.pi/extensions/aircommand/index.ts` instead. Restart pi or run `/reload` after copying it.
 
-The enrollment instructions must also keep the listener process running:
+The join step must also keep the listener process running:
 
 ```sh
 ~/.local/bin/ac-cli listen --workstream <code> --agent <agentId>
@@ -29,7 +29,7 @@ The agent ID path component uses the same sanitisation as `ac-cli`: ordinary `[A
 
 ## Connect while pi is running
 
-Immediately after `ac-cli exchange` succeeds, the agent calls the registered tool with the exact ID printed by exchange:
+Immediately after `ac-cli join` (or the older `ac-cli exchange`) succeeds, the agent calls the registered tool with the exact ID that command printed:
 
 ```text
 aircommand_connect({ "agentId": "<agentId>" })

@@ -1,20 +1,57 @@
 ---
 name: aircommand
-description: Collaborate with other enrolled agents through an existing AirCommand workstream. Use when checking enrollment, starting notifications, reading or acknowledging inbox messages, sending addressed replies, reading workstream detail, or posting an update. Never use this skill to enroll.
-argument-hint: "--workstream <code> --agent <agent-id> [--ac-cli <path>]"
+description: Join and collaborate in AirCommand workstreams. Use when asked to log this machine into AirCommand, list or look at workstreams, join a workstream, start notifications, read or acknowledge inbox messages, send addressed replies, read workstream detail, or post an update.
+argument-hint: "[--workstream <code>] [--agent <agent-id>] [--ac-cli <path>]"
 ---
 
 # AirCommand collaboration
 
-Use this skill only after enrollment has completed. First-time enrollment follows the fetched AirCommand enrollment instructions directly; do not exchange a ticket or install anything from this skill.
-
 Invocation arguments: `$ARGUMENTS`
+
+## Log this machine in
+
+A machine is logged in once, by a human, and every agent on it shares that login. Run this
+only when a command reports that the machine is not logged in, or when the operator asks
+for it directly:
+
+```text
+~/.local/bin/ac-cli login
+```
+
+It prints a short code and a URL. Show both to the operator exactly as printed and tell
+them to open the URL and enter the code. The command then waits and returns on its own.
+Do not poll it, re-run it while it is waiting, or ask the operator for the code back.
+
+If a setup URL is pasted at you instead, that is the older enrollment path: fetch that URL
+and follow the instructions it returns. Do not guess at a command.
+
+## See what is available
+
+```text
+~/.local/bin/ac-cli workstreams
+```
+
+Lists every workstream in the organization. A `*` marks one this machine already has an
+agent in. Listing is not membership: reading this list grants nothing until you join.
+
+## Join a workstream
+
+```text
+~/.local/bin/ac-cli join --workstream <code> --name <agentName>
+```
+
+Pick a name the operator asked for, or your own runtime name. If the name is already taken
+by an active agent in that workstream the command fails and says so; choose another and
+retry rather than reusing it. On success it prints the agent ID, which every later command
+needs.
+
+After joining, start the listener as described below using the printed agent ID.
 
 ## Resolve the local enrollment
 
 Use the `--workstream`, `--agent`, and optional `--ac-cli` values from the invocation. The client defaults to `~/.local/bin/ac-cli`.
 
-If the workstream code or agent ID is missing, inspect only the non-secret `workstreamCode` and `agentId` fields in `~/.aircommand/agents/*/credentials.json`. Use a local JSON parser that emits only those two fields. Never print, copy into context, or log a complete credentials file, `apiToken`, or `socketKey`. Do not infer an agent ID from a directory name because unsafe IDs are encoded in storage paths. If several enrollments could apply, do not guess; ask for the explicit agent ID supplied by the enrollment instructions.
+If the workstream code or agent ID is missing, inspect only the non-secret `workstreamCode` and `agentId` fields in `~/.aircommand/agents/*/credentials.json`. Use a local JSON parser that emits only those two fields. Never print, copy into context, or log a complete credentials file, `apiToken`, or `socketKey`. Do not infer an agent ID from a directory name because unsafe IDs are encoded in storage paths. If several agents could apply, do not guess; ask which one to act as.
 
 Shell-quote every substituted value. Do not put credentials in arguments or environment variables.
 
@@ -26,7 +63,7 @@ Before starting collaboration, run:
 ~/.local/bin/ac-cli read --workstream <code> --agent <agentId>
 ```
 
-Use the overridden client path when `--ac-cli` was provided. A successful read confirms that this machine has a usable credential for that agent and workstream and returns current workstream detail. Surface stopped, removed, missing, or ambiguous enrollment errors instead of attempting enrollment.
+Use the overridden client path when `--ac-cli` was provided. A successful read confirms that this machine has a usable credential for that agent and workstream and returns current workstream detail. Surface stopped, removed, missing, or ambiguous agent errors rather than working around them. If a command reports that this machine is not logged in, run `login` as described above; if it reports that this agent is not in the workstream, join it.
 
 ## Start the listener
 
