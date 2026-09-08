@@ -13,7 +13,7 @@ ac-cli exchange
 ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
 ac-cli update --workstream <code> [--agent <agentId>] --body <text>
 ac-cli read --workstream <code> [--agent <agentId>]
-ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>]
+ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]
 ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]
 ac-cli inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]
 ac-cli ack --workstream <code> [--agent <agentId>] --message <messageId>
@@ -46,7 +46,9 @@ A message send retries bounded transport failures and HTTP 408, 500, and 503 res
 
 `task <id>` reads one existing workstream detail payload and prints the matching task's title, description, status, assignee, created time, and updated time, followed by its task-scoped updates as tab-separated timestamp, author, and body lines in oldest-first order. The positional ID must come before the flags. Missing or extra positional arguments print usage; an unknown ID names both the task and workstream in its error; a task without comments says so explicitly. Output fields are flattened to one line and use the same local-credential redaction as `tasks`.
 
-Adding `--status todo|in_flight|blocked|landed` changes that task through the existing PATCH endpoint and prints the updated labeled task state returned by the server. Without `--status`, the command remains read-only and retains the detail-and-comments output above. Invalid status values are rejected before any request. Each mutation generates one idempotency ID and reuses its exact request body while retrying the same bounded transport failures and HTTP 408, 500, and 503 statuses as `send`; other statuses are final.
+Adding `--status todo|in_flight|blocked|landed` changes that task through the existing PATCH endpoint and prints the updated labeled task state returned by the server. Without a mutation flag, the command remains read-only and retains the detail-and-comments output above. Invalid status values are rejected before any request. Each mutation generates one idempotency ID and reuses its exact request body while retrying the same bounded transport failures and HTTP 408, 500, and 503 statuses as `send`; other statuses are final.
+
+Adding `--comment <text>` posts one task-scoped update through the existing updates endpoint and prints the server-confirmed comment metadata and body. Empty or whitespace-only comments are rejected before any request. `--comment` and `--status` cannot be combined because the server has no atomic operation for both; run separate commands so a retry or partial failure cannot leave the caller unsure which mutation landed. Comment retries reuse one server-honored idempotency ID, preventing duplicate appended comments.
 
 `tasks` reads the existing workstream detail endpoint and prints one tab-separated line per matching task in API order: task ID, status, canonical assignee ID, and title. An unassigned task prints `-` in the assignee column. `--mine` keeps only tasks assigned to the selected local agent ID. `--status` accepts `todo`, `in_flight`, `blocked`, or `landed`; any other value is rejected before an HTTP request is made. The two filters can be combined. When nothing matches, the command prints a filter-aware message instead of returning silent output.
 

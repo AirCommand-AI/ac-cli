@@ -19,7 +19,7 @@ import (
 
 const (
 	joinUsage  = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
-	taskUsage  = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>]"
+	taskUsage  = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
 	tasksUsage = "Usage: ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
 )
 
@@ -216,22 +216,39 @@ func (a *App) task(arguments []string) error {
 	var workstreamCode string
 	var agentID string
 	var status string
+	var comment string
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&status, "status", "", "new task status")
+	flags.StringVar(&comment, "comment", "", "task comment")
 	if taskID == "" || flags.Parse(arguments[1:]) != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: taskUsage}
 	}
+	commentSet := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == "comment" {
+			commentSet = true
+		}
+	})
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
 	}
 	if status != "" && !validTaskListStatus(status) {
 		return &publicError{message: "--status must be one of todo, in_flight, blocked, or landed."}
 	}
+	if commentSet && strings.TrimSpace(comment) == "" {
+		return &publicError{message: "--comment must contain non-whitespace text."}
+	}
+	if commentSet && status != "" {
+		return &publicError{message: "--comment and --status cannot be used together; run them as separate commands."}
+	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
+	}
+	if commentSet {
+		return a.addTaskComment(workstreamCode, taskID, comment, credential)
 	}
 	if status != "" {
 		return a.setTaskStatus(workstreamCode, taskID, status, credential)
@@ -297,6 +314,46 @@ func (a *App) task(arguments []string) error {
 	}
 	if _, err := io.WriteString(a.outputWriter(), output.String()); err != nil {
 		return &publicError{message: "Unable to write task output."}
+	}
+	return nil
+}
+
+func (a *App) addTaskComment(workstreamCode string, taskID string, body string, credential credentials.Credential) error {
+	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
+	if err != nil {
+		return &publicError{message: "Unable to generate a task comment idempotency ID."}
+	}
+	payload, err := json.Marshal(taskCommentRequest{Body: body, TaskID: taskID, IdempotencyID: idempotencyID})
+	if err != nil {
+		return &publicError{message: "Unable to prepare the task comment."}
+	}
+	path := "/agent/v1/workstreams/" + workstreamCode + "/updates"
+	response, err := a.messageAPIRequest(http.MethodPost, path, credential.APIToken, payload)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
+		return taskCommentStatusError(response.status, response.body, workstreamCode, protectedTaskID)
+	}
+	comment, err := decodeTaskCommentResponse(response.body)
+	if err != nil || comment.TaskID != taskID || comment.Body != body {
+		return &publicError{message: "The workstream service returned an invalid task comment response."}
+	}
+	protected := []string{credential.APIToken, credential.SocketKey}
+	safe := func(value string) string { return safeMetadata(value, protected...) }
+	author := comment.Author
+	if author == "" {
+		author = "-"
+	}
+	var output strings.Builder
+	fmt.Fprintf(&output, "Comment added: %s\n", safe(comment.ID))
+	fmt.Fprintf(&output, "Task: %s\n", safe(comment.TaskID))
+	fmt.Fprintf(&output, "Author: %s\n", safe(author))
+	fmt.Fprintf(&output, "Created: %s\n", safe(comment.CreatedAt))
+	fmt.Fprintf(&output, "Body: %s\n", safe(comment.Body))
+	if _, err := io.WriteString(a.outputWriter(), output.String()); err != nil {
+		return &publicError{message: "Unable to write task comment output."}
 	}
 	return nil
 }

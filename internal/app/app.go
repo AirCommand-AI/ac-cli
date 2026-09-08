@@ -85,6 +85,12 @@ type taskStatusRequest struct {
 	IdempotencyID string `json:"idempotencyId"`
 }
 
+type taskCommentRequest struct {
+	Body          string `json:"body"`
+	TaskID        string `json:"taskId"`
+	IdempotencyID string `json:"idempotencyId"`
+}
+
 type messageSendRequest struct {
 	RecipientID   string `json:"recipientId"`
 	Body          string `json:"body"`
@@ -243,7 +249,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -592,6 +598,24 @@ func decodeTaskList(body []byte) ([]taskListItem, error) {
 		return nil, err
 	}
 	return envelope.Tasks, nil
+}
+
+func decodeTaskCommentResponse(body []byte) (taskCommentItem, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var comment taskCommentItem
+	if err := decoder.Decode(&comment); err != nil {
+		return taskCommentItem{}, err
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return taskCommentItem{}, err
+	}
+	if strings.TrimSpace(comment.ID) == "" ||
+		strings.TrimSpace(comment.TaskID) == "" ||
+		strings.TrimSpace(comment.Body) == "" ||
+		strings.TrimSpace(comment.CreatedAt) == "" {
+		return taskCommentItem{}, errors.New("task comment response is incomplete")
+	}
+	return comment, nil
 }
 
 func decodeTaskStatusResponse(body []byte) (taskListItem, error) {
@@ -1167,6 +1191,31 @@ func serviceError(body []byte) serviceErrorResponse {
 		return serviceErrorResponse{}
 	}
 	return response
+}
+
+func taskCommentStatusError(status int, body []byte, workstreamCode string, taskID string) error {
+	code := responseCode(body)
+	switch status {
+	case http.StatusBadRequest:
+		return &publicError{message: "AirCommand rejected the task comment as invalid."}
+	case http.StatusUnauthorized:
+		return &publicError{message: fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)}
+	case http.StatusNotFound:
+		return &publicError{message: fmt.Sprintf("Task %s or workstream %s was not found.", singleLine(taskID), workstreamCode)}
+	case http.StatusRequestTimeout:
+		return &publicError{message: fmt.Sprintf("Comment delivery for task %s is uncertain: AirCommand timed out before confirming it after retries.", singleLine(taskID))}
+	case http.StatusConflict:
+		if code == "WorkstreamPaused" {
+			return &publicError{message: fmt.Sprintf("Workstream %s is paused; task comment rejected.", workstreamCode)}
+		}
+		return &publicError{message: "AirCommand rejected the task comment because of a conflict (HTTP 409)."}
+	case http.StatusInternalServerError:
+		return &publicError{message: "AirCommand could not add the task comment after retries (HTTP 500)."}
+	case http.StatusServiceUnavailable:
+		return &publicError{message: fmt.Sprintf("Comment delivery for task %s is uncertain: AirCommand remained unavailable after retries (HTTP 503).", singleLine(taskID))}
+	default:
+		return &publicError{message: fmt.Sprintf("AirCommand task comment failed (HTTP %d).", status)}
+	}
 }
 
 func taskStatusError(status int, body []byte, workstreamCode string, taskID string) error {

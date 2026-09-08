@@ -20,3 +20,12 @@ Task fields use labeled lines; comments use tab-separated timestamp, author, and
 - [x] Print the server-confirmed updated task state and map final failures clearly.
 - [x] Add table-driven validation/retry/final-status tests and explicit unchanged-read coverage.
 - [x] Update the README, rerun `just build` and `just test`, and create a conventional commit.
+
+## Comment mutation extension
+
+- [x] Add `--comment` using the existing task-scoped update endpoint.
+- [x] Reject blank comments and `--comment`/`--status` combinations before any request.
+- [x] Generate and reuse one server-honored idempotency ID across retries.
+- [x] Print a confirmed comment result without PATCHing the task.
+- [x] Add table-driven validation, retry, and task-unchanged tests.
+- [x] Update the README, rerun validation, and create a conventional commit.

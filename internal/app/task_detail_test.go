@@ -130,6 +130,192 @@ func TestTaskPositionalArgumentValidationUsesUsageWithoutRequest(t *testing.T) {
 	}
 }
 
+func TestTaskCommentPostsOnlyTaskScopedUpdateAndPrintsConfirmation(t *testing.T) {
+	t.Parallel()
+
+	credential := testCredential()
+	commentBody := "  Finished\nwith tests  "
+	idempotencyID := repeatedHex(0x55)
+	wantBody, err := json.Marshal(taskCommentRequest{Body: commentBody, TaskID: "task-1", IdempotencyID: idempotencyID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseBody, err := json.Marshal(taskCommentItem{
+		ID: "update-1", TaskID: "task-1", Author: "Builder", Body: commentBody,
+		CreatedAt: "2026-09-08T14:00:00.000000000Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Method != http.MethodPost || request.URL.RequestURI() != "/agent/v1/workstreams/694/updates" {
+			t.Errorf("request = %s %s, want task update POST", request.Method, request.URL.RequestURI())
+		}
+		body, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			t.Errorf("read body: %v", readErr)
+		}
+		if !bytes.Equal(body, wantBody) {
+			t.Errorf("request body = %s, want %s", body, wantBody)
+		}
+		if bytes.Contains(body, []byte(`"status"`)) || bytes.Contains(body, []byte(`"title"`)) || bytes.Contains(body, []byte(`"description"`)) {
+			t.Errorf("comment request attempted to mutate task fields: %s", body)
+		}
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = writer.Write(responseBody)
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
+	saveTestCredential(t, client, credential)
+	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment", commentBody}); exitCode != 0 {
+		t.Fatalf("task comment exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want one POST and no task PATCH/GET", requests)
+	}
+	wantOutput := "Comment added: update-1\n" +
+		"Task: task-1\n" +
+		"Author: Builder\n" +
+		"Created: 2026-09-08T14:00:00.000000000Z\n" +
+		"Body:   Finished with tests  \n"
+	if got := stdout.String(); got != wantOutput {
+		t.Fatalf("stdout = %q, want %q", got, wantOutput)
+	}
+}
+
+func TestTaskCommentRejectsBlankTextBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		comment string
+	}{
+		{name: "empty", comment: ""},
+		{name: "spaces", comment: "   "},
+		{name: "control whitespace", comment: "\n\t"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				requests++
+			}))
+			defer server.Close()
+
+			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
+			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment", test.comment}); exitCode == 0 {
+				t.Fatal("task unexpectedly accepted a blank comment")
+			}
+			if requests != 0 {
+				t.Fatalf("blank comment made %d requests, want 0", requests)
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "non-whitespace text") {
+				t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestTaskCommentAndStatusAreRejectedTogetherBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		flags []string
+	}{
+		{name: "comment then status", flags: []string{"--comment", "done", "--status", "landed"}},
+		{name: "status then comment", flags: []string{"--status", "landed", "--comment", "done"}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				requests++
+			}))
+			defer server.Close()
+
+			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
+			arguments := append([]string{"task", "task-1", "--workstream", "694"}, test.flags...)
+			if exitCode := client.Run(arguments); exitCode == 0 {
+				t.Fatal("task unexpectedly accepted comment and status together")
+			}
+			if requests != 0 {
+				t.Fatalf("combined mutations made %d requests, want 0", requests)
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "cannot be used together") {
+				t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestTaskCommentRetryableStatusesReuseOneServerIdempotencyID(t *testing.T) {
+	t.Parallel()
+
+	for _, retryableStatus := range []int{http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		retryableStatus := retryableStatus
+		t.Run(http.StatusText(retryableStatus), func(t *testing.T) {
+			t.Parallel()
+
+			credential := testCredential()
+			idempotencyID := repeatedHex(0x55)
+			wantBody, err := json.Marshal(taskCommentRequest{Body: "retry safely", TaskID: "task-1", IdempotencyID: idempotencyID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			responseBody, err := json.Marshal(taskCommentItem{
+				ID: "update-retry", TaskID: "task-1", Author: "Builder", Body: "retry safely",
+				CreatedAt: "2026-09-08T14:00:00.000000000Z",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var bodies [][]byte
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, readErr := io.ReadAll(request.Body)
+				if readErr != nil {
+					t.Errorf("read body: %v", readErr)
+				}
+				bodies = append(bodies, body)
+				if len(bodies) == 1 {
+					writer.WriteHeader(retryableStatus)
+					return
+				}
+				writer.WriteHeader(http.StatusCreated)
+				_, _ = writer.Write(responseBody)
+			}))
+			defer server.Close()
+
+			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
+			client.RetryAttempts = 2
+			saveTestCredential(t, client, credential)
+			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment", "retry safely"}); exitCode != 0 {
+				t.Fatalf("task comment exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+			if len(bodies) != 2 {
+				t.Fatalf("requests = %d, want 2", len(bodies))
+			}
+			for index, body := range bodies {
+				if !bytes.Equal(body, wantBody) {
+					t.Errorf("request %d body = %s, want %s", index+1, body, wantBody)
+				}
+			}
+			if !strings.Contains(stdout.String(), "Comment added: update-retry\n") {
+				t.Fatalf("stdout = %q, want confirmation", stdout.String())
+			}
+		})
+	}
+}
+
 func TestTaskStatusRejectsInvalidValueBeforeRequest(t *testing.T) {
 	t.Parallel()
 
