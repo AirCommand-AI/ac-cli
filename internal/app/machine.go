@@ -18,9 +18,12 @@ import (
 )
 
 const (
-	joinUsage  = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
-	taskUsage  = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
-	tasksUsage = "Usage: ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
+	joinUsage       = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
+	taskByIDUsage   = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
+	taskIDFlagUsage = "Usage: ac-cli task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
+	taskCreateUsage = "Usage: ac-cli task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
+	taskUsage       = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
+	tasksUsage      = "Usage: ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
 )
 
 const (
@@ -204,24 +207,47 @@ func (a *App) workstreams(arguments []string) error {
 	return nil
 }
 
-// task reads one workstream detail payload and renders the selected task plus
-// its task-scoped updates. The positional ID must precede all flags.
+// task gives a leading literal "create" subcommand precedence. The --id form
+// remains an explicit escape hatch for reading or mutating a task whose ID is create.
 func (a *App) task(arguments []string) error {
-	if len(arguments) == 0 || strings.HasPrefix(arguments[0], "-") {
-		return &publicError{message: taskUsage}
+	if len(arguments) > 0 && arguments[0] == "create" {
+		return a.createTask(arguments[1:])
 	}
-	taskID := strings.TrimSpace(arguments[0])
+	return a.taskByID(arguments)
+}
+
+// taskByID reads one workstream detail payload and renders the selected task
+// plus its task-scoped updates. A positional ID must precede all flags.
+func (a *App) taskByID(arguments []string) error {
+	taskID := ""
+	flagArguments := arguments
+	if len(arguments) > 0 && !strings.HasPrefix(arguments[0], "-") {
+		taskID = strings.TrimSpace(arguments[0])
+		flagArguments = arguments[1:]
+	}
 	flags := flag.NewFlagSet("task", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	var explicitTaskID string
 	var workstreamCode string
 	var agentID string
 	var status string
 	var comment string
+	flags.StringVar(&explicitTaskID, "id", "", "explicit task ID")
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&status, "status", "", "new task status")
 	flags.StringVar(&comment, "comment", "", "task comment")
-	if taskID == "" || flags.Parse(arguments[1:]) != nil || flags.NArg() != 0 || workstreamCode == "" {
+	if flags.Parse(flagArguments) != nil || flags.NArg() != 0 || workstreamCode == "" {
+		return &publicError{message: taskUsage}
+	}
+	explicitTaskID = strings.TrimSpace(explicitTaskID)
+	if taskID != "" && explicitTaskID != "" {
+		return &publicError{message: taskUsage}
+	}
+	if taskID == "" {
+		taskID = explicitTaskID
+	}
+	if taskID == "" {
 		return &publicError{message: taskUsage}
 	}
 	commentSet := false
@@ -318,6 +344,76 @@ func (a *App) task(arguments []string) error {
 	return nil
 }
 
+func (a *App) createTask(arguments []string) error {
+	flags := flag.NewFlagSet("task create", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workstreamCode string
+	var agentID string
+	var title string
+	var description string
+	var assignee string
+	status := "todo"
+	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
+	flags.StringVar(&title, "title", "", "task title")
+	flags.StringVar(&description, "description", "", "task description")
+	flags.StringVar(&assignee, "assignee", "", "task assignee")
+	flags.StringVar(&status, "status", "todo", "task status")
+	if flags.Parse(arguments) != nil || flags.NArg() != 0 || workstreamCode == "" {
+		return &publicError{message: taskCreateUsage}
+	}
+	titleSet := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == "title" {
+			titleSet = true
+		}
+	})
+	if !titleSet {
+		return &publicError{message: taskCreateUsage}
+	}
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+	if strings.TrimSpace(title) == "" {
+		return &publicError{message: "--title must contain non-whitespace text."}
+	}
+	if !validTaskListStatus(status) {
+		return &publicError{message: "--status must be one of todo, in_flight, blocked, or landed."}
+	}
+
+	credential, err := a.credentialFor(workstreamCode, agentID)
+	if err != nil {
+		return err
+	}
+	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
+	if err != nil {
+		return &publicError{message: "Unable to generate a task creation idempotency ID."}
+	}
+	payload, err := json.Marshal(taskCreateRequest{
+		Title: title, Description: description, Assignee: assignee,
+		Status: status, IdempotencyID: idempotencyID,
+	})
+	if err != nil {
+		return &publicError{message: "Unable to prepare task creation."}
+	}
+	path := "/agent/v1/workstreams/" + workstreamCode + "/tasks"
+	response, err := a.messageAPIRequest(http.MethodPost, path, credential.APIToken, payload)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		return taskCreateStatusError(response.status, response.body, workstreamCode)
+	}
+	created, err := decodeTaskResponse(response.body)
+	if err != nil {
+		return &publicError{message: "The workstream service returned an invalid task creation response."}
+	}
+	if _, err := fmt.Fprintf(a.outputWriter(), "Created task: %s\n", safeMetadata(created.ID, credential.APIToken, credential.SocketKey)); err != nil {
+		return &publicError{message: "Unable to write task creation output."}
+	}
+	return nil
+}
+
 func (a *App) addTaskComment(workstreamCode string, taskID string, body string, credential credentials.Credential) error {
 	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
 	if err != nil {
@@ -376,7 +472,7 @@ func (a *App) setTaskStatus(workstreamCode string, taskID string, status string,
 		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
 		return taskStatusError(response.status, response.body, workstreamCode, protectedTaskID)
 	}
-	updated, err := decodeTaskStatusResponse(response.body)
+	updated, err := decodeTaskResponse(response.body)
 	if err != nil || updated.ID != taskID || updated.Status != status {
 		return &publicError{message: "The workstream service returned an invalid task status response."}
 	}

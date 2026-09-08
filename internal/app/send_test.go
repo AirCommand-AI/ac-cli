@@ -471,6 +471,7 @@ func TestExplicitHelpExitsZeroForTopLevelAndEveryCommand(t *testing.T) {
 		{"update", "--help"},
 		{"read", "--help"},
 		{"task", "--help"},
+		{"task", "create", "--help"},
 		{"tasks", "--help"},
 		{"listen", "--help"},
 	} {

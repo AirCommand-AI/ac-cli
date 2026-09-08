@@ -29,3 +29,11 @@ Task fields use labeled lines; comments use tab-separated timestamp, author, and
 - [x] Print a confirmed comment result without PATCHing the task.
 - [x] Add table-driven validation, retry, and task-unchanged tests.
 - [x] Update the README, rerun validation, and create a conventional commit.
+
+## Task creation extension
+
+- [x] Add `task create` with validated title/status and documented defaults.
+- [x] Give the `create` subcommand explicit precedence while preserving literal ID access through `task --id create`.
+- [x] POST one idempotent task-create payload and print the created ID.
+- [x] Add table-driven precedence, blank-title, default-status, and retry tests.
+- [x] Update the README, run validation, and create a conventional commit.

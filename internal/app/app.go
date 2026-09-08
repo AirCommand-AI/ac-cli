@@ -80,6 +80,14 @@ type updateRequest struct {
 	IdempotencyID string `json:"idempotencyId"`
 }
 
+type taskCreateRequest struct {
+	Title         string `json:"title"`
+	Description   string `json:"description"`
+	Assignee      string `json:"assignee"`
+	Status        string `json:"status"`
+	IdempotencyID string `json:"idempotencyId"`
+}
+
 type taskStatusRequest struct {
 	Status        string `json:"status"`
 	IdempotencyID string `json:"idempotencyId"`
@@ -249,12 +257,15 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
 	if len(arguments) == 1 && (arguments[0] == "--help" || arguments[0] == "-h") {
 		return usage(), true
+	}
+	if len(arguments) == 3 && arguments[0] == "task" && arguments[1] == "create" && (arguments[2] == "--help" || arguments[2] == "-h") {
+		return taskCreateUsage, true
 	}
 	if len(arguments) != 2 || (arguments[1] != "--help" && arguments[1] != "-h") {
 		return "", false
@@ -618,7 +629,7 @@ func decodeTaskCommentResponse(body []byte) (taskCommentItem, error) {
 	return comment, nil
 }
 
-func decodeTaskStatusResponse(body []byte) (taskListItem, error) {
+func decodeTaskResponse(body []byte) (taskListItem, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	var task taskListItem
 	if err := decoder.Decode(&task); err != nil {
@@ -1191,6 +1202,39 @@ func serviceError(body []byte) serviceErrorResponse {
 		return serviceErrorResponse{}
 	}
 	return response
+}
+
+func taskCreateStatusError(status int, body []byte, workstreamCode string) error {
+	code := responseCode(body)
+	switch status {
+	case http.StatusBadRequest:
+		return &publicError{message: "AirCommand rejected the task as invalid."}
+	case http.StatusUnauthorized:
+		return &publicError{message: fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)}
+	case http.StatusNotFound:
+		return &publicError{message: fmt.Sprintf("Workstream %s was not found.", workstreamCode)}
+	case http.StatusRequestTimeout:
+		return &publicError{message: "Task creation is uncertain: AirCommand timed out before confirming it after retries."}
+	case http.StatusConflict:
+		if code == "WorkstreamPaused" {
+			return &publicError{message: fmt.Sprintf("Workstream %s is paused; task creation rejected.", workstreamCode)}
+		}
+		if code == "TaskAssigneeAmbiguous" {
+			return &publicError{message: "The task assignee name is ambiguous; use an active agent ID."}
+		}
+		return &publicError{message: "AirCommand rejected task creation because of a conflict (HTTP 409)."}
+	case http.StatusUnprocessableEntity:
+		if code == "TaskAssigneeNotFound" {
+			return &publicError{message: "The task assignee does not match an active agent ID or name."}
+		}
+		return &publicError{message: "AirCommand could not process the task (HTTP 422)."}
+	case http.StatusInternalServerError:
+		return &publicError{message: "AirCommand could not create the task after retries (HTTP 500)."}
+	case http.StatusServiceUnavailable:
+		return &publicError{message: "Task creation is uncertain: AirCommand remained unavailable after retries (HTTP 503)."}
+	default:
+		return &publicError{message: fmt.Sprintf("AirCommand task creation failed (HTTP %d).", status)}
+	}
 }
 
 func taskCommentStatusError(status int, body []byte, workstreamCode string, taskID string) error {
