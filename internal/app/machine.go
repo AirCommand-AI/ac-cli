@@ -17,7 +17,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
-const joinUsage = "Usage: ac-cli join --workstream <code> [--name <agentName>]"
+const joinUsage = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
 
 const (
 	defaultDevicePollInterval = 5 * time.Second
@@ -228,8 +228,10 @@ func (a *App) join(arguments []string) error {
 	flags.SetOutput(io.Discard)
 	var workstreamCode string
 	var agentName string
+	var listen bool
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentName, "name", "", "name this agent takes in the workstream")
+	flags.BoolVar(&listen, "listen", false, "keep running and listen for messages after joining")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return &publicError{message: joinUsage}
 	}
@@ -258,7 +260,10 @@ func (a *App) join(arguments []string) error {
 		return err
 	}
 	if existing != nil {
-		a.printAgentIdentity(existing.AgentID, existing.AgentName, workstreamCode, socketAddressForAgentID(existing.AgentID))
+		a.reportAgentIdentity(listen, existing.AgentID, existing.AgentName, workstreamCode, socketAddressForAgentID(existing.AgentID))
+		if listen {
+			return a.listen([]string{"--workstream", workstreamCode, "--agent", existing.AgentID})
+		}
 		return nil
 	}
 	if agentName == "" {
@@ -320,14 +325,28 @@ func (a *App) join(arguments []string) error {
 		return &publicError{message: "Joined the workstream but could not store the agent credential."}
 	}
 
-	a.printAgentIdentity(joined.AgentID, joined.AgentName, joined.WorkstreamCode, joined.SocketAddress)
+	a.reportAgentIdentity(listen, joined.AgentID, joined.AgentName, joined.WorkstreamCode, joined.SocketAddress)
+	if listen {
+		return a.listen([]string{"--workstream", joined.WorkstreamCode, "--agent", joined.AgentID})
+	}
 	return nil
 }
 
-// printAgentIdentity is the one identity block both joining and reuse emit, so
-// a runtime adapter parses either outcome identically.
-func (a *App) printAgentIdentity(agentID, agentName, workstreamCode, socketAddress string) {
+// reportAgentIdentity writes the identity block. Under --listen it goes to
+// standard error, because standard output is then the wake-line stream a
+// harness turns into notifications, and five lines of identity would each
+// arrive as one.
+func (a *App) reportAgentIdentity(listening bool, agentID, agentName, workstreamCode, socketAddress string) {
 	writer := a.outputWriter()
+	if listening {
+		writer = a.errorWriter()
+	}
+	a.writeAgentIdentity(writer, agentID, agentName, workstreamCode, socketAddress)
+}
+
+// writeAgentIdentity is the one identity block both joining and resuming emit,
+// so a runtime adapter parses either outcome identically.
+func (a *App) writeAgentIdentity(writer io.Writer, agentID, agentName, workstreamCode, socketAddress string) {
 	fmt.Fprintf(writer, "Agent ID: %s\n", agentID)
 	fmt.Fprintf(writer, "Use for send/update/read/inbox/ack/listen: --agent %s\n", agentID)
 	fmt.Fprintf(writer, "Agent name: %s\n", agentName)

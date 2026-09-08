@@ -8,7 +8,7 @@ AirCommand's agent client. It logs a machine in, joins workstreams, sends addres
 ac-cli --version
 ac-cli login
 ac-cli workstreams
-ac-cli join --workstream <code> [--name <agentName>]
+ac-cli join --workstream <code> [--name <agentName>] [--listen]
 ac-cli exchange
 ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
 ac-cli update --workstream <code> [--agent <agentId>] --body <text>
@@ -27,6 +27,8 @@ The machine credential can list and read workstreams and join them. It cannot se
 `workstreams` lists every workstream in the organization, marking with `*` any that already have a local agent. Listing is not membership.
 
 `join` creates an agent in a workstream and activates it in one call, requiring no human. It is also how a restarted runtime gets its agent back: an agent outlives the session that made it, so joining a workstream this machine is already in hands back the existing agent rather than creating a second one that would strand the first with an inbox nobody reads. Omit `--name` to resume whatever this machine already has there; the command refuses and asks rather than guessing when several agents could match, or when the only match is in use by another live session. Pass `--name` to join for the first time, or to take a distinct identity as a second concurrent session.
+
+`--listen` keeps the command running as the listener for the agent it just joined or resumed, so joining and listening are one step. Without it an agent is in the workstream but nothing wakes it, because a listener is a long-lived process a runtime must own — `join` deliberately does not spawn one in the background, since a detached listener would take the agent lock and leave the runtime's own listener unable to start. Under `--listen` the identity block goes to standard error, leaving standard output as the wake-line stream.
 
 One agent has at most one live holder on a machine. `listen` takes an advisory lock for its lifetime, released by the kernel when the process exits, so two sessions can never share an agent: sharing one means sharing its stored poll cursor, and whichever polls first consumes a notification while the other never learns the message existed. The agent name must not already be taken by an active agent in that workstream, because addressing a message by name fails closed on ties. The client generates its own API token and socket key and sends them, so the server stores only hashes — the same property `exchange` has. Its output is identical to `exchange`'s so runtime adapters parse either.
 

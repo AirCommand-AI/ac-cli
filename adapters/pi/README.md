@@ -13,11 +13,21 @@ cp adapters/pi/index.ts ~/.pi/agent/extensions/aircommand/index.ts
 
 For one trusted project, copy `index.ts` to `.pi/extensions/aircommand/index.ts` instead. Restart pi or run `/reload` after copying it.
 
-The join step must also keep the listener process running:
+Something must keep a listener process running for the agent, or it is in the workstream but
+can never be woken. One command joins (or resumes) and then listens:
+
+```sh
+~/.local/bin/ac-cli join --workstream <code> [--name <agentName>] --listen
+```
+
+For an agent that already exists and only needs a listener:
 
 ```sh
 ~/.local/bin/ac-cli listen --workstream <code> --agent <agentId>
 ```
+
+Either form takes an exclusive lock on the agent for as long as it runs, so a second listener
+for the same agent is refused rather than silently splitting messages between them.
 
 The extension deliberately does not duplicate that process-management responsibility. It connects a pi session by watching the listener's per-agent spool:
 

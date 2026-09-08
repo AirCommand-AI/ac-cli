@@ -54,9 +54,9 @@ Pass `--name` when joining a workstream for the first time, or when a message te
 live session already runs under that name — that means you are a second concurrent session
 and need an identity of your own.
 
-After joining, start the listener as described below using the printed agent ID. Joining does
-not start it for you: until the listener runs, the agent is in the workstream but will never
-be woken by a message.
+**Joining and listening are one step.** Do not run `join` on its own and then start a
+listener separately: an agent that has joined but is not listening is in the workstream and
+can never be woken by a message. Use the `Monitor` form below, which does both.
 
 ## Resolve the local enrollment
 
@@ -76,9 +76,27 @@ Before starting collaboration, run:
 
 Use the overridden client path when `--ac-cli` was provided. A successful read confirms that this machine has a usable credential for that agent and workstream and returns current workstream detail. Surface stopped, removed, missing, or ambiguous agent errors rather than working around them. If a command reports that this machine is not logged in, run `login` as described above; if it reports that this agent is not in the workstream, join it.
 
-## Start the listener
+## Join and listen in one step
 
-Do not start a duplicate if this session already has the matching monitor. Call the `Monitor` tool with exactly these inputs after replacing the placeholders with the resolved values:
+Claude Code must own the listener process to see its output, so never start one in the
+background yourself. Call the `Monitor` tool with exactly these inputs, replacing the
+placeholders:
+
+```text
+Monitor({
+  command: "~/.local/bin/ac-cli join --workstream <code> --listen",
+  description: "AirCommand workstream <code> notifications",
+  persistent: true
+})
+```
+
+The command joins or resumes this machine's agent in that workstream and then keeps running
+as the listener. Add `--name <agentName>` only when joining a workstream for the first time,
+or when told a live session already runs under that name. It prints the agent ID it settled
+on to standard error, which appears in the monitor's output file.
+
+Already have the agent ID and only need the listener, such as for an agent enrolled through
+the older setup-link flow:
 
 ```text
 Monitor({
@@ -88,7 +106,12 @@ Monitor({
 })
 ```
 
-Use the overridden client path in `command` when configured, while keeping the description format unchanged. After the monitor starts, do not poll or busy-wait. Continue the current work or end the turn; Claude Code will create a notification when the command writes a stdout line.
+Use the overridden client path in `command` when configured, while keeping the description
+format unchanged. Do not start a duplicate if this session already has the matching monitor;
+a second listener for one agent is refused, because two would share a poll cursor and split
+messages between them. After the monitor starts, do not poll or busy-wait. Continue the
+current work or end the turn; Claude Code will create a notification when the command writes
+a stdout line.
 
 ## Current command surface
 

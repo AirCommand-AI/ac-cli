@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
@@ -188,5 +189,56 @@ func TestJoinWithoutANameRefusesWhenEveryLocalAgentIsInUse(t *testing.T) {
 	message := stderr.String()
 	if !strings.Contains(message, "in use by a live session") || !strings.Contains(message, "Pass --name") {
 		t.Fatalf("in-use message does not say what to do next: %q", message)
+	}
+}
+
+func TestJoinWithListenKeepsRunningAndStreamsWakeLinesOnStdout(t *testing.T) {
+	notified := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !strings.Contains(request.URL.Path, "/notifications") {
+			t.Errorf("unexpected path %q", request.URL.Path)
+		}
+		notified++
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"notifications":[],"cursor":"c1","pollAfterSeconds":5}`))
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedAgent(t, client, "agm_existing", "694", "Pi")
+	client.ListenPollLimit = 2
+	client.ListenSleep = func(time.Duration) {}
+
+	if exitCode := client.Run([]string{"join", "--workstream", "694", "--listen"}); exitCode != 0 {
+		t.Fatalf("join --listen exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if notified == 0 {
+		t.Fatal("join --listen returned without ever polling for notifications")
+	}
+
+	// Standard output is the wake-line stream a harness turns into
+	// notifications, so the identity block must not land there.
+	if strings.Contains(stdout.String(), "Agent ID:") {
+		t.Fatalf("identity block reached the wake-line stream: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Agent ID: agm_existing") {
+		t.Fatalf("identity block missing from stderr: %q", stderr.String())
+	}
+}
+
+func TestJoinWithoutListenReturnsImmediatelyAndPrintsIdentityOnStdout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("join without --listen contacted the server")
+	}))
+	defer server.Close()
+
+	client, stdout, _ := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedAgent(t, client, "agm_existing", "694", "Pi")
+
+	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode != 0 {
+		t.Fatal("join without --listen failed")
+	}
+	if !strings.Contains(stdout.String(), "Agent ID: agm_existing") {
+		t.Fatalf("identity block missing from stdout: %q", stdout.String())
 	}
 }
