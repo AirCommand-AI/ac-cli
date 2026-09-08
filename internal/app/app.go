@@ -95,6 +95,17 @@ type workstreamRosterEnvelope struct {
 	Workstream workstreamRoster `json:"workstream"`
 }
 
+type taskListEnvelope struct {
+	Tasks []taskListItem `json:"tasks"`
+}
+
+type taskListItem struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Assignee string `json:"assignee"`
+	Title    string `json:"title"`
+}
+
 type workstreamRoster struct {
 	Collaborators []rosterCollaborator `json:"collaborators"`
 }
@@ -185,6 +196,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.update(arguments[1:])
 		case "read":
 			err = a.read(arguments[1:])
+		case "tasks":
+			err = a.tasks(arguments[1:])
 		case "inbox":
 			err = a.inbox(arguments[1:])
 		case "ack":
@@ -211,7 +224,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -236,6 +249,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "Usage: ac-cli update --workstream <code> [--agent <agentId>] --body <text>", true
 	case "read":
 		return "Usage: ac-cli read --workstream <code> [--agent <agentId>]", true
+	case "tasks":
+		return tasksUsage, true
 	case "inbox":
 		return inboxUsage, true
 	case "ack":
@@ -312,7 +327,7 @@ func (a *App) exchange(arguments []string) error {
 
 	protected := []string{ticket, apiToken, socketKey}
 	output := fmt.Sprintf(
-		"Agent ID: %s\nUse for send/update/read/inbox/ack/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
+		"Agent ID: %s\nUse for send/update/read/tasks/inbox/ack/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentID, protected...),
 		safeMetadata(result.AgentName, protected...),
@@ -544,6 +559,35 @@ func rosterStatusError(status int, workstreamCode string) error {
 		return &publicError{message: fmt.Sprintf("Workstream %s was not found or is not available to this agent.", workstreamCode)}
 	default:
 		return &publicError{message: fmt.Sprintf("Unable to read the workstream roster (HTTP %d).", status)}
+	}
+}
+
+func decodeTaskList(body []byte) ([]taskListItem, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var envelope taskListEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
+		return nil, err
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return nil, err
+	}
+	if envelope.Tasks == nil {
+		return nil, errors.New("task response is missing tasks")
+	}
+	for _, task := range envelope.Tasks {
+		if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.Title) == "" || !validTaskListStatus(task.Status) {
+			return nil, errors.New("task response has an invalid task")
+		}
+	}
+	return envelope.Tasks, nil
+}
+
+func validTaskListStatus(status string) bool {
+	switch status {
+	case "todo", "in_flight", "blocked", "landed":
+		return true
+	default:
+		return false
 	}
 }
 

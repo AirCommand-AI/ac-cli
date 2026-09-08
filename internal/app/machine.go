@@ -17,7 +17,10 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
-const joinUsage = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
+const (
+	joinUsage  = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
+	tasksUsage = "Usage: ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
+)
 
 const (
 	defaultDevicePollInterval = 5 * time.Second
@@ -200,6 +203,71 @@ func (a *App) workstreams(arguments []string) error {
 	return nil
 }
 
+// tasks reads the existing workstream detail and prints a stable tab-separated
+// summary. Filtering happens locally so no additional server endpoint is needed.
+func (a *App) tasks(arguments []string) error {
+	flags := flag.NewFlagSet("tasks", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workstreamCode string
+	var agentID string
+	var mine bool
+	var status string
+	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
+	flags.BoolVar(&mine, "mine", false, "show only tasks assigned to the selected agent")
+	flags.StringVar(&status, "status", "", "task status")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
+		return &publicError{message: tasksUsage}
+	}
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+	if status != "" && !validTaskListStatus(status) {
+		return &publicError{message: "--status must be one of todo, in_flight, blocked, or landed."}
+	}
+
+	credential, err := a.credentialFor(workstreamCode, agentID)
+	if err != nil {
+		return err
+	}
+	response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, false)
+	}
+	tasks, err := decodeTaskList(response.body)
+	if err != nil {
+		return &publicError{message: "The workstream service returned an invalid task response."}
+	}
+
+	protected := []string{credential.APIToken, credential.SocketKey}
+	for _, task := range tasks {
+		if mine && task.Assignee != credential.AgentID {
+			continue
+		}
+		if status != "" && task.Status != status {
+			continue
+		}
+		assignee := task.Assignee
+		if assignee == "" {
+			assignee = "-"
+		}
+		if _, err := fmt.Fprintf(
+			a.outputWriter(),
+			"%s\t%s\t%s\t%s\n",
+			safeMetadata(task.ID, protected...),
+			safeMetadata(task.Status, protected...),
+			safeMetadata(assignee, protected...),
+			safeMetadata(task.Title, protected...),
+		); err != nil {
+			return &publicError{message: "Unable to write task output."}
+		}
+	}
+	return nil
+}
+
 // localAgentsByWorkstream names the agents this machine already owns, keyed by
 // workstream. Naming them rather than only marking the row is what lets an
 // agent recognise its own prior identity instead of inferring it.
@@ -348,7 +416,7 @@ func (a *App) reportAgentIdentity(listening bool, agentID, agentName, workstream
 // so a runtime adapter parses either outcome identically.
 func (a *App) writeAgentIdentity(writer io.Writer, agentID, agentName, workstreamCode, socketAddress string) {
 	fmt.Fprintf(writer, "Agent ID: %s\n", agentID)
-	fmt.Fprintf(writer, "Use for send/update/read/inbox/ack/listen: --agent %s\n", agentID)
+	fmt.Fprintf(writer, "Use for send/update/read/tasks/inbox/ack/listen: --agent %s\n", agentID)
 	fmt.Fprintf(writer, "Agent name: %s\n", agentName)
 	fmt.Fprintf(writer, "Workstream: %s\n", workstreamCode)
 	fmt.Fprintf(writer, "Socket address: %s\n", socketAddress)
