@@ -12,3 +12,11 @@ Add a single-task view derived from the existing workstream detail response.
 - [x] Create a conventional commit without pushing or deploying.
 
 Task fields use labeled lines; comments use tab-separated timestamp, author, and body lines. Empty descriptions and assignees render as `-`.
+
+## Status mutation extension
+
+- [x] Add validated `--status` PATCH behavior without changing the no-flag read path.
+- [x] Generate and reuse one idempotency ID across bounded transport/408/500/503 retries.
+- [x] Print the server-confirmed updated task state and map final failures clearly.
+- [x] Add table-driven validation/retry/final-status tests and explicit unchanged-read coverage.
+- [x] Update the README, rerun `just build` and `just test`, and create a conventional commit.

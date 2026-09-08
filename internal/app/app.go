@@ -80,6 +80,11 @@ type updateRequest struct {
 	IdempotencyID string `json:"idempotencyId"`
 }
 
+type taskStatusRequest struct {
+	Status        string `json:"status"`
+	IdempotencyID string `json:"idempotencyId"`
+}
+
 type messageSendRequest struct {
 	RecipientID   string `json:"recipientId"`
 	Body          string `json:"body"`
@@ -238,7 +243,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -587,6 +592,24 @@ func decodeTaskList(body []byte) ([]taskListItem, error) {
 		return nil, err
 	}
 	return envelope.Tasks, nil
+}
+
+func decodeTaskStatusResponse(body []byte) (taskListItem, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var task taskListItem
+	if err := decoder.Decode(&task); err != nil {
+		return taskListItem{}, err
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		return taskListItem{}, err
+	}
+	if err := validateTaskItems([]taskListItem{task}); err != nil {
+		return taskListItem{}, err
+	}
+	if strings.TrimSpace(task.CreatedAt) == "" || strings.TrimSpace(task.UpdatedAt) == "" {
+		return taskListItem{}, errors.New("task response has incomplete task detail")
+	}
+	return task, nil
 }
 
 func decodeTaskDetail(body []byte) (taskListEnvelope, error) {
@@ -1144,6 +1167,31 @@ func serviceError(body []byte) serviceErrorResponse {
 		return serviceErrorResponse{}
 	}
 	return response
+}
+
+func taskStatusError(status int, body []byte, workstreamCode string, taskID string) error {
+	code := responseCode(body)
+	switch status {
+	case http.StatusBadRequest:
+		return &publicError{message: "AirCommand rejected the task status change as invalid."}
+	case http.StatusUnauthorized:
+		return &publicError{message: fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)}
+	case http.StatusNotFound:
+		return &publicError{message: fmt.Sprintf("Task %s was not found in workstream %s.", singleLine(taskID), workstreamCode)}
+	case http.StatusRequestTimeout:
+		return &publicError{message: fmt.Sprintf("Task %s status may have changed, but AirCommand timed out before confirming it after retries.", singleLine(taskID))}
+	case http.StatusConflict:
+		if code == "WorkstreamPaused" {
+			return &publicError{message: fmt.Sprintf("Workstream %s is paused; task status change rejected.", workstreamCode)}
+		}
+		return &publicError{message: "AirCommand rejected the task status change because of a conflict (HTTP 409)."}
+	case http.StatusInternalServerError:
+		return &publicError{message: "AirCommand could not complete the task status change after retries (HTTP 500)."}
+	case http.StatusServiceUnavailable:
+		return &publicError{message: fmt.Sprintf("Task %s status may have changed, but AirCommand remained unavailable after retries (HTTP 503).", singleLine(taskID))}
+	default:
+		return &publicError{message: fmt.Sprintf("AirCommand task status change failed (HTTP %d).", status)}
+	}
 }
 
 func workstreamStatusError(status int, code string, workstreamCode string, write bool) error {

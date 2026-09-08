@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
-
 	"strings"
 	"time"
 
@@ -19,7 +19,7 @@ import (
 
 const (
 	joinUsage  = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
-	taskUsage  = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>]"
+	taskUsage  = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>]"
 	tasksUsage = "Usage: ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
 )
 
@@ -215,19 +215,28 @@ func (a *App) task(arguments []string) error {
 	flags.SetOutput(io.Discard)
 	var workstreamCode string
 	var agentID string
+	var status string
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
+	flags.StringVar(&status, "status", "", "new task status")
 	if taskID == "" || flags.Parse(arguments[1:]) != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: taskUsage}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
 	}
+	if status != "" && !validTaskListStatus(status) {
+		return &publicError{message: "--status must be one of todo, in_flight, blocked, or landed."}
+	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
 	}
+	if status != "" {
+		return a.setTaskStatus(workstreamCode, taskID, status, credential)
+	}
+
 	response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
 	if err != nil {
 		return err
@@ -277,12 +286,7 @@ func (a *App) task(arguments []string) error {
 		return safe(value)
 	}
 	var output strings.Builder
-	fmt.Fprintf(&output, "Title: %s\n", safe(selected.Title))
-	fmt.Fprintf(&output, "Description: %s\n", orDash(selected.Description))
-	fmt.Fprintf(&output, "Status: %s\n", safe(selected.Status))
-	fmt.Fprintf(&output, "Assignee: %s\n", orDash(selected.Assignee))
-	fmt.Fprintf(&output, "Created: %s\n", safe(selected.CreatedAt))
-	fmt.Fprintf(&output, "Updated: %s\n", safe(selected.UpdatedAt))
+	output.WriteString(formatTaskState(*selected, protected...))
 	output.WriteString("Comments:\n")
 	if len(comments) == 0 {
 		fmt.Fprintf(&output, "No comments for task %s.\n", safe(taskID))
@@ -295,6 +299,52 @@ func (a *App) task(arguments []string) error {
 		return &publicError{message: "Unable to write task output."}
 	}
 	return nil
+}
+
+func (a *App) setTaskStatus(workstreamCode string, taskID string, status string, credential credentials.Credential) error {
+	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
+	if err != nil {
+		return &publicError{message: "Unable to generate a task status idempotency ID."}
+	}
+	payload, err := json.Marshal(taskStatusRequest{Status: status, IdempotencyID: idempotencyID})
+	if err != nil {
+		return &publicError{message: "Unable to prepare the task status change."}
+	}
+	path := "/agent/v1/workstreams/" + workstreamCode + "/tasks/" + url.PathEscape(taskID)
+	response, err := a.messageAPIRequest(http.MethodPatch, path, credential.APIToken, payload)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
+		return taskStatusError(response.status, response.body, workstreamCode, protectedTaskID)
+	}
+	updated, err := decodeTaskStatusResponse(response.body)
+	if err != nil || updated.ID != taskID || updated.Status != status {
+		return &publicError{message: "The workstream service returned an invalid task status response."}
+	}
+	if _, err := io.WriteString(a.outputWriter(), formatTaskState(updated, credential.APIToken, credential.SocketKey)); err != nil {
+		return &publicError{message: "Unable to write task output."}
+	}
+	return nil
+}
+
+func formatTaskState(task taskListItem, protected ...string) string {
+	safe := func(value string) string { return safeMetadata(value, protected...) }
+	orDash := func(value string) string {
+		if value == "" {
+			return "-"
+		}
+		return safe(value)
+	}
+	var output strings.Builder
+	fmt.Fprintf(&output, "Title: %s\n", safe(task.Title))
+	fmt.Fprintf(&output, "Description: %s\n", orDash(task.Description))
+	fmt.Fprintf(&output, "Status: %s\n", safe(task.Status))
+	fmt.Fprintf(&output, "Assignee: %s\n", orDash(task.Assignee))
+	fmt.Fprintf(&output, "Created: %s\n", safe(task.CreatedAt))
+	fmt.Fprintf(&output, "Updated: %s\n", safe(task.UpdatedAt))
+	return output.String()
 }
 
 // tasks reads the existing workstream detail and prints a stable tab-separated
