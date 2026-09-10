@@ -413,6 +413,8 @@ func TestWorkstreamStatusMessages(t *testing.T) {
 		{name: "not found", status: http.StatusNotFound, want: "Workstream 694 was not found or is not available to this agent."},
 		{name: "paused", status: http.StatusConflict, code: "WorkstreamPaused", write: true, want: "Workstream 694 is paused; write rejected."},
 		{name: "paused read is generic", status: http.StatusConflict, code: "WorkstreamPaused", want: "AirCommand request failed (HTTP 409)."},
+		{name: "closed", status: http.StatusConflict, code: "WorkstreamClosed", write: true, want: "Workstream 694 is closed; write rejected."},
+		{name: "closed read is generic", status: http.StatusConflict, code: "WorkstreamClosed", want: "AirCommand request failed (HTTP 409)."},
 		{name: "other conflict is generic", status: http.StatusConflict, code: "Other", write: true, want: "AirCommand request failed (HTTP 409)."},
 	}
 	for _, test := range tests {

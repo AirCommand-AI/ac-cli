@@ -1297,6 +1297,10 @@ func workstreamStatusError(status int, code string, workstreamCode string, write
 		if write && code == "WorkstreamPaused" {
 			return &publicError{message: fmt.Sprintf("Workstream %s is paused; write rejected.", workstreamCode)}
 		}
+		// Closed is terminal, unlike paused: there is nothing to wait for.
+		if write && code == "WorkstreamClosed" {
+			return &publicError{message: fmt.Sprintf("Workstream %s is closed; write rejected.", workstreamCode)}
+		}
 	}
 	return &publicError{message: fmt.Sprintf("AirCommand request failed (HTTP %d).", status)}
 }
