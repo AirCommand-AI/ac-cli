@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ const (
 
 type startDeviceLoginRequest struct {
 	MachineName string `json:"machineName"`
+	Platform    string `json:"platform"`
 }
 
 type startDeviceLoginResponse struct {
@@ -48,9 +50,9 @@ type pollDeviceLoginRequest struct {
 }
 
 type pollDeviceLoginResponse struct {
-	Status         string `json:"status"`
-	Token          string `json:"token"`
-	OrganizationID string `json:"organizationId"`
+	Status   string `json:"status"`
+	Token    string `json:"token"`
+	DeviceID string `json:"deviceId"`
 }
 
 type workstreamSummary struct {
@@ -92,7 +94,7 @@ func (a *App) login(arguments []string) error {
 		return storageError(err, "Credential storage is unavailable.")
 	}
 
-	payload, err := json.Marshal(startDeviceLoginRequest{MachineName: machineName()})
+	payload, err := json.Marshal(startDeviceLoginRequest{MachineName: machineName(), Platform: platformName()})
 	if err != nil {
 		return &publicError{message: "Unable to prepare the login request."}
 	}
@@ -139,17 +141,19 @@ func (a *App) login(arguments []string) error {
 		if poll.Status == "pending" {
 			continue
 		}
-		if poll.Token == "" || poll.OrganizationID == "" {
+		if poll.Token == "" || poll.DeviceID == "" {
 			return &publicError{message: "The login service returned an invalid response."}
 		}
 		if err := a.Store.SaveMachine(credentials.Machine{
-			APIToken:       poll.Token,
-			OrganizationID: poll.OrganizationID,
-			CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+			APIToken:  poll.Token,
+			DeviceID:  poll.DeviceID,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
 			return &publicError{message: "Unable to store the machine credential."}
 		}
-		fmt.Fprintf(a.outputWriter(), "This machine is now logged in.\nRun ac-cli workstreams to see what it can join.\n")
+		// The machine exists but can act nowhere yet: organizations are added
+		// deliberately, so say so rather than letting the next command fail.
+		fmt.Fprintf(a.outputWriter(), "This machine is now registered (%s).\n\nAdd it to an organization in the dashboard, then it can join that organization's workstreams.\n", poll.DeviceID)
 		return nil
 	}
 	return &publicError{message: "The code was not approved in time. Run ac-cli login again."}
@@ -908,6 +912,12 @@ func machineName() string {
 		return ""
 	}
 	return name
+}
+
+// platformName reports os/arch so a human can tell two machines apart in their
+// device list. Display only; the server never treats it as identity.
+func platformName() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
 }
 
 func joinRejectionMessage(body []byte) string {

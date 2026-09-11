@@ -23,6 +23,9 @@ import (
 )
 
 const (
+	// organizationHeader names the organization a device credential acts in.
+	organizationHeader = "X-AC-Organization"
+
 	maxTicketBytes              = 16 * 1024
 	maxResponseBytes            = 4 * 1024 * 1024
 	maxMessagePageResponseBytes = 24 * 1024 * 1024
@@ -43,6 +46,10 @@ type App struct {
 	RetryDelay      func(attempt int)
 	ListenPollLimit int
 	ListenSleep     func(delay time.Duration)
+	// Organization is sent on requests made with the device credential, which
+	// carries no organization of its own. Set per command from --org; empty for
+	// agent credentials, which are already bound to one workstream.
+	Organization string
 }
 
 type publicError struct {
@@ -1408,6 +1415,13 @@ func (a *App) singleRequestWithResponseLimit(method string, path string, apiToke
 	}
 	if apiToken != "" {
 		request.Header.Set("Authorization", "Bearer "+apiToken)
+	}
+	// A device credential carries no organization, so every request that acts
+	// in one has to name it. The server treats this as a selection, not a
+	// grant: it is checked against the device's grant and its owner's
+	// membership before it becomes scope.
+	if a.Organization != "" {
+		request.Header.Set(organizationHeader, a.Organization)
 	}
 
 	response, err := configuredClient.Do(request)

@@ -16,14 +16,18 @@ const machineFileVersion = 1
 // must tell the operator to run login rather than attempting one themselves.
 var ErrNoMachineLogin = errors.New("this machine is not logged in to AirCommand")
 
-// Machine is the organization-scoped credential a human approved in a browser.
+// Machine is the device credential a human approved in a browser. It belongs
+// to that human's account and carries no organization: the organization is
+// named on each request and checked against the device's grant and its owner's
+// membership.
+//
 // It is not an agent credential: it can list and read workstreams and join
 // them, but it cannot send messages, post updates, or write tasks.
 type Machine struct {
-	Version        int    `json:"version"`
-	APIToken       string `json:"apiToken"`
-	OrganizationID string `json:"organizationId"`
-	CreatedAt      string `json:"createdAt"`
+	Version   int    `json:"version"`
+	APIToken  string `json:"apiToken"`
+	DeviceID  string `json:"deviceId"`
+	CreatedAt string `json:"createdAt"`
 }
 
 // MachinePath is the single machine credential location for this home.
@@ -34,7 +38,7 @@ func (s *Store) MachinePath() string {
 // SaveMachine writes the machine credential with owner-only permissions,
 // replacing any existing login.
 func (s *Store) SaveMachine(machine Machine) error {
-	if machine.APIToken == "" || machine.OrganizationID == "" {
+	if machine.APIToken == "" || machine.DeviceID == "" {
 		return errors.New("machine credential is incomplete")
 	}
 	machine.Version = machineFileVersion
@@ -62,7 +66,7 @@ func (s *Store) LoadMachine() (Machine, error) {
 	if err := json.Unmarshal(contents, &machine); err != nil {
 		return Machine{}, fmt.Errorf("decode machine credential: %w", err)
 	}
-	if machine.APIToken == "" || machine.OrganizationID == "" {
+	if machine.APIToken == "" || machine.DeviceID == "" {
 		return Machine{}, ErrNoMachineLogin
 	}
 	return machine, nil

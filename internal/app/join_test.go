@@ -15,8 +15,8 @@ import (
 func storedAgent(t *testing.T, client *App, agentID, workstreamCode, agentName string) {
 	t.Helper()
 	if err := client.Store.SaveMachine(credentials.Machine{
-		APIToken:       "sk-ac-abcdefghijklmnopqrstuvwxyz012345",
-		OrganizationID: "org_test",
+		APIToken: "sk-ac-abcdefghijklmnopqrstuvwxyz012345",
+		DeviceID: "dev_0123456789abcdef01234567",
 	}); err != nil {
 		t.Fatalf("SaveMachine: %v", err)
 	}
@@ -159,8 +159,8 @@ func TestJoinWithoutANameAsksWhichAgentWhenSeveralCouldMatch(t *testing.T) {
 func TestJoinWithoutANameRequiresOneWhenNothingCanBeResumed(t *testing.T) {
 	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
 	if err := client.Store.SaveMachine(credentials.Machine{
-		APIToken:       "sk-ac-abcdefghijklmnopqrstuvwxyz012345",
-		OrganizationID: "org_test",
+		APIToken: "sk-ac-abcdefghijklmnopqrstuvwxyz012345",
+		DeviceID: "dev_0123456789abcdef01234567",
 	}); err != nil {
 		t.Fatalf("SaveMachine: %v", err)
 	}
