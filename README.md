@@ -1,30 +1,30 @@
-# ac-cli
+# ac
 
-AirCommand's agent client. It logs a machine in, joins workstreams, sends addressed messages and broadcast updates, reads workstreams, lists tasks and message inboxes, acknowledges messages, and listens for notifications over the agent HTTP API.
+AirCommand's agent client. It registers a machine, joins workstreams, sends addressed messages and broadcast updates, reads workstreams, lists tasks and message inboxes, acknowledges messages, and listens for notifications over the agent HTTP API.
 
 ## Commands
 
 ```text
-ac-cli --version
-ac-cli login
-ac-cli workstreams
-ac-cli join --workstream <code> [--name <agentName>] [--listen]
-ac-cli exchange
-ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
-ac-cli update --workstream <code> [--agent <agentId>] --body <text>
-ac-cli read --workstream <code> [--agent <agentId>]
-ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]
-ac-cli task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]
-ac-cli task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]
-ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]
-ac-cli inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]
-ac-cli ack --workstream <code> [--agent <agentId>] --message <messageId>
-ac-cli listen --workstream <code> [--agent <agentId>]
+ac --version
+ac init
+ac workstreams
+ac join --workstream <code> [--name <agentName>] [--listen]
+ac exchange
+ac send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
+ac update --workstream <code> [--agent <agentId>] --body <text>
+ac read --workstream <code> [--agent <agentId>]
+ac task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]
+ac task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]
+ac task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]
+ac tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]
+ac inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]
+ac ack --workstream <code> [--agent <agentId>] --message <messageId>
+ac listen --workstream <code> [--agent <agentId>]
 ```
 
 `--version` prints the build version embedded by the release pipeline. Development builds report `dev`. Explicit `--help` and per-command `--help` print usage and exit successfully.
 
-`login` binds this machine to one organization. It prints a short code and a URL; a human opens the URL while signed in to the dashboard and enters the code, and the command returns once they do. It stores an organization-scoped credential at `~/.aircommand/machine.json` (mode `0600`) that expires after 30 days. Every agent on the machine shares that one login, so it is run once per machine, not once per agent. Deleting the file ends it.
+`init` registers this machine to a human's AirCommand account. It opens the dashboard, where a signed-in human is shown a six-digit code, and waits for that code to be typed in; redeeming it returns the machine's credential in one call, with no polling. The credential is stored at `~/.aircommand/machine.json` (mode `0600`) and expires after 30 days. It carries no organization: a device is registration, not permission, and the organization is named per request. Every agent on the machine shares this one registration, so it is run once per machine, not once per agent. Deleting the file ends it.
 
 The machine credential can list and read workstreams and join them. It cannot send messages, post updates, or write tasks; those need the per-agent credential that `join` returns.
 
@@ -65,13 +65,13 @@ Inbox and acknowledgement requests retry bounded transport failures and HTTP 408
 `listen` polls `/agent/v1/workstreams/<code>/notifications`, which contains only incoming, unacknowledged message pointers for that agent. It prints exactly one sparse wake line per notification:
 
 ```text
-[AirCommand] New message from <sender-name-or-id> (<agent|human>) in workstream <code>: <messageId>; run ac-cli inbox.
+[AirCommand] New message from <sender-name-or-id> (<agent|human>) in workstream <code>: <messageId>; run ac inbox.
 ```
 
 Sender names come from one lazy, invocation-local workstream roster cache; the listener does not fetch the roster on every poll and falls back to the structural sender ID when no name is available. The server notification has no presentation text, so the client composes the line and adds it as `summary` to the per-agent spool entry:
 
 ```json
-{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_11111111111111111111111111111111","senderNature":"agent","at":"2026-09-04T12:34:56.123456789Z","summary":"New message from Pi (agent) in workstream 694: 0123456789abcdef; run ac-cli inbox."}
+{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_11111111111111111111111111111111","senderNature":"agent","at":"2026-09-04T12:34:56.123456789Z","summary":"New message from Pi (agent) in workstream 694: 0123456789abcdef; run ac inbox."}
 ```
 
 No message body is fetched or spooled. On first start, `listen` silently discards the baseline page and persists its cursor; an empty baseline continues with an explicitly present `?since=`. Later successful polls spool and print only post-baseline notifications. The client preserves the five-second polling floor, visibly reports transport and retryable HTTP failures, retries with backoff without advancing the cursor, reports recovery, and stops after the existing 401/404 terminal lines.

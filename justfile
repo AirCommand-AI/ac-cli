@@ -5,7 +5,7 @@ _default:
 
 build:
     @mkdir -p bin
-    go build -o bin/ac-cli ./cmd/ac-cli
+    go build -o bin/ac ./cmd/ac
 
 test:
     go test ./...

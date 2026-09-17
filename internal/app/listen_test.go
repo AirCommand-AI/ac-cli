@@ -25,7 +25,7 @@ func TestListenEstablishesSilentBaselineThenComposesAndSpoolsOneWake(t *testing.
 		baselineCursor = "2026-09-01T19:05:34.138976142Z#b3c2e435a1b2c3d4"
 		messageCursor  = "2026-09-01T19:06:34.138976142Z#c4d3f546b2c3d4e5"
 		messageID      = "c4d3f546b2c3d4e5"
-		summary        = "New message from TestBar (agent) in workstream 694: c4d3f546b2c3d4e5; run ac-cli inbox."
+		summary        = "New message from TestBar (agent) in workstream 694: c4d3f546b2c3d4e5; run ac inbox."
 	)
 
 	credential := testCredential()
@@ -219,9 +219,9 @@ func TestListenCachesRosterNamesAndFallsBackToUnknownSenderID(t *testing.T) {
 		t.Fatalf("feed requests = %d, roster requests = %d; want 3, 1", feedRequests, rosterRequests)
 	}
 	wantLines := []string{
-		"[AirCommand] New message from Pi (agent) in workstream 694: 1111111111111111; run ac-cli inbox.",
-		"[AirCommand] New message from Alice (human) in workstream 694: 2222222222222222; run ac-cli inbox.",
-		"[AirCommand] New message from agm_unknown (agent) in workstream 694: 3333333333333333; run ac-cli inbox.",
+		"[AirCommand] New message from Pi (agent) in workstream 694: 1111111111111111; run ac inbox.",
+		"[AirCommand] New message from Alice (human) in workstream 694: 2222222222222222; run ac inbox.",
+		"[AirCommand] New message from agm_unknown (agent) in workstream 694: 3333333333333333; run ac inbox.",
 	}
 	if got := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n"); !reflect.DeepEqual(got, wantLines) {
 		t.Fatalf("wake lines = %v, want %v", got, wantLines)

@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	inboxUsage = "Usage: ac-cli inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]"
-	ackUsage   = "Usage: ac-cli ack --workstream <code> [--agent <agentId>] --message <messageId>"
+	inboxUsage = "Usage: ac inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]"
+	ackUsage   = "Usage: ac ack --workstream <code> [--agent <agentId>] --message <messageId>"
 )
 
 type messageReadOperation int

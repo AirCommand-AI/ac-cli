@@ -1,10 +1,10 @@
 # Runtime adapters
 
-Implement T7/T8 as thin Claude Code and pi.dev adapters over the existing `ac-cli` output contracts.
+Implement T7/T8 as thin Claude Code and pi.dev adapters over the existing `ac` output contracts.
 
 - [x] Add the Claude Code AirCommand skill without enrollment behavior
 - [x] Document the exact persistent Monitor invocation
-- [x] Add a narrowly scoped `ac-cli` permission rule
+- [x] Add a narrowly scoped `ac` permission rule
 - [x] Add a pi.dev extension that tails the spool from end-of-file
 - [x] Resolve pi configuration from flags or non-secret credential metadata
 - [x] Inject pointer notifications with pi's supported wake API

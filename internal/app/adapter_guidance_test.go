@@ -32,8 +32,8 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	}
 
 	for _, required := range []string{
-		"ac-cli tasks --workstream",
-		"ac-cli task <taskId>",
+		"ac tasks --workstream",
+		"ac task <taskId>",
 		"--status in_flight",
 		"--comment",
 		"--status landed",

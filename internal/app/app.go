@@ -267,7 +267,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli init | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac init | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -282,19 +282,19 @@ func requestedHelp(arguments []string) (string, bool) {
 	}
 	switch arguments[0] {
 	case "init":
-		return "Usage: ac-cli init", true
+		return "Usage: ac init", true
 	case "workstreams":
-		return "Usage: ac-cli workstreams", true
+		return "Usage: ac workstreams", true
 	case "join":
 		return joinUsage, true
 	case "exchange":
-		return "Usage: ac-cli exchange (supply the ticket on standard input)", true
+		return "Usage: ac exchange (supply the ticket on standard input)", true
 	case "send":
-		return "Usage: ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>", true
+		return "Usage: ac send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>", true
 	case "update":
-		return "Usage: ac-cli update --workstream <code> [--agent <agentId>] --body <text>", true
+		return "Usage: ac update --workstream <code> [--agent <agentId>] --body <text>", true
 	case "read":
-		return "Usage: ac-cli read --workstream <code> [--agent <agentId>]", true
+		return "Usage: ac read --workstream <code> [--agent <agentId>]", true
 	case "task":
 		return taskUsage, true
 	case "tasks":
@@ -304,7 +304,7 @@ func requestedHelp(arguments []string) (string, bool) {
 	case "ack":
 		return ackUsage, true
 	case "listen":
-		return "Usage: ac-cli listen --workstream <code> [--agent <agentId>]", true
+		return "Usage: ac listen --workstream <code> [--agent <agentId>]", true
 	default:
 		return "", false
 	}
@@ -312,7 +312,7 @@ func requestedHelp(arguments []string) (string, bool) {
 
 func (a *App) exchange(arguments []string) error {
 	if len(arguments) != 0 {
-		return &publicError{message: "Usage: ac-cli exchange (supply the ticket on standard input)"}
+		return &publicError{message: "Usage: ac exchange (supply the ticket on standard input)"}
 	}
 	if a.Store == nil {
 		return &publicError{message: "Credential storage is unavailable."}
@@ -400,7 +400,7 @@ func (a *App) send(arguments []string) error {
 	flags.StringVar(&recipient, "to", "", "recipient agent ID or name")
 	flags.StringVar(&body, "body", "", "message body")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || strings.TrimSpace(recipient) == "" || body == "" {
-		return &publicError{message: "Usage: ac-cli send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>"}
+		return &publicError{message: "Usage: ac send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -447,7 +447,7 @@ func (a *App) update(arguments []string) error {
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&body, "body", "", "update body")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || body == "" {
-		return &publicError{message: "Usage: ac-cli update --workstream <code> [--agent <agentId>] --body <text>"}
+		return &publicError{message: "Usage: ac update --workstream <code> [--agent <agentId>] --body <text>"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -722,7 +722,7 @@ func (a *App) read(arguments []string) error {
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
-		return &publicError{message: "Usage: ac-cli read --workstream <code> [--agent <agentId>]"}
+		return &publicError{message: "Usage: ac read --workstream <code> [--agent <agentId>]"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -751,7 +751,7 @@ func (a *App) listen(arguments []string) error {
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
-		return &publicError{message: "Usage: ac-cli listen --workstream <code> [--agent <agentId>]"}
+		return &publicError{message: "Usage: ac listen --workstream <code> [--agent <agentId>]"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -952,7 +952,7 @@ func composeNotificationSummary(notification messageNotification, workstreamCode
 		sender = name
 	}
 	return fmt.Sprintf(
-		"New message from %s (%s) in workstream %s: %s; run ac-cli inbox.",
+		"New message from %s (%s) in workstream %s: %s; run ac inbox.",
 		singleLine(sender),
 		notification.SenderNature,
 		workstreamCode,

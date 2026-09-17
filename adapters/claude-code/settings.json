@@ -1,12 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(~/.local/bin/ac-cli send *)",
-      "Bash(~/.local/bin/ac-cli update *)",
-      "Bash(~/.local/bin/ac-cli read *)",
-      "Bash(~/.local/bin/ac-cli inbox *)",
-      "Bash(~/.local/bin/ac-cli ack *)",
-      "Bash(~/.local/bin/ac-cli listen *)"
+      "Bash(~/.local/bin/ac send *)",
+      "Bash(~/.local/bin/ac update *)",
+      "Bash(~/.local/bin/ac read *)",
+      "Bash(~/.local/bin/ac inbox *)",
+      "Bash(~/.local/bin/ac ack *)",
+      "Bash(~/.local/bin/ac listen *)"
     ]
   }
 }

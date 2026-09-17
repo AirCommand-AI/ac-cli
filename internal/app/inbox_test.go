@@ -436,7 +436,7 @@ func TestInboxAndAckHelpExitZero(t *testing.T) {
 			if exitCode := client.Run(arguments); exitCode != 0 {
 				t.Fatalf("help exit code = %d, stderr = %q", exitCode, stderr.String())
 			}
-			if !strings.HasPrefix(stdout.String(), "Usage: ac-cli ") || stderr.Len() != 0 {
+			if !strings.HasPrefix(stdout.String(), "Usage: ac ") || stderr.Len() != 0 {
 				t.Fatalf("help stdout = %q, stderr = %q", stdout.String(), stderr.String())
 			}
 		})

@@ -1,6 +1,6 @@
 # Core agent commands
 
-Implement the initial `ac-cli` repository with secure enrollment exchange and authenticated workstream send/read commands.
+Implement the initial `ac` repository with secure enrollment exchange and authenticated workstream send/read commands.
 
 - [x] Scaffold the Go 1.25.5 repository and `just` tasks
 - [x] Implement credential generation and secure credential persistence

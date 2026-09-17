@@ -484,7 +484,7 @@ func TestExplicitHelpExitsZeroForTopLevelAndEveryCommand(t *testing.T) {
 			if exitCode := client.Run(arguments); exitCode != 0 {
 				t.Fatalf("help exit code = %d, stderr = %q", exitCode, stderr.String())
 			}
-			if !strings.HasPrefix(stdout.String(), "Usage: ac-cli ") {
+			if !strings.HasPrefix(stdout.String(), "Usage: ac ") {
 				t.Fatalf("help output = %q", stdout.String())
 			}
 			if stderr.Len() != 0 {

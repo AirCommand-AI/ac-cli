@@ -21,12 +21,12 @@ import (
 )
 
 const (
-	joinUsage       = "Usage: ac-cli join --workstream <code> [--name <agentName>] [--listen]"
-	taskByIDUsage   = "Usage: ac-cli task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
-	taskIDFlagUsage = "Usage: ac-cli task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
-	taskCreateUsage = "Usage: ac-cli task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
+	joinUsage       = "Usage: ac join --workstream <code> [--name <agentName>] [--listen]"
+	taskByIDUsage   = "Usage: ac task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
+	taskIDFlagUsage = "Usage: ac task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
+	taskCreateUsage = "Usage: ac task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
 	taskUsage       = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
-	tasksUsage      = "Usage: ac-cli tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
+	tasksUsage      = "Usage: ac tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
 )
 
 const (
@@ -82,7 +82,7 @@ type joinResponse struct {
 // the credential arrives as the direct answer to redeeming the code.
 func (a *App) initMachine(arguments []string) error {
 	if len(arguments) != 0 {
-		return &publicError{message: "Usage: ac-cli init"}
+		return &publicError{message: "Usage: ac init"}
 	}
 	if a.Store == nil {
 		return &publicError{message: "Credential storage is unavailable."}
@@ -116,7 +116,7 @@ func (a *App) initMachine(arguments []string) error {
 		return err
 	}
 	if response.status == http.StatusBadRequest {
-		return &publicError{message: "That code was not accepted. It may have expired or already been used — get a new one and run ac-cli init again."}
+		return &publicError{message: "That code was not accepted. It may have expired or already been used — get a new one and run ac init again."}
 	}
 	if response.status < 200 || response.status >= 300 {
 		return &publicError{message: "Unable to register this machine."}
@@ -173,7 +173,7 @@ func (a *App) openBrowser(url string) error {
 // same as being in it; joining is what allows messaging.
 func (a *App) workstreams(arguments []string) error {
 	if len(arguments) != 0 {
-		return &publicError{message: "Usage: ac-cli workstreams"}
+		return &publicError{message: "Usage: ac workstreams"}
 	}
 	machine, err := a.machineCredential()
 	if err != nil {
@@ -184,7 +184,7 @@ func (a *App) workstreams(arguments []string) error {
 		return err
 	}
 	if response.status == http.StatusUnauthorized {
-		return &publicError{message: "This machine's registration is no longer valid. Run ac-cli init again."}
+		return &publicError{message: "This machine's registration is no longer valid. Run ac init again."}
 	}
 	if response.status < 200 || response.status >= 300 {
 		return &publicError{message: "Unable to list workstreams."}
@@ -701,7 +701,7 @@ func (a *App) join(arguments []string) error {
 	}
 	switch {
 	case response.status == http.StatusUnauthorized:
-		return &publicError{message: "This machine's registration is no longer valid. Run ac-cli init again."}
+		return &publicError{message: "This machine's registration is no longer valid. Run ac init again."}
 	case response.status == http.StatusNotFound:
 		return &publicError{message: fmt.Sprintf("Workstream %s was not found in this organization.", workstreamCode)}
 	case response.status == http.StatusBadRequest:
@@ -901,7 +901,7 @@ func (a *App) machineCredential() (credentials.Machine, error) {
 	machine, err := a.Store.LoadMachine()
 	if err != nil {
 		if err == credentials.ErrNoMachineLogin {
-			return credentials.Machine{}, &publicError{message: "This machine is not registered with AirCommand. Run ac-cli init."}
+			return credentials.Machine{}, &publicError{message: "This machine is not registered with AirCommand. Run ac init."}
 		}
 		return credentials.Machine{}, &publicError{message: "Unable to read this machine's login."}
 	}

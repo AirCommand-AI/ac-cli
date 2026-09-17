@@ -27,10 +27,10 @@ jobs:
           mkdir -p dist
 
           while read -r target_os target_arch; do
-            output="dist/ac-cli_${version}_${target_os}_${target_arch}"
+            output="dist/ac_${version}_${target_os}_${target_arch}"
             CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" \
               go build -trimpath -ldflags "-X main.version=${version}" \
-              -o "${output}" ./cmd/ac-cli
+              -o "${output}" ./cmd/ac
           done <<'TARGETS'
           darwin arm64
           darwin amd64
@@ -38,11 +38,11 @@ jobs:
           linux arm64
           TARGETS
 
-          "dist/ac-cli_${version}_linux_amd64" --version | grep -Fx "ac-cli ${version}"
+          "dist/ac_${version}_linux_amd64" --version | grep -Fx "ac ${version}"
 
           (
             cd dist
-            sha256sum ac-cli_* > SHA256SUMS
+            sha256sum ac_* > SHA256SUMS
           )
 
       - name: Publish GitHub release
@@ -50,7 +50,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            dist/SHA256SUMS dist/ac-cli_* \
+            dist/SHA256SUMS dist/ac_* \
             --verify-tag \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \

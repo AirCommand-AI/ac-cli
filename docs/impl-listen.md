@@ -27,4 +27,4 @@ W9 moves `listen` to the addressed-message notification feed while preserving it
 - [x] Add route, shape, cache, fallback, baseline, retry, cursor, spool, and regression tests
 - [x] Update listener documentation and run full validation
 
-Composed summary format: `New message from <sender-name-or-id> (<nature>) in workstream <code>: <messageId>; run ac-cli inbox.` The roster is loaded lazily at most once per listener invocation; failures and unknown identities fall back to the server-supplied sender ID without suppressing the wake.
+Composed summary format: `New message from <sender-name-or-id> (<nature>) in workstream <code>: <messageId>; run ac inbox.` The roster is loaded lazily at most once per listener invocation; failures and unknown identities fall back to the server-supplied sender ID without suppressing the wake.
