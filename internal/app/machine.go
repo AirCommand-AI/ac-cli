@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
@@ -32,27 +34,16 @@ const (
 	maxDevicePollDuration     = 10 * time.Minute
 )
 
-type startDeviceLoginRequest struct {
+type redeemDeviceCodeRequest struct {
+	Code        string `json:"code"`
 	MachineName string `json:"machineName"`
 	Platform    string `json:"platform"`
 }
 
-type startDeviceLoginResponse struct {
-	UserCode        string `json:"userCode"`
-	PollSecret      string `json:"pollSecret"`
-	VerificationURL string `json:"verificationUrl"`
-	ExpiresAt       string `json:"expiresAt"`
-	PollInterval    int    `json:"pollIntervalSeconds"`
-}
-
-type pollDeviceLoginRequest struct {
-	PollSecret string `json:"pollSecret"`
-}
-
-type pollDeviceLoginResponse struct {
-	Status   string `json:"status"`
-	Token    string `json:"token"`
-	DeviceID string `json:"deviceId"`
+type redeemDeviceCodeResponse struct {
+	Token      string `json:"token"`
+	DeviceID   string `json:"deviceId"`
+	DeviceName string `json:"deviceName"`
 }
 
 type workstreamSummary struct {
@@ -83,9 +74,15 @@ type joinResponse struct {
 
 // login binds this machine to the operator's organization. It is the only
 // command that needs a human, and it is needed once per machine.
-func (a *App) login(arguments []string) error {
+// initMachine registers this machine to a human's AirCommand account.
+//
+// The code runs browser to terminal: the dashboard shows a short code and this
+// waits for it, rather than printing one for the human to carry the other way.
+// That means no polling and no URL to read out — the browser is opened here and
+// the credential arrives as the direct answer to redeeming the code.
+func (a *App) initMachine(arguments []string) error {
 	if len(arguments) != 0 {
-		return &publicError{message: "Usage: ac-cli login"}
+		return &publicError{message: "Usage: ac-cli init"}
 	}
 	if a.Store == nil {
 		return &publicError{message: "Credential storage is unavailable."}
@@ -94,69 +91,82 @@ func (a *App) login(arguments []string) error {
 		return storageError(err, "Credential storage is unavailable.")
 	}
 
-	payload, err := json.Marshal(startDeviceLoginRequest{MachineName: machineName(), Platform: platformName()})
-	if err != nil {
-		return &publicError{message: "Unable to prepare the login request."}
+	codeURL := strings.TrimRight(a.BaseURL, "/") + "/device"
+	fmt.Fprintf(a.outputWriter(), "Opening %s to get a code.\n", codeURL)
+	// Failing to open a browser is not fatal: the human can open the page.
+	if err := a.openBrowser(codeURL); err != nil {
+		fmt.Fprintf(a.outputWriter(), "Could not open a browser. Open this page yourself:\n\n    %s\n", codeURL)
 	}
-	response, err := a.request(http.MethodPost, "/ajax/device/start", "", payload)
+
+	code, err := a.promptForCode()
 	if err != nil {
 		return err
 	}
-	if response.status < 200 || response.status >= 300 {
-		return &publicError{message: "Unable to start a login for this machine."}
-	}
-	var start startDeviceLoginResponse
-	if err := json.Unmarshal(response.body, &start); err != nil || start.PollSecret == "" || start.UserCode == "" {
-		return &publicError{message: "The login service returned an invalid response."}
-	}
 
-	fmt.Fprintf(a.outputWriter(), "Open %s and enter this code:\n\n    %s\n\nWaiting for approval...\n", start.VerificationURL, start.UserCode)
-
-	interval := time.Duration(start.PollInterval) * time.Second
-	if interval < defaultDevicePollInterval {
-		interval = defaultDevicePollInterval
-	}
-	pollPayload, err := json.Marshal(pollDeviceLoginRequest{PollSecret: start.PollSecret})
+	payload, err := json.Marshal(redeemDeviceCodeRequest{
+		Code:        code,
+		MachineName: machineName(),
+		Platform:    platformName(),
+	})
 	if err != nil {
-		return &publicError{message: "Unable to prepare the login request."}
+		return &publicError{message: "Unable to prepare the registration request."}
+	}
+	response, err := a.request(http.MethodPost, "/ajax/device/redeem", "", payload)
+	if err != nil {
+		return err
+	}
+	if response.status == http.StatusBadRequest {
+		return &publicError{message: "That code was not accepted. It may have expired or already been used — get a new one and run ac-cli init again."}
+	}
+	if response.status < 200 || response.status >= 300 {
+		return &publicError{message: "Unable to register this machine."}
+	}
+	var redeemed redeemDeviceCodeResponse
+	if err := json.Unmarshal(response.body, &redeemed); err != nil || redeemed.Token == "" || redeemed.DeviceID == "" {
+		return &publicError{message: "The registration service returned an invalid response."}
 	}
 
-	deadline := time.Now().Add(maxDevicePollDuration)
-	for time.Now().Before(deadline) {
-		a.sleep(interval)
-		result, err := a.singleRequest(http.MethodPost, "/ajax/device/poll", "", pollPayload)
-		if err != nil {
-			continue
-		}
-		if result.status == http.StatusNotFound {
-			return &publicError{message: "This login is no longer valid. Run ac-cli login again."}
-		}
-		if result.status < 200 || result.status >= 300 {
-			return &publicError{message: "This login expired or was already used. Run ac-cli login again."}
-		}
-		var poll pollDeviceLoginResponse
-		if err := json.Unmarshal(result.body, &poll); err != nil {
-			return &publicError{message: "The login service returned an invalid response."}
-		}
-		if poll.Status == "pending" {
-			continue
-		}
-		if poll.Token == "" || poll.DeviceID == "" {
-			return &publicError{message: "The login service returned an invalid response."}
-		}
-		if err := a.Store.SaveMachine(credentials.Machine{
-			APIToken:  poll.Token,
-			DeviceID:  poll.DeviceID,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		}); err != nil {
-			return &publicError{message: "Unable to store the machine credential."}
-		}
-		// The machine exists but can act nowhere yet: organizations are added
-		// deliberately, so say so rather than letting the next command fail.
-		fmt.Fprintf(a.outputWriter(), "This machine is now registered (%s).\n\nAdd it to an organization in the dashboard, then it can join that organization's workstreams.\n", poll.DeviceID)
-		return nil
+	if err := a.Store.SaveMachine(credentials.Machine{
+		APIToken:  redeemed.Token,
+		DeviceID:  redeemed.DeviceID,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		return &publicError{message: "Unable to store the machine credential."}
 	}
-	return &publicError{message: "The code was not approved in time. Run ac-cli login again."}
+
+	fmt.Fprintf(a.outputWriter(), "\nThis machine is registered as %s.\n\nAgents you run here can now connect to AirCommand.\n", redeemed.DeviceID)
+	return nil
+}
+
+// promptForCode reads the code the dashboard is showing.
+func (a *App) promptForCode() (string, error) {
+	fmt.Fprint(a.outputWriter(), "\nEnter the code shown in your browser: ")
+	reader := bufio.NewReader(a.inputReader())
+	line, err := reader.ReadString('\n')
+	if err != nil && strings.TrimSpace(line) == "" {
+		return "", &publicError{message: "No code was entered."}
+	}
+	code := strings.TrimSpace(line)
+	if code == "" {
+		return "", &publicError{message: "No code was entered."}
+	}
+	return code, nil
+}
+
+// openBrowser asks the desktop to open a URL. Best effort by design: a headless
+// or locked-down machine simply gets told to open the page itself.
+func (a *App) openBrowser(url string) error {
+	if a.OpenBrowser != nil {
+		return a.OpenBrowser(url)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	default:
+		return exec.Command("xdg-open", url).Start()
+	}
 }
 
 // workstreams lists what this machine can see. Seeing a workstream is not the
@@ -174,7 +184,7 @@ func (a *App) workstreams(arguments []string) error {
 		return err
 	}
 	if response.status == http.StatusUnauthorized {
-		return &publicError{message: "This machine's login is no longer valid. Run ac-cli login again."}
+		return &publicError{message: "This machine's registration is no longer valid. Run ac-cli init again."}
 	}
 	if response.status < 200 || response.status >= 300 {
 		return &publicError{message: "Unable to list workstreams."}
@@ -691,7 +701,7 @@ func (a *App) join(arguments []string) error {
 	}
 	switch {
 	case response.status == http.StatusUnauthorized:
-		return &publicError{message: "This machine's login is no longer valid. Run ac-cli login again."}
+		return &publicError{message: "This machine's registration is no longer valid. Run ac-cli init again."}
 	case response.status == http.StatusNotFound:
 		return &publicError{message: fmt.Sprintf("Workstream %s was not found in this organization.", workstreamCode)}
 	case response.status == http.StatusBadRequest:
@@ -891,7 +901,7 @@ func (a *App) machineCredential() (credentials.Machine, error) {
 	machine, err := a.Store.LoadMachine()
 	if err != nil {
 		if err == credentials.ErrNoMachineLogin {
-			return credentials.Machine{}, &publicError{message: "This machine is not logged in to AirCommand. Run ac-cli login."}
+			return credentials.Machine{}, &publicError{message: "This machine is not registered with AirCommand. Run ac-cli init."}
 		}
 		return credentials.Machine{}, &publicError{message: "Unable to read this machine's login."}
 	}

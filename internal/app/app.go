@@ -46,6 +46,9 @@ type App struct {
 	RetryDelay      func(attempt int)
 	ListenPollLimit int
 	ListenSleep     func(delay time.Duration)
+	// OpenBrowser lets tests observe the page ac init opens instead of
+	// launching a real browser.
+	OpenBrowser func(url string) error
 	// Organization is sent on requests made with the device credential, which
 	// carries no organization of its own. Set per command from --org; empty for
 	// agent credentials, which are already bound to one workstream.
@@ -220,8 +223,8 @@ func (a *App) Run(arguments []string) int {
 		err = &publicError{message: usage()}
 	} else {
 		switch arguments[0] {
-		case "login":
-			err = a.login(arguments[1:])
+		case "init":
+			err = a.initMachine(arguments[1:])
 		case "workstreams":
 			err = a.workstreams(arguments[1:])
 		case "join":
@@ -264,7 +267,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: ac-cli login | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: ac-cli init | workstreams | join --workstream <code> [--name <agentName>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -278,8 +281,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "", false
 	}
 	switch arguments[0] {
-	case "login":
-		return "Usage: ac-cli login", true
+	case "init":
+		return "Usage: ac-cli init", true
 	case "workstreams":
 		return "Usage: ac-cli workstreams", true
 	case "join":
