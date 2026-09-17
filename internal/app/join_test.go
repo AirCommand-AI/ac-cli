@@ -1,13 +1,13 @@
 package app
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
@@ -32,213 +32,127 @@ func storedAgent(t *testing.T, client *App, agentID, workstreamCode, agentName s
 	}
 }
 
-func TestJoinReturnsTheExistingAgentInsteadOfCreatingADuplicate(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
-	defer server.Close()
-
-	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Pi")
-
-	// A restarted runtime asking to join again means "give me my agent back".
-	if exitCode := client.Run([]string{"join", "--workstream", "694", "--name", "Pi"}); exitCode != 0 {
-		t.Fatalf("join exit code = %d, stderr = %q", exitCode, stderr.String())
-	}
-	if calls != 0 {
-		t.Fatalf("join called the server %d times, want 0 when reusing", calls)
-	}
-	output := stdout.String()
-	if !strings.HasPrefix(output, "Agent ID: agm_existing\n") {
-		t.Fatalf("reuse output does not identify the existing agent: %q", output)
-	}
-	for _, want := range []string{"--agent agm_existing", "Agent name: Pi", "Workstream: 694", "ac:agm_existing"} {
-		if !strings.Contains(output, want) {
-			t.Errorf("reuse output %q is missing %q", output, want)
-		}
-	}
-}
-
-func TestJoinMatchesAnExistingAgentWithoutRegardToCase(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("join called the server instead of reusing the stored agent")
-	}))
-	defer server.Close()
-
-	client, stdout, _ := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Pi")
-
-	// Addressing a message by name ignores case, so reuse must too.
-	if exitCode := client.Run([]string{"join", "--workstream", "694", "--name", "pi"}); exitCode != 0 {
-		t.Fatal("join did not reuse an agent whose name differed only in case")
-	}
-	if !strings.Contains(stdout.String(), "agm_existing") {
-		t.Fatalf("reuse output = %q", stdout.String())
-	}
-}
-
-func TestJoinRefusesToShareAnAgentAnotherLiveSessionHolds(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("join called the server while a live session held the agent")
-	}))
-	defer server.Close()
-
-	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Pi")
-
-	// Two sessions on one agent share a poll cursor and silently split
-	// notifications between them, so a held agent must never be handed out.
-	lock, err := agentlock.Acquire(client.Store.Home(), "agm_existing")
-	if err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	defer func() { _ = lock.Release() }()
-
-	if exitCode := client.Run([]string{"join", "--workstream", "694", "--name", "Pi"}); exitCode == 0 {
-		t.Fatal("join succeeded while another live session held the agent")
-	}
-	message := stderr.String()
-	if !strings.Contains(message, "already running an agent called Pi") || !strings.Contains(message, "different name") {
-		t.Fatalf("held-agent message does not say what to do next: %q", message)
-	}
-}
-
-func TestJoinDoesNotReuseAnAgentFromAnotherWorkstreamOrName(t *testing.T) {
-	client, _, _ := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Pi")
-
-	// Neither a different workstream nor a different name is this agent, so
-	// both must fall through to a real join rather than silently reusing it.
-	for _, pair := range [][2]string{{"165", "Pi"}, {"694", "Claude"}} {
-		resumed, err := client.agentToResume(pair[0], pair[1])
-		if err != nil {
-			t.Fatalf("agentToResume(%q, %q): %v", pair[0], pair[1], err)
-		}
-		if resumed != nil {
-			t.Fatalf("workstream %q name %q reused unrelated agent %q", pair[0], pair[1], resumed.AgentID)
-		}
-	}
-}
-
-func TestJoinWithoutANameResumesTheOnlyAgentThisMachineHasThere(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("join called the server instead of resuming the stored agent")
-	}))
-	defer server.Close()
-
-	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Reviewer")
-
-	// "Rejoin 694" carries no name, and the runtime cannot be expected to
-	// remember a name its operator chose in an earlier session.
-	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode != 0 {
-		t.Fatalf("join exit code = %d, stderr = %q", exitCode, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "Agent name: Reviewer") {
-		t.Fatalf("nameless join did not resume the stored agent: %q", stdout.String())
-	}
-}
-
-func TestJoinWithoutANameAsksWhichAgentWhenSeveralCouldMatch(t *testing.T) {
-	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_one", "694", "Claude")
-	storedAgent(t, client, "agm_two", "694", "Pi")
-
-	// Picking one would strand the other: still active, still addressable,
-	// with nobody listening as it.
-	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode == 0 {
-		t.Fatal("nameless join silently picked one of several agents")
-	}
-	message := stderr.String()
-	for _, want := range []string{"more than one agent", "Claude", "Pi", "--name"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("ambiguous join message %q is missing %q", message, want)
-		}
-	}
-}
-
-func TestJoinWithoutANameRequiresOneWhenNothingCanBeResumed(t *testing.T) {
-	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
+// storedMachine registers this machine locally, which every join needs before
+// it can ask the service anything.
+func storedMachine(t *testing.T, client *App) {
+	t.Helper()
 	if err := client.Store.SaveMachine(credentials.Machine{
 		APIToken: "sk-ac-abcdefghijklmnopqrstuvwxyz012345",
 		DeviceID: "dev_0123456789abcdef01234567",
 	}); err != nil {
 		t.Fatalf("SaveMachine: %v", err)
 	}
-
-	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode == 0 {
-		t.Fatal("join created an agent without being given a name")
-	}
-	if !strings.Contains(stderr.String(), "Pass --name") {
-		t.Fatalf("first-join message does not ask for a name: %q", stderr.String())
-	}
 }
 
-func TestJoinWithoutANameRefusesWhenEveryLocalAgentIsInUse(t *testing.T) {
-	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Pi")
-
-	lock, err := agentlock.Acquire(client.Store.Home(), "agm_existing")
-	if err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	defer func() { _ = lock.Release() }()
-
-	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode == 0 {
-		t.Fatal("nameless join handed over an agent a live session was using")
-	}
-	message := stderr.String()
-	if !strings.Contains(message, "in use by a live session") || !strings.Contains(message, "Pass --name") {
-		t.Fatalf("in-use message does not say what to do next: %q", message)
-	}
-}
-
-func TestJoinWithListenKeepsRunningAndStreamsWakeLinesOnStdout(t *testing.T) {
-	notified := 0
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if !strings.Contains(request.URL.Path, "/notifications") {
+// joinTestServer serves the three reads join now makes: which organizations
+// this machine can reach, which agents are on it, and the notification feed.
+func joinTestServer(t *testing.T, agent agentSummary, onNotify func()) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.URL.Path == "/v1/organizations":
+			_, _ = writer.Write([]byte(`{"organizations":[{"organizationId":"org_aaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Acme"}]}`))
+		case request.URL.Path == "/v1/agents":
+			body, _ := json.Marshal(listAgentsResponse{Agents: []agentSummary{agent}})
+			_, _ = writer.Write(body)
+		case strings.Contains(request.URL.Path, "/notifications"):
+			if onNotify != nil {
+				onNotify()
+			}
+			_, _ = writer.Write([]byte(`{"notifications":[],"cursor":"c1","pollAfterSeconds":5}`))
+		default:
 			t.Errorf("unexpected path %q", request.URL.Path)
 		}
-		notified++
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"notifications":[],"cursor":"c1","pollAfterSeconds":5}`))
 	}))
+}
+
+// TestJoinOnAnAgentAlreadyThereReportsItsIdentity covers a restarted runtime
+// asking to join where it already is: that is not an error, it is how it gets
+// its agent back.
+func TestJoinOnAnAgentAlreadyThereReportsItsIdentity(t *testing.T) {
+	agent := agentSummary{
+		AgentID: "agm_0123456789abcdef0123456789abcdef", Name: "Pi",
+		Status: "connected", OrganizationID: "org_aaaaaaaaaaaaaaaaaaaaaaaaaa", WorkstreamCode: "694",
+	}
+	server := joinTestServer(t, agent, nil)
 	defer server.Close()
 
 	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Pi")
+	storedAgent(t, client, agent.AgentID, "694", "Pi")
+
+	if exitCode := client.Run([]string{"join", "--agent", "Pi", "--org", "Acme", "--workstream", "694"}); exitCode != 0 {
+		t.Fatalf("join exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), agent.AgentID) {
+		t.Fatalf("identity not reported on stdout: %q", stdout.String())
+	}
+}
+
+// TestJoinWithListenStreamsWakeLinesOnStdout keeps the identity block off the
+// wake-line stream a harness turns into notifications.
+func TestJoinWithListenStreamsWakeLinesOnStdout(t *testing.T) {
+	notified := 0
+	agent := agentSummary{
+		AgentID: "agm_0123456789abcdef0123456789abcdef", Name: "Pi",
+		Status: "connected", OrganizationID: "org_aaaaaaaaaaaaaaaaaaaaaaaaaa", WorkstreamCode: "694",
+	}
+	server := joinTestServer(t, agent, func() { notified++ })
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedAgent(t, client, agent.AgentID, "694", "Pi")
 	client.ListenPollLimit = 2
 	client.ListenSleep = func(time.Duration) {}
 
-	if exitCode := client.Run([]string{"join", "--workstream", "694", "--listen"}); exitCode != 0 {
+	if exitCode := client.Run([]string{"join", "--agent", "Pi", "--org", "Acme", "--workstream", "694", "--listen"}); exitCode != 0 {
 		t.Fatalf("join --listen exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
 	if notified == 0 {
 		t.Fatal("join --listen returned without ever polling for notifications")
 	}
-
-	// Standard output is the wake-line stream a harness turns into
-	// notifications, so the identity block must not land there.
 	if strings.Contains(stdout.String(), "Agent ID:") {
 		t.Fatalf("identity block reached the wake-line stream: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "Agent ID: agm_existing") {
+	if !strings.Contains(stderr.String(), "Agent ID: "+agent.AgentID) {
 		t.Fatalf("identity block missing from stderr: %q", stderr.String())
 	}
 }
 
-func TestJoinWithoutListenReturnsImmediatelyAndPrintsIdentityOnStdout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("join without --listen contacted the server")
-	}))
+// TestJoinRefusesAnAgentAlreadySomewhereElse makes moving deliberate: an agent
+// is in one workstream at a time, so join says to leave first rather than
+// silently moving it.
+func TestJoinRefusesAnAgentAlreadySomewhereElse(t *testing.T) {
+	agent := agentSummary{
+		AgentID: "agm_0123456789abcdef0123456789abcdef", Name: "Pi",
+		Status: "connected", OrganizationID: "org_aaaaaaaaaaaaaaaaaaaaaaaaaa", WorkstreamCode: "720",
+	}
+	server := joinTestServer(t, agent, nil)
 	defer server.Close()
 
-	client, stdout, _ := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
-	storedAgent(t, client, "agm_existing", "694", "Pi")
-
-	if exitCode := client.Run([]string{"join", "--workstream", "694"}); exitCode != 0 {
-		t.Fatal("join without --listen failed")
+	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedMachine(t, client)
+	if exitCode := client.Run([]string{"join", "--agent", "Pi", "--org", "Acme", "--workstream", "694"}); exitCode == 0 {
+		t.Fatal("join moved an agent that was already in a workstream")
 	}
-	if !strings.Contains(stdout.String(), "Agent ID: agm_existing") {
-		t.Fatalf("identity block missing from stdout: %q", stdout.String())
+	if !strings.Contains(stderr.String(), "aircom leave") {
+		t.Fatalf("error does not say how to move it: %q", stderr.String())
+	}
+}
+
+// TestJoinResolvesAnUnknownOrganizationHelpfully lists what is reachable rather
+// than just refusing.
+func TestJoinResolvesAnUnknownOrganizationHelpfully(t *testing.T) {
+	agent := agentSummary{AgentID: "agm_0123456789abcdef0123456789abcdef", Name: "Pi", Status: "connected"}
+	server := joinTestServer(t, agent, nil)
+	defer server.Close()
+
+	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedMachine(t, client)
+	if exitCode := client.Run([]string{"join", "--agent", "Pi", "--org", "Nowhere", "--workstream", "694"}); exitCode == 0 {
+		t.Fatal("an unknown organization was accepted")
+	}
+	if !strings.Contains(stderr.String(), "Acme") {
+		t.Fatalf("error does not name what is reachable: %q", stderr.String())
 	}
 }

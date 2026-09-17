@@ -15,13 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
 const (
-	joinUsage       = "Usage: aircom join --workstream <code> [--name <agentName>] [--listen]"
+	joinUsage       = "Usage: aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]"
 	taskByIDUsage   = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
 	taskIDFlagUsage = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
 	taskCreateUsage = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
@@ -58,8 +57,9 @@ type listWorkstreamsResponse struct {
 	NextCursor  string              `json:"nextCursor"`
 }
 
-type joinRequest struct {
-	AgentName     string `json:"agentName"`
+// joinAgentRequest carries only the credentials the agent generated for itself.
+// The agent's name and identity come from its registration, not from the join.
+type joinAgentRequest struct {
 	APIToken      string `json:"apiToken"`
 	SocketKey     string `json:"socketKey"`
 	IdempotencyID string `json:"idempotencyId"`
@@ -623,20 +623,26 @@ func (a *App) localAgentsByWorkstream() map[string][]string {
 
 // join creates an agent in a workstream and activates it. Its output matches
 // exchange so that runtime adapters parse either identically.
+// join puts an agent that already exists into a workstream.
+//
+// It does not create one. An agent is registered by connect and outlives any
+// particular workstream, which is what makes moving it expressible: leave, then
+// join somewhere else, as the same agent with the same name and history.
 func (a *App) join(arguments []string) error {
 	flags := flag.NewFlagSet("join", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var workstreamCode string
-	var agentName string
+	var agentReference string
+	var organizationReference string
 	var listen bool
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
-	flags.StringVar(&agentName, "name", "", "name this agent takes in the workstream")
+	flags.StringVar(&agentReference, "agent", "", "agent id or name, as shown by aircom agents")
+	flags.StringVar(&organizationReference, "org", "", "organization name or id, as shown by aircom orgs")
 	flags.BoolVar(&listen, "listen", false, "keep running and listen for messages after joining")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return &publicError{message: joinUsage}
 	}
 	workstreamCode = strings.TrimSpace(workstreamCode)
-	agentName = strings.TrimSpace(agentName)
 	if workstreamCode == "" {
 		return &publicError{message: joinUsage}
 	}
@@ -651,25 +657,27 @@ func (a *App) join(arguments []string) error {
 		return storageError(err, "Credential storage is unavailable.")
 	}
 
-	// An agent outlives the session that created it. A restarted runtime
-	// asking to join again means "give me my agent back", so reuse it rather
-	// than creating a second one that strands the first with an inbox nobody
-	// reads. Only a live holder forces a new identity.
-	existing, err := a.agentToResume(workstreamCode, agentName)
+	organizationID, err := a.resolveOrganization(organizationReference)
 	if err != nil {
 		return err
 	}
-	if existing != nil {
-		a.reportAgentIdentity(listen, existing.AgentID, existing.AgentName, workstreamCode, socketAddressForAgentID(existing.AgentID))
+	agent, err := a.resolveAgent(agentReference)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(agent.WorkstreamCode) == workstreamCode {
+		// Already there. Re-running join is how a restarted runtime asks for
+		// its agent back, so report the identity rather than failing.
+		a.reportAgentIdentity(listen, agent.AgentID, agent.Name, workstreamCode, socketAddressForAgentID(agent.AgentID))
 		if listen {
-			return a.listen([]string{"--workstream", workstreamCode, "--agent", existing.AgentID})
+			return a.listen([]string{"--workstream", workstreamCode, "--agent", agent.AgentID})
 		}
 		return nil
 	}
-	if agentName == "" {
+	if strings.TrimSpace(agent.WorkstreamCode) != "" {
 		return &publicError{message: fmt.Sprintf(
-			"This machine has no agent in workstream %s yet. Pass --name to say what this agent should be called.",
-			workstreamCode)}
+			"%s is already in workstream %s. Take it out first:\n    aircom leave --agent %s",
+			agent.Name, agent.WorkstreamCode, agent.Name)}
 	}
 
 	random := a.randomReader()
@@ -685,8 +693,7 @@ func (a *App) join(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate a join idempotency ID."}
 	}
-	payload, err := json.Marshal(joinRequest{
-		AgentName:     agentName,
+	payload, err := json.Marshal(joinAgentRequest{
 		APIToken:      apiToken,
 		SocketKey:     socketKey,
 		IdempotencyID: idempotencyID,
@@ -695,15 +702,22 @@ func (a *App) join(arguments []string) error {
 		return &publicError{message: "Unable to prepare the join request."}
 	}
 
-	response, err := a.request(http.MethodPost, "/v1/workstreams/"+workstreamCode+"/agents", machine.APIToken, payload)
+	previousOrganization := a.Organization
+	a.Organization = organizationID
+	response, err := a.request(http.MethodPost, "/v1/agents/"+agent.AgentID+"/workstreams/"+workstreamCode, machine.APIToken, payload)
+	a.Organization = previousOrganization
 	if err != nil {
 		return err
 	}
 	switch {
 	case response.status == http.StatusUnauthorized:
 		return &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
+	case response.status == http.StatusForbidden:
+		return &publicError{message: "This machine is not allowed to act in that organization."}
 	case response.status == http.StatusNotFound:
-		return &publicError{message: fmt.Sprintf("Workstream %s was not found in this organization.", workstreamCode)}
+		return &publicError{message: fmt.Sprintf("Workstream %s was not found in that organization.", workstreamCode)}
+	case response.status == http.StatusConflict:
+		return &publicError{message: joinRejectionMessage(response.body)}
 	case response.status == http.StatusBadRequest:
 		return &publicError{message: joinRejectionMessage(response.body)}
 	case response.status < 200 || response.status >= 300:
@@ -752,56 +766,6 @@ func (a *App) writeAgentIdentity(writer io.Writer, agentID, agentName, workstrea
 	fmt.Fprintf(writer, "Agent name: %s\n", agentName)
 	fmt.Fprintf(writer, "Workstream: %s\n", workstreamCode)
 	fmt.Fprintf(writer, "Socket address: %s\n", socketAddress)
-}
-
-// agentToResume decides which stored agent, if any, this join should hand
-// back. A nil agent with no error means nothing here can be resumed and a
-// fresh one should be created.
-//
-// Without a name it answers only when there is exactly one candidate. Guessing
-// between several would silently strand whichever agent it did not pick,
-// leaving that one active and addressable with nobody listening as it, so it
-// asks instead.
-func (a *App) agentToResume(workstreamCode string, agentName string) (*credentials.LocalAgent, error) {
-	a.backfillAgentNames(workstreamCode)
-
-	candidates := a.localAgentsIn(workstreamCode)
-	if agentName != "" {
-		candidates = filterAgentsNamed(candidates, agentName)
-	}
-	if len(candidates) == 0 {
-		return nil, nil
-	}
-
-	var free []credentials.LocalAgent
-	var held []credentials.LocalAgent
-	for _, agent := range candidates {
-		if agentlock.Held(a.Store.Home(), agent.AgentID) {
-			held = append(held, agent)
-			continue
-		}
-		free = append(free, agent)
-	}
-
-	if len(free) == 1 {
-		agent := free[0]
-		return &agent, nil
-	}
-	if len(free) > 1 {
-		return nil, &publicError{message: fmt.Sprintf(
-			"This machine has more than one agent in workstream %s: %s. Pass --name to say which one this session is.",
-			workstreamCode, strings.Join(agentLabels(free), ", "))}
-	}
-	// Everything that matched is in use by a live session, so this session
-	// needs an identity of its own rather than one of theirs.
-	if agentName != "" {
-		return nil, &publicError{message: fmt.Sprintf(
-			"This machine is already running an agent called %s in workstream %s. Choose a different name for this session.",
-			held[0].AgentName, workstreamCode)}
-	}
-	return nil, &publicError{message: fmt.Sprintf(
-		"Every agent this machine has in workstream %s is in use by a live session: %s. Pass --name to join as a new one.",
-		workstreamCode, strings.Join(agentLabels(held), ", "))}
 }
 
 // localAgentsIn lists the stored agents this machine holds in one workstream.
