@@ -1,12 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(~/.local/bin/ac send *)",
-      "Bash(~/.local/bin/ac update *)",
-      "Bash(~/.local/bin/ac read *)",
-      "Bash(~/.local/bin/ac inbox *)",
-      "Bash(~/.local/bin/ac ack *)",
-      "Bash(~/.local/bin/ac listen *)"
+      "Bash(~/.local/bin/aircom send *)",
+      "Bash(~/.local/bin/aircom update *)",
+      "Bash(~/.local/bin/aircom read *)",
+      "Bash(~/.local/bin/aircom inbox *)",
+      "Bash(~/.local/bin/aircom ack *)",
+      "Bash(~/.local/bin/aircom listen *)"
     ]
   }
 }

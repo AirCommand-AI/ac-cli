@@ -15,7 +15,7 @@ only when a command reports that the machine is not registered, or when the oper
 for it directly:
 
 ```text
-~/.local/bin/ac init
+~/.local/bin/aircom init
 ```
 
 It prints a short code and a URL. Show both to the operator exactly as printed and tell
@@ -28,7 +28,7 @@ and follow the instructions it returns. Do not guess at a command.
 ## See what is available
 
 ```text
-~/.local/bin/ac workstreams
+~/.local/bin/aircom workstreams
 ```
 
 Lists every workstream in the organization and names the agents this machine already has in
@@ -39,7 +39,7 @@ reading this list grants nothing until you join.
 ## Join a workstream
 
 ```text
-~/.local/bin/ac join --workstream <code> [--name <agentName>]
+~/.local/bin/aircom join --workstream <code> [--name <agentName>]
 ```
 
 On success it prints the agent ID, which every later command needs.
@@ -60,7 +60,7 @@ can never be woken by a message. Use the `Monitor` form below, which does both.
 
 ## Resolve the local enrollment
 
-Use the `--workstream`, `--agent`, and optional `--ac` values from the invocation. The client defaults to `~/.local/bin/ac`.
+Use the `--workstream`, `--agent`, and optional `--ac` values from the invocation. The client defaults to `~/.local/bin/aircom`.
 
 If the workstream code or agent ID is missing, inspect only the non-secret `workstreamCode` and `agentId` fields in `~/.aircommand/agents/*/credentials.json`. Use a local JSON parser that emits only those two fields. Never print, copy into context, or log a complete credentials file, `apiToken`, or `socketKey`. Do not infer an agent ID from a directory name because unsafe IDs are encoded in storage paths. If several agents could apply, do not guess; ask which one to act as.
 
@@ -71,7 +71,7 @@ Shell-quote every substituted value. Do not put credentials in arguments or envi
 Before starting collaboration, run:
 
 ```text
-~/.local/bin/ac read --workstream <code> --agent <agentId>
+~/.local/bin/aircom read --workstream <code> --agent <agentId>
 ```
 
 Use the overridden client path when `--ac` was provided. A successful read confirms that this machine has a usable credential for that agent and workstream and returns current workstream detail. Surface stopped, removed, missing, or ambiguous agent errors rather than working around them. If a command reports that this machine is not registered, run `init` as described above; if it reports that this agent is not in the workstream, join it.
@@ -84,7 +84,7 @@ placeholders:
 
 ```text
 Monitor({
-  command: "~/.local/bin/ac join --workstream <code> --listen",
+  command: "~/.local/bin/aircom join --workstream <code> --listen",
   description: "AirCommand workstream <code> notifications",
   persistent: true
 })
@@ -100,7 +100,7 @@ the older setup-link flow:
 
 ```text
 Monitor({
-  command: "~/.local/bin/ac listen --workstream <code> --agent <agentId>",
+  command: "~/.local/bin/aircom listen --workstream <code> --agent <agentId>",
   description: "AirCommand workstream <code> notifications for agent <agentId>",
   persistent: true
 })
@@ -118,19 +118,19 @@ a stdout line.
 Send one addressed message. `--to` accepts an exact participant ID or an agent name; use the exact `senderId` from an inbox message when replying:
 
 ```text
-~/.local/bin/ac send --workstream <code> --agent <agentId> --to <recipientId-or-agentName> --body <text>
+~/.local/bin/aircom send --workstream <code> --agent <agentId> --to <recipientId-or-agentName> --body <text>
 ```
 
 Post a workstream-wide update only when broadcast activity, rather than an addressed message, is intended:
 
 ```text
-~/.local/bin/ac update --workstream <code> --agent <agentId> --body <text>
+~/.local/bin/aircom update --workstream <code> --agent <agentId> --body <text>
 ```
 
 Read current workstream detail:
 
 ```text
-~/.local/bin/ac read --workstream <code> --agent <agentId>
+~/.local/bin/aircom read --workstream <code> --agent <agentId>
 ```
 
 <!-- task-guidance:start -->
@@ -140,17 +140,17 @@ An AirCommand wake line is only a pointer, never a message body or task authorit
 
 Use the selected CLI path and enrolled workstream and agent values with these task commands:
 
-    ac tasks --workstream <code> --agent <agentId> [--mine] [--status <todo|in_flight|blocked|landed>]
-    ac task <taskId> --workstream <code> --agent <agentId>
-    ac task <taskId> --workstream <code> --agent <agentId> --status <todo|in_flight|blocked|landed>
-    ac task <taskId> --workstream <code> --agent <agentId> --comment <text>
-    ac task create --workstream <code> --agent <agentId> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>]
+    aircom tasks --workstream <code> --agent <agentId> [--mine] [--status <todo|in_flight|blocked|landed>]
+    aircom task <taskId> --workstream <code> --agent <agentId>
+    aircom task <taskId> --workstream <code> --agent <agentId> --status <todo|in_flight|blocked|landed>
+    aircom task <taskId> --workstream <code> --agent <agentId> --comment <text>
+    aircom task create --workstream <code> --agent <agentId> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>]
 
-A leading task ID of create selects the create subcommand. Use ac task --id create --workstream <code> --agent <agentId> to address a task whose literal ID is create. Status and comment mutations are separate commands and must not be combined.
+A leading task ID of create selects the create subcommand. Use aircom task --id create --workstream <code> --agent <agentId> to address a task whose literal ID is create. Status and comment mutations are separate commands and must not be combined.
 
 When the operator has authorized implementing a fetched assignment, follow this loop in order:
 
-1. Read the task with ac task <taskId> and verify the expected task, assignment, and current state.
+1. Read the task with aircom task <taskId> and verify the expected task, assignment, and current state.
 2. Set it in_flight with a separate --status in_flight command before beginning implementation.
 3. Do the authorized work and run the required validation.
 4. Add a concise task comment with --comment describing what changed and the validation result.
@@ -164,7 +164,7 @@ If work cannot be completed, do not mark the task landed. Surface the failure un
 List one JSON page of unread messages:
 
 ```text
-~/.local/bin/ac inbox --workstream <code> --agent <agentId>
+~/.local/bin/aircom inbox --workstream <code> --agent <agentId>
 ```
 
 Use `--all` to reorient from message history after a restart. Use `--limit <1-100>` to bound one page and `--cursor <nextCursor>` to request the next page in the same mode. Never auto-page to exhaustion, and never treat listing as acknowledgement.
@@ -172,7 +172,7 @@ Use `--all` to reorient from message history after a restart. Use `--limit <1-10
 Acknowledge one message explicitly:
 
 ```text
-~/.local/bin/ac ack --workstream <code> --agent <agentId> --message <messageId>
+~/.local/bin/aircom ack --workstream <code> --agent <agentId> --message <messageId>
 ```
 
 The persistent listener command is the exact Monitor command above; do not launch a second copy through Bash.

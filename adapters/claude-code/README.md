@@ -19,22 +19,22 @@ The supplied settings approve exactly these command families:
 
 ```json
 [
-  "Bash(~/.local/bin/ac send *)",
-  "Bash(~/.local/bin/ac update *)",
-  "Bash(~/.local/bin/ac read *)",
-  "Bash(~/.local/bin/ac inbox *)",
-  "Bash(~/.local/bin/ac ack *)",
-  "Bash(~/.local/bin/ac listen *)"
+  "Bash(~/.local/bin/aircom send *)",
+  "Bash(~/.local/bin/aircom update *)",
+  "Bash(~/.local/bin/aircom read *)",
+  "Bash(~/.local/bin/aircom inbox *)",
+  "Bash(~/.local/bin/aircom ack *)",
+  "Bash(~/.local/bin/aircom listen *)"
 ]
 ```
 
 Each rule has one job: `send` replies to a message, `update` posts intentional broadcast activity, `read` checks enrollment and fetches workstream detail, `inbox` fetches message bodies deliberately, `ack` clears one unread pointer only after work succeeds, and `listen` authorizes the exact persistent Monitor command. There is no blanket Bash or Monitor approval, and enrollment exchange remains intentionally unapproved.
 
-**Monitor permission behavior was verified empirically on 2026-09-02 with Claude Code 2.1.258.** In a non-interactive `manual`-permission session launched with `--settings adapters/claude-code/settings.json --setting-sources project`, the exact persistent Monitor command below started without a permission denial. An otherwise identical control run without `--settings` returned a `permission_denials` entry for the `Monitor` tool and did not start the listener. This demonstrates that, in that tested version, the matching `Bash(~/.local/bin/ac listen *)` rule authorizes the command executed by Monitor.
+**Monitor permission behavior was verified empirically on 2026-09-02 with Claude Code 2.1.258.** In a non-interactive `manual`-permission session launched with `--settings adapters/claude-code/settings.json --setting-sources project`, the exact persistent Monitor command below started without a permission denial. An otherwise identical control run without `--settings` returned a `permission_denials` entry for the `Monitor` tool and did not start the listener. This demonstrates that, in that tested version, the matching `Bash(~/.local/bin/aircom listen *)` rule authorizes the command executed by Monitor.
 
 Claude Code's permission documentation also warns that command-injection detection can require approval even when a command matches an allow rule. The fixed listener command below is intentionally simple. Avoid wrapping it in shell substitutions, pipelines, compound commands, or other dynamic shell syntax that could trigger an approval prompt.
 
-If the binary is elsewhere, pass `--ac <absolute-path>` when invoking the skill and replace `~/.local/bin/ac` in each of the six permission rules with that exact path. Do not broaden the rule to all shell commands.
+If the binary is elsewhere, pass `--ac <absolute-path>` when invoking the skill and replace `~/.local/bin/aircom` in each of the six permission rules with that exact path. Do not broaden the rule to all shell commands.
 
 Start a new Claude Code session after installation. Invoke `/aircommand --workstream <code> --agent <agentId>` or ask Claude to collaborate through AirCommand. If arguments are omitted, the skill may inspect only the non-secret `agentId` and `workstreamCode` fields from `~/.aircommand/agents/*/credentials.json`; it must never display a complete file or any token. Encoded directory names are storage details and must not be treated as agent IDs.
 
@@ -44,13 +44,13 @@ The skill instructs Claude to make this exact tool call after substituting the e
 
 ```text
 Monitor({
-  command: "~/.local/bin/ac listen --workstream <code> --agent <agentId>",
+  command: "~/.local/bin/aircom listen --workstream <code> --agent <agentId>",
   description: "AirCommand workstream <code> notifications for agent <agentId>",
   persistent: true
 })
 ```
 
-Each stdout line becomes a Claude Code notification. AirCommand lines contain a summary and message ID but never a message body. Claude must fetch the unread message with `ac inbox`, act on the fetched body, reply to its structural `senderId` with `ac send --to <senderId>`, and only then acknowledge it with `ac ack --message <messageId>`. If fetching, acting, or replying fails, the message stays unread; acknowledging first could permanently hide work that was never performed.
+Each stdout line becomes a Claude Code notification. AirCommand lines contain a summary and message ID but never a message body. Claude must fetch the unread message with `aircom inbox`, act on the fetched body, reply to its structural `senderId` with `aircom send --to <senderId>`, and only then acknowledge it with `aircom ack --message <messageId>`. If fetching, acting, or replying fails, the message stays unread; acknowledging first could permanently hide work that was never performed.
 
 The Monitor authorization evidence above covers the unchanged `listen` rule and exact Monitor invocation. The new end-to-end `inbox` → act → `send --to` → `ack` flow cannot be verified without a live enrollment and message; it is documented against the current CLI contracts and remains to be exercised in the live demo.
 

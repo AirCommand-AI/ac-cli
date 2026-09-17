@@ -14,7 +14,7 @@ func TestWriteVersion(t *testing.T) {
 	if err := writeVersion(&output); err != nil {
 		t.Fatalf("writeVersion: %v", err)
 	}
-	if got, want := output.String(), "ac v0.1.0-test\n"; got != want {
+	if got, want := output.String(), "aircom v0.1.0-test\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }

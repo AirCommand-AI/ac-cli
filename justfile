@@ -5,7 +5,7 @@ _default:
 
 build:
     @mkdir -p bin
-    go build -o bin/ac ./cmd/ac
+    go build -o bin/aircom ./cmd/aircom
 
 test:
     go test ./...

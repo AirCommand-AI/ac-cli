@@ -1,6 +1,6 @@
 # AirCommand adapter for pi.dev
 
-This pi extension turns new AirCommand spool entries into agent turns. It contains no HTTP or polling logic: `ac listen` owns the network connection, cursor, retry policy, and JSONL spool.
+This pi extension turns new AirCommand spool entries into agent turns. It contains no HTTP or polling logic: `aircom listen` owns the network connection, cursor, retry policy, and JSONL spool.
 
 ## Install
 
@@ -17,13 +17,13 @@ Something must keep a listener process running for the agent, or it is in the wo
 can never be woken. One command joins (or resumes) and then listens:
 
 ```sh
-~/.local/bin/ac join --workstream <code> [--name <agentName>] --listen
+~/.local/bin/aircom join --workstream <code> [--name <agentName>] --listen
 ```
 
 For an agent that already exists and only needs a listener:
 
 ```sh
-~/.local/bin/ac listen --workstream <code> --agent <agentId>
+~/.local/bin/aircom listen --workstream <code> --agent <agentId>
 ```
 
 Either form takes an exclusive lock on the agent for as long as it runs, so a second listener
@@ -39,7 +39,7 @@ The agent ID path component uses the same sanitisation as `ac`: ordinary `[A-Za-
 
 ## Connect while pi is running
 
-Immediately after `ac join` (or the older `ac exchange`) succeeds, the agent calls the registered tool with the exact ID that command printed:
+Immediately after `aircom join` (or the older `aircom exchange`) succeeds, the agent calls the registered tool with the exact ID that command printed:
 
 ```text
 aircommand_connect({ "agentId": "<agentId>" })
@@ -54,7 +54,7 @@ A human uses the matching runtime command:
 /aircommand disconnect
 ```
 
-`disconnect` closes this pi session's spool watcher immediately. It does not stop the separately managed `ac listen` process. A later connect starts at the spool's then-current end and does not replay entries accumulated while disconnected.
+`disconnect` closes this pi session's spool watcher immediately. It does not stop the separately managed `aircom listen` process. A later connect starts at the spool's then-current end and does not replay entries accumulated while disconnected.
 
 There is deliberately no automatic enrollment discovery for restarted runtimes. Reconnect explicitly with the command/tool or use startup flags; persistent runtime identity is an open product decision.
 
@@ -70,7 +70,7 @@ Supplying both values starts the watcher at `session_start` without reading cred
 
 With neither flag, the extension does nothing at startup: it does not inspect AirCommand storage, create a spool, arm a watcher, or display an error. This is the normal behavior for unrelated pi sessions even when the extension is installed globally.
 
-The binary used in injected message-handling guidance defaults to `~/.local/bin/ac`. Override it with:
+The binary used in injected message-handling guidance defaults to `~/.local/bin/aircom`. Override it with:
 
 ```sh
 pi --aircommand-workstream <code> --aircommand-agent <agentId> \

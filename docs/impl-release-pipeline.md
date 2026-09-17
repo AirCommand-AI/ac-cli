@@ -2,7 +2,7 @@
 
 Implement T6's CI and tagged GitHub Release pipeline, add version reporting, and publish `v0.1.0`.
 
-- [x] Add `ac --version` with link-time version injection
+- [x] Add `aircom --version` with link-time version injection
 - [x] Add minimal push and pull-request CI for tests and vet
 - [x] Add tag-triggered release workflow for four static targets
 - [x] Generate and publish `SHA256SUMS` with exact asset names
