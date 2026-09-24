@@ -46,6 +46,9 @@ const (
 	orgsUsage       = "Usage: aircom orgs"
 	leaveUsage      = "Usage: aircom leave --agent <agentId|name>"
 	disconnectUsage = "Usage: aircom disconnect --agent <agentId|name>"
+
+	// agentRetired is the status of an agent removed with disconnect.
+	agentRetired = "retired"
 )
 
 // connect registers this runtime as an agent on this machine.
@@ -156,7 +159,16 @@ func (a *App) fetchAgents() ([]agentSummary, error) {
 	if err := json.Unmarshal(response.body, &decoded); err != nil {
 		return nil, &publicError{message: "The AirCommand service returned an invalid agent list."}
 	}
-	return decoded.Agents, nil
+	// The service keeps removed agents so a human can see what has been here;
+	// the command line only deals in agents that still exist. Dropping them
+	// here also keeps a new agent from colliding with a removed one's name.
+	live := make([]agentSummary, 0, len(decoded.Agents))
+	for _, agent := range decoded.Agents {
+		if agent.Status != agentRetired {
+			live = append(live, agent)
+		}
+	}
+	return live, nil
 }
 
 func (a *App) fetchOrganizations() ([]organizationSummary, error) {

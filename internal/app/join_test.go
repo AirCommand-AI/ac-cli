@@ -156,3 +156,32 @@ func TestJoinResolvesAnUnknownOrganizationHelpfully(t *testing.T) {
 		t.Fatalf("error does not name what is reachable: %q", stderr.String())
 	}
 }
+
+// TestRemovedAgentsAreHiddenAndDoNotCollide keeps a disconnected agent from
+// appearing in the list or making its old name ambiguous.
+func TestRemovedAgentsAreHiddenAndDoNotCollide(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"agents":[
+			{"agentId":"agm_11111111111111111111111111111111","name":"Probe","status":"retired"},
+			{"agentId":"agm_22222222222222222222222222222222","name":"Probe","status":"connected"}]}`))
+	}))
+	defer server.Close()
+
+	client, stdout, _ := testApp(t, server.URL, "", deterministicRandom(0x11))
+	storedMachine(t, client)
+
+	agent, err := client.resolveAgent("Probe")
+	if err != nil {
+		t.Fatalf("resolveAgent: %v", err)
+	}
+	if agent.AgentID != "agm_22222222222222222222222222222222" {
+		t.Fatalf("resolved %q; want the live agent", agent.AgentID)
+	}
+	if exitCode := client.Run([]string{"agents"}); exitCode != 0 {
+		t.Fatal("agents failed")
+	}
+	if strings.Contains(stdout.String(), "agm_11111111111111111111111111111111") {
+		t.Fatalf("a removed agent was listed: %q", stdout.String())
+	}
+}
