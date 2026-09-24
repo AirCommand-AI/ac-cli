@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
@@ -273,6 +274,33 @@ func TestJoinWaitsForAnAssignmentUnderListen(t *testing.T) {
 	}
 }
 
+// TestJoinWithListenRefusesAnAgentRunningElsewhere keeps a second session from
+// becoming the same agent: it must not wait, and must not join, while another
+// process on this machine holds the agent.
+func TestJoinWithListenRefusesAnAgentRunningElsewhere(t *testing.T) {
+	fake := &assignmentServer{pollsBeforeAssigned: 0}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+
+	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedMachine(t, client)
+	other, err := agentlock.Acquire(client.Store.Home(), "agm_0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer func() { _ = other.Release() }()
+
+	if exitCode := client.Run([]string{"join", "--agent", "Pi", "--listen"}); exitCode == 0 {
+		t.Fatal("a second session joined as an agent already running")
+	}
+	if !strings.Contains(stderr.String(), "already running in another session") {
+		t.Fatalf("refusal does not say why: %q", stderr.String())
+	}
+	if fake.joinedPath != "" {
+		t.Fatal("joined while another session held the agent")
+	}
+}
+
 func TestJoinWithNothingAssignedAndNoListenSaysHow(t *testing.T) {
 	fake := &assignmentServer{pollsBeforeAssigned: 100}
 	server := httptest.NewServer(fake.handler(t))
@@ -283,7 +311,7 @@ func TestJoinWithNothingAssignedAndNoListenSaysHow(t *testing.T) {
 	if exitCode := client.Run([]string{"join", "--agent", "Pi"}); exitCode == 0 {
 		t.Fatal("join with nothing to join succeeded")
 	}
-	if !strings.Contains(stderr.String(), "Devices tab") {
+	if !strings.Contains(stderr.String(), "account page") {
 		t.Fatalf("error does not say how to proceed: %q", stderr.String())
 	}
 	if fake.joinedPath != "" {

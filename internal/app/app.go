@@ -776,6 +776,30 @@ func (a *App) listen(arguments []string) error {
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
 	}
+	return a.listenAs(workstreamCode, agentID, nil)
+}
+
+// claimAgent takes the agent's lock: one live process per agent on this
+// machine. Two would share the stored cursor, so whichever polled first would
+// consume a notification and advance past it while the other never learned the
+// message existed; and two joins racing for one agent would each save a
+// credential over the other's.
+func (a *App) claimAgent(agentID string) (*agentlock.Lock, error) {
+	lock, err := agentlock.Acquire(a.Store.Home(), agentID)
+	if err != nil {
+		if errors.Is(err, agentlock.ErrHeld) {
+			return nil, &publicError{message: fmt.Sprintf(
+				"Agent %s is already running in another session on this machine. Stop that one before starting another.",
+				agentID)}
+		}
+		return nil, storageError(err, "Unable to claim this agent.")
+	}
+	return lock, nil
+}
+
+// listenAs runs the listener. A caller that already holds the agent's lock
+// passes it, and keeps ownership of it; otherwise the listener takes its own.
+func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lock) error {
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
@@ -783,20 +807,13 @@ func (a *App) listen(arguments []string) error {
 	if a.ListenStore == nil {
 		return &publicError{message: "Listener state storage is unavailable."}
 	}
-
-	// One listener per agent. Two would share the stored cursor, so whichever
-	// polled first would consume a notification and advance past it while the
-	// other never learned the message existed.
-	lock, err := agentlock.Acquire(a.Store.Home(), credential.AgentID)
-	if err != nil {
-		if errors.Is(err, agentlock.ErrHeld) {
-			return &publicError{message: fmt.Sprintf(
-				"This machine is already listening for agent %s. Stop that listener before starting another.",
-				credential.AgentID)}
+	if held == nil {
+		lock, err := a.claimAgent(credential.AgentID)
+		if err != nil {
+			return err
 		}
-		return storageError(err, "Unable to claim this agent for listening.")
+		defer func() { _ = lock.Release() }()
 	}
-	defer func() { _ = lock.Release() }()
 
 	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(credential.AgentID)
 	if err != nil {

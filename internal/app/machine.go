@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
@@ -682,6 +683,18 @@ func (a *App) join(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	// A joining listener claims the agent before it waits or joins, not only
+	// once it starts listening: otherwise two sessions could both wait, both
+	// join when the agent is sent, and the second would save its credential
+	// over the first's.
+	var held *agentlock.Lock
+	if listen {
+		held, err = a.claimAgent(agent.AgentID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = held.Release() }()
+	}
 	var organizationID string
 	if pickUp {
 		agent, err = a.awaitAssignment(agent, listen)
@@ -707,7 +720,7 @@ func (a *App) join(arguments []string) error {
 		// its agent back, so report the identity rather than failing.
 		a.reportAgentIdentity(listen, agent.AgentID, agent.Name, workstreamCode, socketAddressForAgentID(agent.AgentID))
 		if listen {
-			return a.listen([]string{"--workstream", workstreamCode, "--agent", agent.AgentID})
+			return a.listenAs(workstreamCode, agent.AgentID, held)
 		}
 		return nil
 	}
@@ -778,7 +791,7 @@ func (a *App) join(arguments []string) error {
 
 	a.reportAgentIdentity(listen, joined.AgentID, joined.AgentName, joined.WorkstreamCode, joined.SocketAddress)
 	if listen {
-		return a.listen([]string{"--workstream", joined.WorkstreamCode, "--agent", joined.AgentID})
+		return a.listenAs(joined.WorkstreamCode, joined.AgentID, held)
 	}
 	return nil
 }
@@ -797,7 +810,7 @@ func (a *App) awaitAssignment(agent agentSummary, listen bool) (agentSummary, er
 	}
 	if !listen {
 		return agentSummary{}, &publicError{message: fmt.Sprintf(
-			"%s has not been sent to a workstream. Send it from the dashboard's Devices tab, or name one:\n    aircom join --agent %s --org <org> --workstream <code>",
+			"%s has not been sent to a workstream. Send it from the dashboard's account page, or name one:\n    aircom join --agent %s --org <org> --workstream <code>",
 			agent.Name, agent.Name)}
 	}
 	// Standard output is the wake-line stream under --listen, so this goes to

@@ -147,7 +147,9 @@ Monitor({
 Use the overridden client path in `command` when configured, while keeping the description
 format unchanged. Do not start a duplicate if this session already has the matching monitor;
 a second listener for one agent is refused, because two would share a poll cursor and split
-messages between them. After the monitor starts, do not poll or busy-wait. Continue the
+messages between them. If the monitor reports the agent is already running in another session,
+another session on this machine is that agent: tell your operator and stop, rather than
+connecting as a different agent or retrying. After the monitor starts, do not poll or busy-wait. Continue the
 current work or end the turn; Claude Code will create a notification when the command writes
 a stdout line.
 
