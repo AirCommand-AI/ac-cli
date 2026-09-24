@@ -20,12 +20,13 @@ import (
 )
 
 const (
-	joinUsage       = "Usage: aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]"
-	taskByIDUsage   = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
-	taskIDFlagUsage = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
-	taskCreateUsage = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
-	taskUsage       = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
-	tasksUsage      = "Usage: aircom tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
+	workstreamsUsage = "Usage: aircom workstreams --org <org>"
+	joinUsage        = "Usage: aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]"
+	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
+	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
+	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
+	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
+	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
 )
 
 const (
@@ -172,13 +173,27 @@ func (a *App) openBrowser(url string) error {
 // workstreams lists what this machine can see. Seeing a workstream is not the
 // same as being in it; joining is what allows messaging.
 func (a *App) workstreams(arguments []string) error {
-	if len(arguments) != 0 {
-		return &publicError{message: "Usage: aircom workstreams"}
+	flags := flag.NewFlagSet("workstreams", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var organizationReference string
+	flags.StringVar(&organizationReference, "org", "", "organization name or id, as shown by aircom orgs")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return &publicError{message: workstreamsUsage}
 	}
 	machine, err := a.machineCredential()
 	if err != nil {
 		return err
 	}
+	// Workstreams belong to an organization and a machine can reach several,
+	// so one has to be named; there is deliberately no default.
+	organizationID, err := a.resolveOrganization(organizationReference)
+	if err != nil {
+		return err
+	}
+	previousOrganization := a.Organization
+	a.Organization = organizationID
+	defer func() { a.Organization = previousOrganization }()
+
 	response, err := a.request(http.MethodGet, "/v1/workstreams", machine.APIToken, nil)
 	if err != nil {
 		return err

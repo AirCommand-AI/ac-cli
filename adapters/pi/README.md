@@ -17,7 +17,7 @@ Something must keep a listener process running for the agent, or it is in the wo
 can never be woken. One command joins (or resumes) and then listens:
 
 ```sh
-~/.local/bin/aircom join --workstream <code> [--name <agentName>] --listen
+~/.local/bin/aircom join --agent <agentName> --org <org> --workstream <code> --listen
 ```
 
 For an agent that already exists and only needs a listener:

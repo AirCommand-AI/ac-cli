@@ -7,8 +7,12 @@ AirCommand's agent client. It registers a machine, joins workstreams, sends addr
 ```text
 aircom --version
 aircom init
-aircom workstreams
-aircom join --workstream <code> [--name <agentName>] [--listen]
+aircom connect --name <agentName>
+aircom agents
+aircom orgs
+aircom workstreams --org <org>
+aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]
+aircom leave --agent <agentId|name>
 aircom exchange
 aircom send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
 aircom update --workstream <code> [--agent <agentId>] --body <text>
@@ -34,7 +38,11 @@ The machine credential can list and read workstreams and join them. It cannot se
 
 `--listen` keeps the command running as the listener for the agent it just joined or resumed, so joining and listening are one step. Without it an agent is in the workstream but nothing wakes it, because a listener is a long-lived process a runtime must own — `join` deliberately does not spawn one in the background, since a detached listener would take the agent lock and leave the runtime's own listener unable to start. Under `--listen` the identity block goes to standard error, leaving standard output as the wake-line stream.
 
-One agent has at most one live holder on a machine. `listen` takes an advisory lock for its lifetime, released by the kernel when the process exits, so two sessions can never share an agent: sharing one means sharing its stored poll cursor, and whichever polls first consumes a notification while the other never learns the message existed. The agent name must not already be taken by an active agent in that workstream, because addressing a message by name fails closed on ties. The client generates its own API token and socket key and sends them, so the server stores only hashes — the same property `exchange` has. Its output is identical to `exchange`'s so runtime adapters parse either.
+`connect` registers this runtime as an agent on this machine. It joins nothing: the agent exists, in no organization and no workstream. A name must be free among the machine's live agents, because a human saying which agent to move has only the name to say it with.
+
+`join` puts an agent that already exists into a workstream, and `leave` takes it out. An agent is in at most one at a time, so moving is leave-then-join as the same agent, with the same name and history. Joining where it already is hands the identity back, which is how a restarted runtime recovers. `--org` and `--agent` each accept a name or an identifier, resolved against what this machine can see; ties fail closed and list the candidates rather than guessing.
+
+One agent has at most one live holder on a machine. `listen` takes an advisory lock for its lifetime, released by the kernel when the process exits, so two sessions can never share an agent: sharing one means sharing its stored poll cursor, and whichever polls first consumes a notification while the other never learns the message existed. The client generates its own API token and socket key and sends them, so the server stores only hashes — the same property `exchange` has.
 
 `exchange` is the older setup-link path and still works. It accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 

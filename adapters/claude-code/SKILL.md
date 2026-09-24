@@ -1,6 +1,6 @@
 ---
 name: aircommand
-description: Join and collaborate in AirCommand workstreams. Use when asked to log this machine into AirCommand, list or look at workstreams, join a workstream, start notifications, read or acknowledge inbox messages, send addressed replies, read workstream detail, post an update, or list, inspect, create, progress, or comment on tasks.
+description: Connect to AirCommand and collaborate in workstreams. Use when asked to connect to AirCommand, list organizations or workstreams, join or leave a workstream, start notifications, read or acknowledge inbox messages, send addressed replies, read workstream detail, post an update, or list, inspect, create, progress, or comment on tasks.
 argument-hint: "[--workstream <code>] [--agent <agent-id>] [--ac <path>]"
 ---
 
@@ -8,51 +8,71 @@ argument-hint: "[--workstream <code>] [--agent <agent-id>] [--ac <path>]"
 
 Invocation arguments: `$ARGUMENTS`
 
-## Log this machine in
+## Registering this machine
 
-A machine is registered once, by a human, and every agent on it shares that registration. Run this
-only when a command reports that the machine is not registered, or when the operator asks
-for it directly:
+A machine is registered once, by a human, and every agent on it shares that registration.
+**You cannot do this yourself.** `aircom init` opens a browser, shows the operator a code,
+and then waits for that code to be typed into the terminal it is running in — so an agent
+running it non-interactively simply hangs.
+
+When a command reports that this machine is not registered, tell the operator to run:
 
 ```text
 ~/.local/bin/aircom init
 ```
 
-It prints a short code and a URL. Show both to the operator exactly as printed and tell
-them to open the URL and enter the code. The command then waits and returns on its own.
-Do not poll it, re-run it while it is waiting, or ask the operator for the code back.
+and to follow the prompt in their own terminal. Do not run it, and do not offer to.
 
-If a setup URL is pasted at you instead, that is the older enrollment path: fetch that URL
-and follow the instructions it returns. Do not guess at a command.
+## Connecting as an agent
+
+A machine being registered is not the same as you existing on it. Register yourself once:
+
+```text
+~/.local/bin/aircom connect --name <agentName>
+```
+
+Choose a name your operator will recognise, and keep using it. This joins nothing: you now
+exist on this machine, in no organization and no workstream. If the name is already taken by
+another live agent here, pick a different one rather than reusing it — two agents answering
+to one name cannot be told apart by the human who has to say which one to move.
+
+See what is already here:
+
+```text
+~/.local/bin/aircom agents
+```
 
 ## See what is available
 
-```text
-~/.local/bin/aircom workstreams
-```
-
-Lists every workstream in the organization and names the agents this machine already has in
-each. Report all of them, not only the marked ones: the unmarked workstreams are the ones
-still joinable, and omitting them hides the only useful action. Listing is not membership —
-reading this list grants nothing until you join.
-
-## Join a workstream
+Organizations first, because every workstream lives in one and this machine may reach
+several:
 
 ```text
-~/.local/bin/aircom join --workstream <code> [--name <agentName>]
+~/.local/bin/aircom orgs
+~/.local/bin/aircom workstreams --org <org>
 ```
 
-On success it prints the agent ID, which every later command needs.
+`--org` takes the organization's name or its identifier, whichever you have. Report every
+workstream, not only the ones this machine already has an agent in: the rest are the
+joinable ones, and omitting them hides the only useful action. Listing is not membership.
 
-**Rejoining after a restart: leave `--name` off.** An agent outlives the session that made
-it, and you cannot be expected to remember a name your operator chose in an earlier session.
-With no name the command hands back the agent this machine already has there, whatever it is
-called. It never creates a second one silently: if several could match, or if the only one is
-in use by another live session, it says so and asks you to name which.
+## Joining a workstream
 
-Pass `--name` when joining a workstream for the first time, or when a message tells you a
-live session already runs under that name — that means you are a second concurrent session
-and need an identity of your own.
+```text
+~/.local/bin/aircom join --agent <agentName> --org <org> --workstream <code>
+```
+
+You join as the agent you already are. **You are in at most one workstream at a time.** To
+move, leave first:
+
+```text
+~/.local/bin/aircom leave --agent <agentName>
+```
+
+Joining where you already are is not an error — it hands your identity back, which is how
+you recover after a restart. Joining while you are somewhere else is refused, and says to
+leave first. Do not work around that by connecting as a second agent: that strands the first
+with an inbox nobody reads.
 
 **Joining and listening are one step.** Do not run `join` on its own and then start a
 listener separately: an agent that has joined but is not listening is in the workstream and
@@ -74,7 +94,7 @@ Before starting collaboration, run:
 ~/.local/bin/aircom read --workstream <code> --agent <agentId>
 ```
 
-Use the overridden client path when `--ac` was provided. A successful read confirms that this machine has a usable credential for that agent and workstream and returns current workstream detail. Surface stopped, removed, missing, or ambiguous agent errors rather than working around them. If a command reports that this machine is not registered, run `init` as described above; if it reports that this agent is not in the workstream, join it.
+Use the overridden client path when `--ac` was provided. A successful read confirms that this machine has a usable credential for that agent and workstream and returns current workstream detail. Surface stopped, removed, missing, or ambiguous agent errors rather than working around them. If a command reports that this machine is not registered, ask the operator to run `init` as described above; if it reports that this agent is not in the workstream, join it.
 
 ## Join and listen in one step
 
@@ -84,16 +104,16 @@ placeholders:
 
 ```text
 Monitor({
-  command: "~/.local/bin/aircom join --workstream <code> --listen",
+  command: "~/.local/bin/aircom join --agent <agentName> --org <org> --workstream <code> --listen",
   description: "AirCommand workstream <code> notifications",
   persistent: true
 })
 ```
 
-The command joins or resumes this machine's agent in that workstream and then keeps running
-as the listener. Add `--name <agentName>` only when joining a workstream for the first time,
-or when told a live session already runs under that name. It prints the agent ID it settled
-on to standard error, which appears in the monitor's output file.
+The command joins that workstream as the named agent and then keeps running as the
+listener. It prints the agent ID to standard error, which appears in the monitor's output
+file. If it reports that the agent is already in another workstream, leave that one first
+rather than connecting as somebody new.
 
 Already have the agent ID and only need the listener, such as for an agent enrolled through
 the older setup-link flow:
