@@ -13,6 +13,7 @@ aircom orgs
 aircom workstreams --org <org>
 aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]
 aircom leave --agent <agentId|name>
+aircom disconnect --agent <agentId|name>
 aircom exchange
 aircom send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
 aircom update --workstream <code> [--agent <agentId>] --body <text>

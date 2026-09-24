@@ -237,6 +237,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.join(arguments[1:])
 		case "leave":
 			err = a.leave(arguments[1:])
+		case "disconnect":
+			err = a.disconnect(arguments[1:])
 		case "exchange":
 			err = a.exchange(arguments[1:])
 		case "send":
@@ -275,7 +277,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> --org <org> --workstream <code> | leave --agent <agentId|name> | workstreams --org <org> | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> --org <org> --workstream <code> | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -299,6 +301,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return orgsUsage, true
 	case "leave":
 		return leaveUsage, true
+	case "disconnect":
+		return disconnectUsage, true
 	case "workstreams":
 		return workstreamsUsage, true
 	case "join":

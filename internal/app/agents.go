@@ -41,10 +41,11 @@ type listOrganizationsResponse struct {
 }
 
 const (
-	connectUsage = "Usage: aircom connect --name <agentName>"
-	agentsUsage  = "Usage: aircom agents"
-	orgsUsage    = "Usage: aircom orgs"
-	leaveUsage   = "Usage: aircom leave --agent <agentId|name>"
+	connectUsage    = "Usage: aircom connect --name <agentName>"
+	agentsUsage     = "Usage: aircom agents"
+	orgsUsage       = "Usage: aircom orgs"
+	leaveUsage      = "Usage: aircom leave --agent <agentId|name>"
+	disconnectUsage = "Usage: aircom disconnect --agent <agentId|name>"
 )
 
 // connect registers this runtime as an agent on this machine.
@@ -305,5 +306,35 @@ func (a *App) leave(arguments []string) error {
 		return &publicError{message: "Unable to take that agent out of its workstream."}
 	}
 	fmt.Fprintf(a.outputWriter(), "%s is no longer in a workstream.\n", agent.Name)
+	return nil
+}
+
+// disconnect removes an agent from this machine for good. If it is in a
+// workstream it leaves first, so no roster entry or credential is left behind,
+// and its name becomes free to reuse.
+func (a *App) disconnect(arguments []string) error {
+	flags := flag.NewFlagSet("disconnect", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var agentReference string
+	flags.StringVar(&agentReference, "agent", "", "agent id or name")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return &publicError{message: disconnectUsage}
+	}
+	machine, err := a.machineCredential()
+	if err != nil {
+		return err
+	}
+	agent, err := a.resolveAgent(agentReference)
+	if err != nil {
+		return err
+	}
+	response, err := a.request(http.MethodDelete, "/v1/agents/"+agent.AgentID, machine.APIToken, nil)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		return &publicError{message: "Unable to remove that agent."}
+	}
+	fmt.Fprintf(a.outputWriter(), "%s has been removed from this machine.\n", agent.Name)
 	return nil
 }

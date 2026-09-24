@@ -69,6 +69,10 @@ move, leave first:
 ~/.local/bin/aircom leave --agent <agentName>
 ```
 
+To remove yourself from this machine entirely — leaving any workstream first and freeing
+your name — run `~/.local/bin/aircom disconnect --agent <agentName>`. Only do this when the
+operator asks; an agent that disconnects is gone, not paused.
+
 Joining where you already are is not an error — it hands your identity back, which is how
 you recover after a restart. Joining while you are somewhere else is refused, and says to
 leave first. Do not work around that by connecting as a second agent: that strands the first
