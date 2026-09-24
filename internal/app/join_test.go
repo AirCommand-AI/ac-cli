@@ -185,3 +185,120 @@ func TestRemovedAgentsAreHiddenAndDoNotCollide(t *testing.T) {
 		t.Fatalf("a removed agent was listed: %q", stdout.String())
 	}
 }
+
+// assignmentServer serves an agent whose assignment appears after a number of
+// polls, and records the join it then receives.
+type assignmentServer struct {
+	pollsBeforeAssigned int
+	polls               int
+	joinedPath          string
+	joinedOrganization  string
+}
+
+func (s *assignmentServer) handler(t *testing.T) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/agents":
+			agent := agentSummary{AgentID: "agm_0123456789abcdef0123456789abcdef", Name: "Pi", Status: "connected"}
+			if s.polls >= s.pollsBeforeAssigned {
+				agent.AssignedOrganizationID = "org_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+				agent.AssignedWorkstreamCode = "694"
+			}
+			s.polls++
+			body, _ := json.Marshal(listAgentsResponse{Agents: []agentSummary{agent}})
+			_, _ = writer.Write(body)
+		case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/v1/agents/"):
+			s.joinedPath = request.URL.Path
+			s.joinedOrganization = request.Header.Get(organizationHeader)
+			writer.WriteHeader(http.StatusCreated)
+			_, _ = writer.Write([]byte(`{"agentId":"agm_0123456789abcdef0123456789abcdef","agentName":"Pi","workstreamCode":"694","socketAddress":"ac:agm_0123456789abcdef0123456789abcdef","generation":1}`))
+		default:
+			t.Errorf("unexpected %s %s", request.Method, request.URL.Path)
+		}
+	})
+}
+
+func TestJoinPicksUpAnAssignmentFromTheDashboard(t *testing.T) {
+	fake := &assignmentServer{pollsBeforeAssigned: 0}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+
+	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedMachine(t, client)
+	if exitCode := client.Run([]string{"join", "--agent", "Pi"}); exitCode != 0 {
+		t.Fatalf("join exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if fake.joinedPath != "/v1/agents/agm_0123456789abcdef0123456789abcdef/workstreams/694" {
+		t.Fatalf("joined %q; want the assigned workstream", fake.joinedPath)
+	}
+	// The organization comes from the assignment, sent as the header the
+	// server verifies.
+	if fake.joinedOrganization != "org_aaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("organization header = %q", fake.joinedOrganization)
+	}
+}
+
+// TestJoinWaitsForAnAssignmentUnderListen is what lets a click in the
+// dashboard take effect without anyone typing a command.
+func TestJoinWaitsForAnAssignmentUnderListen(t *testing.T) {
+	fake := &assignmentServer{pollsBeforeAssigned: 3}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+	storedMachine(t, client)
+	var slept int
+	client.ListenSleep = func(time.Duration) { slept++ }
+	client.ListenPollLimit = 10
+
+	// Only the wait is under test here, so stop before listening starts.
+	agent, err := client.resolveAgent("Pi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.awaitAssignment(agent, true)
+	if err != nil {
+		t.Fatalf("awaitAssignment: %v", err)
+	}
+	if got.AssignedWorkstreamCode != "694" || slept == 0 {
+		t.Fatalf("got %+v after %d waits; want the assignment after waiting", got, slept)
+	}
+	if !strings.Contains(stderr.String(), "Waiting for Pi") {
+		t.Fatalf("waiting was not reported on stderr: %q", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "Waiting") {
+		t.Fatalf("waiting message reached the wake-line stream: %q", stdout.String())
+	}
+}
+
+func TestJoinWithNothingAssignedAndNoListenSaysHow(t *testing.T) {
+	fake := &assignmentServer{pollsBeforeAssigned: 100}
+	server := httptest.NewServer(fake.handler(t))
+	defer server.Close()
+
+	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11))
+	storedMachine(t, client)
+	if exitCode := client.Run([]string{"join", "--agent", "Pi"}); exitCode == 0 {
+		t.Fatal("join with nothing to join succeeded")
+	}
+	if !strings.Contains(stderr.String(), "Devices tab") {
+		t.Fatalf("error does not say how to proceed: %q", stderr.String())
+	}
+	if fake.joinedPath != "" {
+		t.Fatal("joined without an assignment")
+	}
+}
+
+func TestJoinNamingOnlyOneOfOrgAndWorkstreamIsRefused(t *testing.T) {
+	client, _, _ := testApp(t, "http://127.0.0.1:1", "", deterministicRandom(0x11))
+	for _, arguments := range [][]string{
+		{"join", "--agent", "Pi", "--org", "Acme"},
+		{"join", "--agent", "Pi", "--workstream", "694"},
+	} {
+		if exitCode := client.Run(arguments); exitCode == 0 {
+			t.Fatalf("%v succeeded; want a usage error", arguments)
+		}
+	}
+}

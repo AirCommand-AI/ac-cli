@@ -25,6 +25,9 @@ type agentSummary struct {
 	DeviceID       string `json:"deviceId"`
 	OrganizationID string `json:"organizationId"`
 	WorkstreamCode string `json:"workstreamCode"`
+	// Where a human has sent this agent from the dashboard, not yet joined.
+	AssignedOrganizationID string `json:"assignedOrganizationId"`
+	AssignedWorkstreamCode string `json:"assignedWorkstreamCode"`
 }
 
 type listAgentsResponse struct {
@@ -112,8 +115,11 @@ func (a *App) agents(arguments []string) error {
 	}
 	for _, agent := range list {
 		where := "not in a workstream"
-		if strings.TrimSpace(agent.WorkstreamCode) != "" {
+		switch {
+		case strings.TrimSpace(agent.WorkstreamCode) != "":
 			where = "workstream " + agent.WorkstreamCode
+		case strings.TrimSpace(agent.AssignedWorkstreamCode) != "":
+			where = "sent to workstream " + agent.AssignedWorkstreamCode + "; run aircom join --agent " + agent.Name + " --listen"
 		}
 		fmt.Fprintf(a.outputWriter(), "%-20s %-40s %s\n", agent.Name, agent.AgentID, where)
 	}

@@ -62,8 +62,22 @@ joinable ones, and omitting them hides the only useful action. Listing is not me
 ~/.local/bin/aircom join --agent <agentName> --org <org> --workstream <code>
 ```
 
-You join as the agent you already are. **You are in at most one workstream at a time.** To
-move, leave first:
+You join as the agent you already are.
+
+**Your operator can also send you from the dashboard.** Leave `--org` and `--workstream` off
+and join goes wherever you were sent. Under `--listen` it waits for that if you have not been
+sent anywhere yet, then joins and keeps listening — so the Monitor form below with no
+workstream is how to be available for your operator to place:
+
+```text
+Monitor({
+  command: "~/.local/bin/aircom join --agent <agentName> --listen",
+  description: "AirCommand agent <agentName>: waiting to be sent, then notifications",
+  persistent: true
+})
+```
+
+**You are in at most one workstream at a time.** To move, leave first:
 
 ```text
 ~/.local/bin/aircom leave --agent <agentName>

@@ -21,7 +21,7 @@ import (
 
 const (
 	workstreamsUsage = "Usage: aircom workstreams --org <org>"
-	joinUsage        = "Usage: aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]"
+	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
 	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
 	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
 	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
@@ -658,11 +658,17 @@ func (a *App) join(arguments []string) error {
 		return &publicError{message: joinUsage}
 	}
 	workstreamCode = strings.TrimSpace(workstreamCode)
-	if workstreamCode == "" {
+	organizationReference = strings.TrimSpace(organizationReference)
+	// With neither, join goes wherever a human has sent this agent from the
+	// dashboard. Naming only one of them is a mistake rather than a request.
+	pickUp := workstreamCode == "" && organizationReference == ""
+	if !pickUp && (workstreamCode == "" || organizationReference == "") {
 		return &publicError{message: joinUsage}
 	}
-	if err := validateWorkstreamCode(workstreamCode); err != nil {
-		return err
+	if !pickUp {
+		if err := validateWorkstreamCode(workstreamCode); err != nil {
+			return err
+		}
 	}
 	machine, err := a.machineCredential()
 	if err != nil {
@@ -672,13 +678,29 @@ func (a *App) join(arguments []string) error {
 		return storageError(err, "Credential storage is unavailable.")
 	}
 
-	organizationID, err := a.resolveOrganization(organizationReference)
-	if err != nil {
-		return err
-	}
 	agent, err := a.resolveAgent(agentReference)
 	if err != nil {
 		return err
+	}
+	var organizationID string
+	if pickUp {
+		agent, err = a.awaitAssignment(agent, listen)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(agent.WorkstreamCode) != "" {
+			// Already in one — the assignment was completed earlier, or the
+			// agent was joined some other way. Hand the identity back.
+			workstreamCode = agent.WorkstreamCode
+		} else {
+			organizationID = agent.AssignedOrganizationID
+			workstreamCode = agent.AssignedWorkstreamCode
+		}
+	} else {
+		organizationID, err = a.resolveOrganization(organizationReference)
+		if err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(agent.WorkstreamCode) == workstreamCode {
 		// Already there. Re-running join is how a restarted runtime asks for
@@ -759,6 +781,44 @@ func (a *App) join(arguments []string) error {
 		return a.listen([]string{"--workstream", joined.WorkstreamCode, "--agent", joined.AgentID})
 	}
 	return nil
+}
+
+// assignmentPollInterval is how often a waiting agent checks whether it has
+// been sent somewhere. The dashboard shows the agent as waiting meanwhile.
+const assignmentPollInterval = 5 * time.Second
+
+// awaitAssignment returns the agent once it has somewhere to go. Under --listen
+// it waits for a human to send it from the dashboard, which is what lets a
+// click there take effect without anyone typing a command; without --listen
+// there is nothing to wait in, so it says how to proceed instead.
+func (a *App) awaitAssignment(agent agentSummary, listen bool) (agentSummary, error) {
+	if agentHasSomewhereToBe(agent) {
+		return agent, nil
+	}
+	if !listen {
+		return agentSummary{}, &publicError{message: fmt.Sprintf(
+			"%s has not been sent to a workstream. Send it from the dashboard's Devices tab, or name one:\n    aircom join --agent %s --org <org> --workstream <code>",
+			agent.Name, agent.Name)}
+	}
+	// Standard output is the wake-line stream under --listen, so this goes to
+	// standard error like the identity block does.
+	fmt.Fprintf(a.errorWriter(), "Waiting for %s to be sent to a workstream from the dashboard.\n", agent.Name)
+	for poll := 0; !a.listenLimitReached(poll); poll++ {
+		a.sleepForListen(assignmentPollInterval)
+		latest, err := a.resolveAgent(agent.AgentID)
+		if err != nil {
+			return agentSummary{}, err
+		}
+		if agentHasSomewhereToBe(latest) {
+			return latest, nil
+		}
+	}
+	return agentSummary{}, &publicError{message: fmt.Sprintf("%s was not sent to a workstream.", agent.Name)}
+}
+
+func agentHasSomewhereToBe(agent agentSummary) bool {
+	return strings.TrimSpace(agent.WorkstreamCode) != "" ||
+		(strings.TrimSpace(agent.AssignedWorkstreamCode) != "" && strings.TrimSpace(agent.AssignedOrganizationID) != "")
 }
 
 // reportAgentIdentity writes the identity block. Under --listen it goes to
