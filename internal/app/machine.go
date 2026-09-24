@@ -23,8 +23,8 @@ import (
 const (
 	workstreamsUsage = "Usage: aircom workstreams --org <org>"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
-	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
-	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]"
+	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
+	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
 	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
 	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
 	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
@@ -262,7 +262,9 @@ func (a *App) taskByID(arguments []string) error {
 	var agentID string
 	var status string
 	var comment string
+	var assignee string
 	flags.StringVar(&explicitTaskID, "id", "", "explicit task ID")
+	flags.StringVar(&assignee, "assignee", "", "hand the task to this agent")
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&status, "status", "", "new task status")
@@ -281,9 +283,13 @@ func (a *App) taskByID(arguments []string) error {
 		return &publicError{message: taskUsage}
 	}
 	commentSet := false
+	assigneeSet := false
 	flags.Visit(func(current *flag.Flag) {
-		if current.Name == "comment" {
+		switch current.Name {
+		case "comment":
 			commentSet = true
+		case "assignee":
+			assigneeSet = true
 		}
 	})
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
@@ -298,6 +304,12 @@ func (a *App) taskByID(arguments []string) error {
 	if commentSet && status != "" {
 		return &publicError{message: "--comment and --status cannot be used together; run them as separate commands."}
 	}
+	if assigneeSet && strings.TrimSpace(assignee) == "" {
+		return &publicError{message: "--assignee must name an agent."}
+	}
+	if assigneeSet && (commentSet || status != "") {
+		return &publicError{message: "--assignee cannot be combined with --status or --comment; run them as separate commands."}
+	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
@@ -308,6 +320,9 @@ func (a *App) taskByID(arguments []string) error {
 	}
 	if status != "" {
 		return a.setTaskStatus(workstreamCode, taskID, status, credential)
+	}
+	if assigneeSet {
+		return a.setTaskAssignee(workstreamCode, taskID, strings.TrimSpace(assignee), credential)
 	}
 
 	response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
@@ -512,6 +527,32 @@ func (a *App) setTaskStatus(workstreamCode string, taskID string, status string,
 	return nil
 }
 
+// setTaskAssignee hands a task to another agent in the workstream. The server
+// records who handed it over and posts that as an update on the task.
+func (a *App) setTaskAssignee(workstreamCode string, taskID string, assignee string, credential credentials.Credential) error {
+	payload, err := json.Marshal(taskAssigneeRequest{Assignee: assignee})
+	if err != nil {
+		return &publicError{message: "Unable to prepare the task reassignment."}
+	}
+	path := "/agent/v1/workstreams/" + workstreamCode + "/tasks/" + url.PathEscape(taskID)
+	response, err := a.messageAPIRequest(http.MethodPatch, path, credential.APIToken, payload)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
+		return taskAssigneeError(response.status, response.body, workstreamCode, protectedTaskID)
+	}
+	updated, err := decodeTaskResponse(response.body)
+	if err != nil || updated.ID != taskID {
+		return &publicError{message: "The workstream service returned an invalid task reassignment response."}
+	}
+	if _, err := io.WriteString(a.outputWriter(), formatTaskState(updated, credential.APIToken, credential.SocketKey)); err != nil {
+		return &publicError{message: "Unable to write task output."}
+	}
+	return nil
+}
+
 func formatTaskState(task taskListItem, protected ...string) string {
 	safe := func(value string) string { return safeMetadata(value, protected...) }
 	orDash := func(value string) string {
@@ -527,6 +568,12 @@ func formatTaskState(task taskListItem, protected ...string) string {
 	fmt.Fprintf(&output, "Assignee: %s\n", orDash(task.Assignee))
 	fmt.Fprintf(&output, "Created: %s\n", safe(task.CreatedAt))
 	fmt.Fprintf(&output, "Updated: %s\n", safe(task.UpdatedAt))
+	if task.CreatedBy != nil {
+		fmt.Fprintf(&output, "Created by: %s\n", safe(task.CreatedBy.Name))
+	}
+	if task.AssignedBy != nil && task.AssignedAt != "" {
+		fmt.Fprintf(&output, "Assigned by: %s at %s\n", safe(task.AssignedBy.Name), safe(task.AssignedAt))
+	}
 	return output.String()
 }
 

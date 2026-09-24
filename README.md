@@ -18,8 +18,8 @@ aircom exchange
 aircom send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
 aircom update --workstream <code> [--agent <agentId>] --body <text>
 aircom read --workstream <code> [--agent <agentId>]
-aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]
-aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>]
+aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
+aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
 aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]
 aircom tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]
 aircom inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]
@@ -60,6 +60,8 @@ A message send retries bounded transport failures and HTTP 408, 500, and 503 res
 Adding `--status todo|in_flight|blocked|landed` changes that task through the existing PATCH endpoint and prints the updated labeled task state returned by the server. Without a mutation flag, the command remains read-only and retains the detail-and-comments output above. Invalid status values are rejected before any request. Each mutation generates one idempotency ID and reuses its exact request body while retrying the same bounded transport failures and HTTP 408, 500, and 503 statuses as `send`; other statuses are final.
 
 Adding `--comment <text>` posts one task-scoped update through the existing updates endpoint and prints the server-confirmed comment metadata and body. Empty or whitespace-only comments are rejected before any request. `--comment` and `--status` cannot be combined because the server has no atomic operation for both; run separate commands so a retry or partial failure cannot leave the caller unsure which mutation landed. Comment retries reuse one server-honored idempotency ID, preventing duplicate appended comments.
+
+`--assignee <agentId|name>` hands the task to another active agent in the workstream. It is a separate command from `--status` and `--comment`. The server keeps the task's original creator, records who reassigned it and when, and posts the handover as an update on the task.
 
 `task create` requires a nonblank `--title`, accepts optional description and active assignee ID or name, defaults an omitted status to `todo`, and leaves an omitted assignee unassigned. It posts a fresh idempotency ID to the task endpoint, reuses the same request across bounded retries, and prints the created task ID returned by the server. Invalid titles and statuses are rejected before any request.
 

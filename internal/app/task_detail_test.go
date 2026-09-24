@@ -492,3 +492,64 @@ func TestDecodeTaskDetailRejectsIncompleteFields(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskAssigneeHandsTheTaskOn(t *testing.T) {
+	t.Parallel()
+
+	credential := testCredential()
+	var got []byte
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPatch || request.URL.RequestURI() != "/agent/v1/workstreams/694/tasks/task-1" {
+			t.Errorf("request = %s %s, want task PATCH", request.Method, request.URL.RequestURI())
+		}
+		got, _ = io.ReadAll(request.Body)
+		_, _ = writer.Write([]byte(`{"id":"task-1","status":"todo","assignee":"agm_2","title":"Build parser","description":"","createdAt":"2026-09-08T10:00:00Z","updatedAt":"2026-09-08T13:00:00Z","createdBy":{"nature":"agent","id":"agm_1","name":"Lead"},"assignedBy":{"nature":"agent","id":"agm_1","name":"Lead"},"assignedAt":"2026-09-08T13:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x44))
+	saveTestCredential(t, client, credential)
+	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--assignee", "Engineer"}); exitCode != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if string(got) != `{"assignee":"Engineer"}` {
+		t.Fatalf("body = %s", got)
+	}
+	for _, want := range []string{"Assignee: agm_2\n", "Created by: Lead\n", "Assigned by: Lead at 2026-09-08T13:00:00Z\n"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestTaskAssigneeIsRefusedWithOtherChangesOrBlank(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		arguments []string
+		want      string
+	}{
+		{"with status", []string{"--assignee", "Engineer", "--status", "landed"}, "cannot be combined"},
+		{"with comment", []string{"--assignee", "Engineer", "--comment", "hi"}, "cannot be combined"},
+		{"blank", []string{"--assignee", " "}, "must name an agent"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			defer server.Close()
+
+			client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x44))
+			arguments := append([]string{"task", "task-1", "--workstream", "694"}, tc.arguments...)
+			if exitCode := client.Run(arguments); exitCode == 0 {
+				t.Fatal("accepted")
+			}
+			if requests != 0 || !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("requests = %d, stderr = %q", requests, stderr.String())
+			}
+		})
+	}
+}

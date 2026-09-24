@@ -103,6 +103,10 @@ type taskStatusRequest struct {
 	IdempotencyID string `json:"idempotencyId"`
 }
 
+type taskAssigneeRequest struct {
+	Assignee string `json:"assignee"`
+}
+
 type taskCommentRequest struct {
 	Body          string `json:"body"`
 	TaskID        string `json:"taskId"`
@@ -130,13 +134,23 @@ type taskListEnvelope struct {
 }
 
 type taskListItem struct {
-	ID          string `json:"id"`
-	Status      string `json:"status"`
-	Assignee    string `json:"assignee"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	ID          string     `json:"id"`
+	Status      string     `json:"status"`
+	Assignee    string     `json:"assignee"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	CreatedAt   string     `json:"createdAt"`
+	UpdatedAt   string     `json:"updatedAt"`
+	CreatedBy   *taskActor `json:"createdBy,omitempty"`
+	AssignedBy  *taskActor `json:"assignedBy,omitempty"`
+	AssignedAt  string     `json:"assignedAt,omitempty"`
+}
+
+// taskActor is who created or changed a task, as the server recorded them.
+type taskActor struct {
+	Nature string `json:"nature"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
 }
 
 type taskCommentItem struct {
@@ -277,7 +291,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -1331,6 +1345,24 @@ func taskStatusError(status int, body []byte, workstreamCode string, taskID stri
 		return &publicError{message: fmt.Sprintf("Task %s status may have changed, but AirCommand remained unavailable after retries (HTTP 503).", singleLine(taskID))}
 	default:
 		return &publicError{message: fmt.Sprintf("AirCommand task status change failed (HTTP %d).", status)}
+	}
+}
+
+func taskAssigneeError(status int, body []byte, workstreamCode string, taskID string) error {
+	code := responseCode(body)
+	switch {
+	case status == http.StatusConflict && code == "TaskAssigneeAmbiguous":
+		return &publicError{message: "More than one agent has that name; use its agent ID."}
+	case status == http.StatusUnprocessableEntity && code == "TaskAssigneeNotFound":
+		return &publicError{message: "No active agent in this workstream has that ID or name."}
+	case status == http.StatusConflict && code == "WorkstreamPaused":
+		return &publicError{message: fmt.Sprintf("Workstream %s is paused; task reassignment rejected.", workstreamCode)}
+	case status == http.StatusUnauthorized:
+		return &publicError{message: fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)}
+	case status == http.StatusNotFound:
+		return &publicError{message: fmt.Sprintf("Task %s was not found in workstream %s.", singleLine(taskID), workstreamCode)}
+	default:
+		return &publicError{message: fmt.Sprintf("AirCommand task reassignment failed (HTTP %d).", status)}
 	}
 }
 

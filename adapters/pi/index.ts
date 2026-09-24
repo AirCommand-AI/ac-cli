@@ -33,9 +33,10 @@ Use the selected CLI path and enrolled workstream and agent values with these ta
     aircom task <taskId> --workstream <code> --agent <agentId>
     aircom task <taskId> --workstream <code> --agent <agentId> --status <todo|in_flight|blocked|landed>
     aircom task <taskId> --workstream <code> --agent <agentId> --comment <text>
+    aircom task <taskId> --workstream <code> --agent <agentId> --assignee <agentId|name>
     aircom task create --workstream <code> --agent <agentId> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>]
 
-A leading task ID of create selects the create subcommand. Use aircom task --id create --workstream <code> --agent <agentId> to address a task whose literal ID is create. Status and comment mutations are separate commands and must not be combined.
+A leading task ID of create selects the create subcommand. Use aircom task --id create --workstream <code> --agent <agentId> to address a task whose literal ID is create. Status, comment and assignee changes are separate commands and must not be combined. Reassign a task with --assignee instead of creating a duplicate; AirCommand records who handed it over and posts that on the task.
 
 When the operator has authorized implementing a fetched assignment, follow this loop in order:
 
