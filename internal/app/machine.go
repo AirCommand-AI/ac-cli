@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	workstreamsUsage = "Usage: aircom workstreams --org <org>"
+	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>]"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
 	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
 	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
@@ -177,7 +177,9 @@ func (a *App) workstreams(arguments []string) error {
 	flags := flag.NewFlagSet("workstreams", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var organizationReference string
+	var agentReference string
 	flags.StringVar(&organizationReference, "org", "", "organization name or id, as shown by aircom orgs")
+	flags.StringVar(&agentReference, "agent", "", "the agent asking, by name or id, so its workstreams are marked as yours")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return &publicError{message: workstreamsUsage}
 	}
@@ -190,6 +192,14 @@ func (a *App) workstreams(arguments []string) error {
 	organizationID, err := a.resolveOrganization(organizationReference)
 	if err != nil {
 		return err
+	}
+	// The listing answers for the whole machine. Only when the caller says which
+	// agent it is can one of them be called "you".
+	var caller agentSummary
+	if strings.TrimSpace(agentReference) != "" {
+		if caller, err = a.resolveAgent(agentReference); err != nil {
+			return err
+		}
 	}
 	previousOrganization := a.Organization
 	a.Organization = organizationID
@@ -210,7 +220,7 @@ func (a *App) workstreams(arguments []string) error {
 		return &publicError{message: "The AirCommand service returned an invalid response."}
 	}
 	// Name any agent stored before the name was kept locally, so the listing
-	// says "you are Pi here" rather than printing a bare identifier.
+	// names agents rather than printing bare identifiers.
 	for _, workstream := range list.Workstreams {
 		a.backfillAgentNames(workstream.Code)
 	}
@@ -222,19 +232,61 @@ func (a *App) workstreams(arguments []string) error {
 	}
 	// Every workstream is listed, including ones with no local agent -- those
 	// are the joinable ones, and omitting them hides the only useful action.
+	marked := false
 	for _, workstream := range list.Workstreams {
-		marker := " "
-		suffix := ""
-		if names := local[workstream.Code]; len(names) > 0 {
-			marker = "*"
-			suffix = "  (you are " + strings.Join(names, ", ") + " here)"
+		marker, suffix := workstreamMembership(local[workstream.Code], caller.AgentID)
+		if marker == "*" {
+			marked = true
 		}
 		fmt.Fprintf(writer, "%s %-8s %s%s\n", marker, workstream.Code, workstream.Name, suffix)
 	}
-	if len(local) > 0 {
-		fmt.Fprintln(writer, "\n* this machine already has an agent here; join is only needed for the unmarked ones")
-	}
+	fmt.Fprint(writer, workstreamsFootnote(caller, marked, len(local) > 0))
 	return nil
+}
+
+// workstreamMembership describes which of this machine's agents are in one
+// workstream. Without a caller the "*" marks any agent from this machine; with
+// one it marks only the caller, and the others are named as machine-mates.
+func workstreamMembership(agents []localAgent, callerID string) (string, string) {
+	var you string
+	var others []string
+	for _, agent := range agents {
+		if callerID != "" && agent.ID == callerID {
+			you = agent.Name
+			continue
+		}
+		others = append(others, agent.Name)
+	}
+	onMachine := strings.Join(others, ", ")
+	switch {
+	case you != "" && len(others) > 0:
+		return "*", "  (you are " + you + " here; also on this machine: " + onMachine + ")"
+	case you != "":
+		return "*", "  (you are " + you + " here)"
+	case len(others) > 0 && callerID == "":
+		return "*", "  (on this machine: " + onMachine + ")"
+	case len(others) > 0:
+		return " ", "  (on this machine: " + onMachine + ")"
+	default:
+		return " ", ""
+	}
+}
+
+// workstreamsFootnote explains the marker. Every agent joins on its own, so a
+// workstream holding another agent from this machine is still one the caller
+// may need to join.
+func workstreamsFootnote(caller agentSummary, marked, anyLocal bool) string {
+	join := "Each agent joins on its own: aircom join --agent <name> --org <org> --workstream <code>"
+	switch {
+	case caller.AgentID != "" && marked:
+		return "\n* marks workstreams " + caller.Name + " is in. " + join + "\n"
+	case caller.AgentID != "":
+		return "\n" + caller.Name + " is not in any of these workstreams. " + join + "\n"
+	case anyLocal:
+		return "\n* marks workstreams with an agent from this machine. " + join + "\n"
+	default:
+		return ""
+	}
 }
 
 // task gives a leading literal "create" subcommand precedence. The --id form
@@ -666,22 +718,28 @@ func emptyTaskListMessage(workstreamCode string, status string, mine bool) strin
 // localAgentsByWorkstream names the agents this machine already owns, keyed by
 // workstream. Naming them rather than only marking the row is what lets an
 // agent recognise its own prior identity instead of inferring it.
-func (a *App) localAgentsByWorkstream() map[string][]string {
-	names := map[string][]string{}
+func (a *App) localAgentsByWorkstream() map[string][]localAgent {
+	agents := map[string][]localAgent{}
 	if a.Store == nil {
-		return names
+		return agents
 	}
 	for _, agent := range a.Store.ListLocalAgents() {
 		name := strings.TrimSpace(agent.AgentName)
 		if name == "" {
 			name = agent.AgentID
 		}
-		names[agent.WorkstreamCode] = append(names[agent.WorkstreamCode], name)
+		agents[agent.WorkstreamCode] = append(agents[agent.WorkstreamCode], localAgent{ID: agent.AgentID, Name: name})
 	}
-	for code := range names {
-		sort.Strings(names[code])
+	for code := range agents {
+		sort.Slice(agents[code], func(i, j int) bool { return agents[code][i].Name < agents[code][j].Name })
 	}
-	return names
+	return agents
+}
+
+// localAgent is one agent on this machine, as a workstream listing names it.
+type localAgent struct {
+	ID   string
+	Name string
 }
 
 // join creates an agent in a workstream and activates it. Its output matches

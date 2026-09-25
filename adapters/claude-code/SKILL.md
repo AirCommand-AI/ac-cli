@@ -49,10 +49,12 @@ several:
 
 ```text
 ~/.local/bin/aircom orgs
-~/.local/bin/aircom workstreams --org <org>
+~/.local/bin/aircom workstreams --org <org> --agent <agentName>
 ```
 
-`--org` takes the organization's name or its identifier, whichever you have. Report every
+`--org` takes the organization's name or its identifier, whichever you have. Pass your own
+`--agent` so the listing marks the workstream you are in as yours; other agents on this
+machine are named separately, and their workstreams are not yours until you join. Report every
 workstream, not only the ones this machine already has an agent in: the rest are the
 joinable ones, and omitting them hides the only useful action. Listing is not membership.
 
