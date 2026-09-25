@@ -393,23 +393,17 @@ func TestListenRetriesVisibleHTTPFailuresWithSameCursorAndBackoff(t *testing.T) 
 	}
 	client, stdout, stderr := listenerApp(server.URL, home)
 	client.ListenPollLimit = 4
-	var sleeps []time.Duration
-	client.ListenSleep = func(delay time.Duration) { sleeps = append(sleeps, delay) }
+	clock := attachListenClock(client)
 	if exitCode := client.Run([]string{"listen", "--workstream", "694"}); exitCode != 0 {
 		t.Fatalf("listen exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	want := strings.Join([]string{
-		"[AirCommand] Lost connection: AirCommand notification request failed (HTTP 408)",
-		"[AirCommand] Lost connection: AirCommand notification request failed (HTTP 500)",
-		"[AirCommand] Lost connection: AirCommand notification feed unavailable (HTTP 503)",
-		"[AirCommand] Connection restored.",
-		"",
-	}, "\n")
-	if got := stdout.String(); got != want {
-		t.Fatalf("retry output = %q, want %q", got, want)
+	// Three failures over 35 seconds is a brief outage: it is retried, but it
+	// wakes nobody.
+	if got := stdout.String(); got != "" {
+		t.Fatalf("retry output = %q, want nothing for a brief outage", got)
 	}
-	if wantSleeps := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second}; !reflect.DeepEqual(sleeps, wantSleeps) {
-		t.Fatalf("retry sleeps = %v, want %v", sleeps, wantSleeps)
+	if wantSleeps := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second}; !reflect.DeepEqual(clock.sleeps, wantSleeps) {
+		t.Fatalf("retry sleeps = %v, want %v", clock.sleeps, wantSleeps)
 	}
 	persisted, found, err := stateStore.LoadCursor(testCredential().AgentID, testCredential().WorkstreamKey())
 	if err != nil {
@@ -478,7 +472,7 @@ func TestListenDoesNotRetryKnownFinalStatusWhenResponseBodyReadFails(t *testing.
 	}
 }
 
-func TestListenPrintsNetworkFailureAndRecovery(t *testing.T) {
+func TestListenStaysQuietThroughABriefNetworkFailure(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -496,17 +490,15 @@ func TestListenPrintsNetworkFailureAndRecovery(t *testing.T) {
 	client, stdout, stderr := listenerApp(server.URL, home)
 	client.ListenPollLimit = 2
 	client.HTTPClient = &http.Client{Transport: &failOnceTransport{base: http.DefaultTransport}}
-	var sleeps []time.Duration
-	client.ListenSleep = func(delay time.Duration) { sleeps = append(sleeps, delay) }
+	clock := attachListenClock(client)
 	if exitCode := client.Run([]string{"listen", "--workstream", "694"}); exitCode != 0 {
 		t.Fatalf("listen exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	want := "[AirCommand] Lost connection: simulated transport failure\n[AirCommand] Connection restored.\n"
-	if got := stdout.String(); got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+	if got := stdout.String(); got != "" {
+		t.Fatalf("stdout = %q, want nothing for one failed poll", got)
 	}
-	if len(sleeps) != 1 || sleeps[0] != 5*time.Second {
-		t.Fatalf("network backoff = %v, want [5s]", sleeps)
+	if len(clock.sleeps) != 1 || clock.sleeps[0] != 5*time.Second {
+		t.Fatalf("network backoff = %v, want [5s]", clock.sleeps)
 	}
 }
 

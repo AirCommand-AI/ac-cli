@@ -46,6 +46,9 @@ type App struct {
 	RetryDelay      func(attempt int)
 	ListenPollLimit int
 	ListenSleep     func(delay time.Duration)
+	// ListenNow reads the clock the listener measures outages by; tests drive
+	// it with ListenSleep instead of waiting.
+	ListenNow func() time.Time
 	// OpenBrowser lets tests observe the page aircom init opens instead of
 	// launching a real browser.
 	OpenBrowser func(url string) error
@@ -834,7 +837,7 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 		return storageError(err, "Unable to read the listener cursor state.")
 	}
 
-	disconnected := false
+	var outage listenOutage
 	networkFailures := 0
 	senderNamesLoaded := false
 	var senderNames map[senderIdentity]string
@@ -866,10 +869,9 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 					reason = "network error"
 				}
 			}
-			if err := a.writeActionLine("Lost connection: " + reason); err != nil {
+			if err := a.noteListenFailure(&outage, reason); err != nil {
 				return err
 			}
-			disconnected = true
 			networkFailures++
 			if a.listenLimitReached(poll) {
 				return nil
@@ -878,10 +880,9 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 			continue
 		}
 		if notificationStatusRetryable(response.status) {
-			if err := a.writeActionLine("Lost connection: " + notificationFailureReason(response.status, response.body)); err != nil {
+			if err := a.noteListenFailure(&outage, notificationFailureReason(response.status, response.body)); err != nil {
 				return err
 			}
-			disconnected = true
 			networkFailures++
 			if a.listenLimitReached(poll) {
 				return nil
@@ -897,11 +898,10 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 		if err != nil {
 			return &publicError{message: "The notification service returned an invalid response."}
 		}
-		if disconnected {
+		if outage.recovered() {
 			if err := a.writeActionLine("Connection restored."); err != nil {
 				return err
 			}
-			disconnected = false
 		}
 		networkFailures = 0
 
@@ -1081,6 +1081,52 @@ func pollDelay(seconds *int) time.Duration {
 		return time.Duration(1<<63 - 1)
 	}
 	return time.Duration(*seconds) * time.Second
+}
+
+// outageAnnounceAfter is how long polls must keep failing before the listener
+// says so. Every line it prints wakes the agent and costs it a turn, so a few
+// seconds' network hiccup is ridden out in silence.
+const outageAnnounceAfter = 60 * time.Second
+
+// listenOutage tracks one run of failed polls. It announces the run once it has
+// lasted outageAnnounceAfter, and the recovery only if the loss was announced.
+type listenOutage struct {
+	since     time.Time
+	announced bool
+}
+
+// failed records a failed poll at now and reports whether to announce the
+// outage now.
+func (o *listenOutage) failed(now time.Time) bool {
+	if o.since.IsZero() {
+		o.since = now
+	}
+	if o.announced || now.Sub(o.since) < outageAnnounceAfter {
+		return false
+	}
+	o.announced = true
+	return true
+}
+
+// recovered ends the run and reports whether to announce the recovery.
+func (o *listenOutage) recovered() bool {
+	announced := o.announced
+	*o = listenOutage{}
+	return announced
+}
+
+func (a *App) noteListenFailure(outage *listenOutage, reason string) error {
+	if !outage.failed(a.listenNow()) {
+		return nil
+	}
+	return a.writeActionLine("Lost connection: " + reason)
+}
+
+func (a *App) listenNow() time.Time {
+	if a.ListenNow != nil {
+		return a.ListenNow()
+	}
+	return time.Now()
 }
 
 func networkBackoff(failures int) time.Duration {

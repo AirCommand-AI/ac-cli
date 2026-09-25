@@ -85,7 +85,7 @@ Sender names come from one lazy, invocation-local workstream roster cache; the l
 {"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_11111111111111111111111111111111","senderNature":"agent","at":"2026-09-04T12:34:56.123456789Z","summary":"New message from Pi (agent) in workstream 694: 0123456789abcdef; run aircom inbox."}
 ```
 
-No message body is fetched or spooled. On first start, `listen` silently discards the baseline page and persists its cursor; an empty baseline continues with an explicitly present `?since=`. Later successful polls spool and print only post-baseline notifications. The client preserves the five-second polling floor, visibly reports transport and retryable HTTP failures, retries with backoff without advancing the cursor, reports recovery, and stops after the existing 401/404 terminal lines.
+No message body is fetched or spooled. On first start, `listen` silently discards the baseline page and persists its cursor; an empty baseline continues with an explicitly present `?since=`. Later successful polls spool and print only post-baseline notifications. The client preserves the five-second polling floor and retries transport and retryable HTTP failures with backoff (5, 10, 20, then 30 seconds) without advancing the cursor. Every stdout line wakes the agent, so a short outage is ridden out silently: only when polls have kept failing for a minute does it print one `Lost connection: <reason>` line, and then one `Connection restored.` line when a poll succeeds. These lines go to stdout only, never to the spool. The existing 401/404 terminal lines are still printed at once, and the listener stops.
 
 Every agent owns one isolated storage directory:
 
