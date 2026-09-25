@@ -22,6 +22,7 @@ import (
 type leaveServer struct {
 	mu          sync.Mutex
 	workstreams map[string]string // agent ID -> workstream code
+	orgs        map[string]string // agent ID -> organization it joined in
 	names       map[string]string
 	leaveStatus int
 	left        []string
@@ -31,6 +32,7 @@ type leaveServer struct {
 func newLeaveServer() *leaveServer {
 	return &leaveServer{
 		workstreams: map[string]string{leadID: "583", engineerID: "583"},
+		orgs:        map[string]string{leadID: acmeID, engineerID: acmeID},
 		names:       map[string]string{leadID: "Lead", engineerID: "Engineer"},
 		leaveStatus: http.StatusNoContent,
 	}
@@ -51,7 +53,7 @@ func (s *leaveServer) handler(t *testing.T) http.Handler {
 		case request.Method == http.MethodGet && path == "/v1/agents":
 			var agents []agentSummary
 			for id, name := range s.names {
-				agents = append(agents, agentSummary{AgentID: id, Name: name, Status: "connected", WorkstreamCode: s.workstreams[id]})
+				agents = append(agents, agentSummary{AgentID: id, Name: name, Status: "connected", OrganizationID: s.orgs[id], WorkstreamCode: s.workstreams[id]})
 			}
 			body, _ := json.Marshal(listAgentsResponse{Agents: agents})
 			_, _ = writer.Write(body)
@@ -60,6 +62,7 @@ func (s *leaveServer) handler(t *testing.T) http.Handler {
 			s.left = append(s.left, id)
 			if s.leaveStatus < 300 {
 				s.workstreams[id] = ""
+				s.orgs[id] = ""
 			}
 			writer.WriteHeader(s.leaveStatus)
 		case request.Method == http.MethodDelete && strings.HasPrefix(path, "/v1/agents/"):
@@ -74,6 +77,7 @@ func (s *leaveServer) handler(t *testing.T) http.Handler {
 			parts := strings.Split(strings.TrimPrefix(path, "/v1/agents/"), "/")
 			id, code := parts[0], parts[2]
 			s.workstreams[id] = code
+			s.orgs[id] = request.Header.Get(organizationHeader)
 			writer.WriteHeader(http.StatusCreated)
 			body, _ := json.Marshal(joinResponse{AgentID: id, AgentName: s.names[id], WorkstreamCode: code, SocketAddress: "ac:" + id})
 			_, _ = writer.Write(body)

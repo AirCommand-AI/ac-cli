@@ -266,6 +266,13 @@ func (a *App) resolveAgent(reference string) (agentSummary, error) {
 	if err != nil {
 		return agentSummary{}, err
 	}
+	return matchAgent(list, reference)
+}
+
+// matchAgent picks one agent from a list already fetched, by exact id, then
+// exact name, then case-insensitive name; ties fail closed with the ids.
+func matchAgent(list []agentSummary, reference string) (agentSummary, error) {
+	reference = strings.TrimSpace(reference)
 	for _, agent := range list {
 		if agent.AgentID == reference {
 			return agent, nil

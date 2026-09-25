@@ -193,11 +193,18 @@ func (a *App) workstreams(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	// The listing answers for the whole machine. Only when the caller says which
-	// agent it is can one of them be called "you".
+	// Membership comes from the service's record of this machine's agents, not
+	// from stored credentials: a credential carries only a code, and codes repeat
+	// across organizations, so only the service can say which organization an
+	// agent is in. The listing answers for the whole machine; only when the
+	// caller says which agent it is can one of them be called "you".
+	agents, err := a.fetchAgents()
+	if err != nil {
+		return err
+	}
 	var caller agentSummary
 	if strings.TrimSpace(agentReference) != "" {
-		if caller, err = a.resolveAgent(agentReference); err != nil {
+		if caller, err = matchAgent(agents, agentReference); err != nil {
 			return err
 		}
 	}
@@ -219,12 +226,7 @@ func (a *App) workstreams(arguments []string) error {
 	if err := json.Unmarshal(response.body, &list); err != nil {
 		return &publicError{message: "The AirCommand service returned an invalid response."}
 	}
-	// Name any agent stored before the name was kept locally, so the listing
-	// names agents rather than printing bare identifiers.
-	for _, workstream := range list.Workstreams {
-		a.backfillAgentNames(workstream.Code)
-	}
-	local := a.localAgentsByWorkstream()
+	local := agentsByWorkstream(agents, organizationID)
 	writer := a.outputWriter()
 	if len(list.Workstreams) == 0 {
 		fmt.Fprintln(writer, "No workstreams in this organization.")
@@ -715,25 +717,27 @@ func emptyTaskListMessage(workstreamCode string, status string, mine bool) strin
 	}
 }
 
-// localAgentsByWorkstream names the agents this machine already owns, keyed by
-// workstream. Naming them rather than only marking the row is what lets an
-// agent recognise its own prior identity instead of inferring it.
-func (a *App) localAgentsByWorkstream() map[string][]localAgent {
-	agents := map[string][]localAgent{}
-	if a.Store == nil {
-		return agents
-	}
-	for _, agent := range a.Store.ListLocalAgents() {
-		name := strings.TrimSpace(agent.AgentName)
+// agentsByWorkstream groups this machine's agents by the workstream they are
+// in, keeping only those in organizationID. An agent the service shows in
+// another organization is left out even if its code matches, and so is one
+// with no organization recorded: it cannot be placed, so it is not claimed.
+func agentsByWorkstream(agents []agentSummary, organizationID string) map[string][]localAgent {
+	grouped := map[string][]localAgent{}
+	for _, agent := range agents {
+		code := strings.TrimSpace(agent.WorkstreamCode)
+		if code == "" || agent.OrganizationID == "" || agent.OrganizationID != organizationID {
+			continue
+		}
+		name := strings.TrimSpace(agent.Name)
 		if name == "" {
 			name = agent.AgentID
 		}
-		agents[agent.WorkstreamCode] = append(agents[agent.WorkstreamCode], localAgent{ID: agent.AgentID, Name: name})
+		grouped[code] = append(grouped[code], localAgent{ID: agent.AgentID, Name: name})
 	}
-	for code := range agents {
-		sort.Slice(agents[code], func(i, j int) bool { return agents[code][i].Name < agents[code][j].Name })
+	for code := range grouped {
+		sort.Slice(grouped[code], func(i, j int) bool { return grouped[code][i].Name < grouped[code][j].Name })
 	}
-	return agents
+	return grouped
 }
 
 // localAgent is one agent on this machine, as a workstream listing names it.
@@ -810,6 +814,7 @@ func (a *App) join(arguments []string) error {
 			// Already in one — the assignment was completed earlier, or the
 			// agent was joined some other way. Hand the identity back.
 			workstreamCode = agent.WorkstreamCode
+			organizationID = agent.OrganizationID
 		} else {
 			organizationID = agent.AssignedOrganizationID
 			workstreamCode = agent.AssignedWorkstreamCode
@@ -820,7 +825,10 @@ func (a *App) join(arguments []string) error {
 			return err
 		}
 	}
-	if strings.TrimSpace(agent.WorkstreamCode) == workstreamCode {
+	// Codes repeat across organizations, so "already there" means the same
+	// organization and code as the service records for the agent. An agent with
+	// no organization recorded is never assumed to be where it was asked to go.
+	if strings.TrimSpace(agent.WorkstreamCode) == workstreamCode && agent.OrganizationID != "" && agent.OrganizationID == organizationID {
 		// Already there. Re-running join is how a restarted runtime asks for
 		// its agent back, so report the identity rather than failing.
 		a.reportAgentIdentity(listen, agent.AgentID, agent.Name, workstreamCode, socketAddressForAgentID(agent.AgentID))
@@ -830,6 +838,11 @@ func (a *App) join(arguments []string) error {
 		return nil
 	}
 	if strings.TrimSpace(agent.WorkstreamCode) != "" {
+		if strings.TrimSpace(agent.WorkstreamCode) == workstreamCode {
+			return &publicError{message: fmt.Sprintf(
+				"%s is already in workstream %s in another organization. Take it out first:\n    aircom leave --agent %s",
+				agent.Name, agent.WorkstreamCode, agent.Name)}
+		}
 		return &publicError{message: fmt.Sprintf(
 			"%s is already in workstream %s. Take it out first:\n    aircom leave --agent %s",
 			agent.Name, agent.WorkstreamCode, agent.Name)}
@@ -1002,52 +1015,6 @@ func agentLabels(agents []credentials.LocalAgent) []string {
 	}
 	sort.Strings(labels)
 	return labels
-}
-
-// backfillAgentNames records the name of any stored agent saved before the name
-// was kept locally. Without it a restarted runtime cannot recognise an agent it
-// enrolled through the older setup-link flow, and would join again as a
-// duplicate. Each agent asks only about itself, using its own credential, and
-// any failure is left alone rather than blocking the join.
-func (a *App) backfillAgentNames(workstreamCode string) {
-	if a.Store == nil {
-		return
-	}
-	for _, agent := range a.Store.ListLocalAgents() {
-		if agent.WorkstreamCode != workstreamCode || strings.TrimSpace(agent.AgentName) != "" {
-			continue
-		}
-		credential, err := a.Store.FindByAgent(workstreamCode, agent.AgentID)
-		if err != nil {
-			continue
-		}
-		response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
-		if err != nil || response.status < 200 || response.status >= 300 {
-			continue
-		}
-		roster, err := decodeWorkstreamRoster(response.body)
-		if err != nil {
-			continue
-		}
-		name, found := rosterNameFor(roster, agent.AgentID)
-		if !found {
-			continue
-		}
-		credential.AgentName = name
-		_ = a.Store.Save(credential)
-	}
-}
-
-// rosterNameFor finds one agent's own name in a workstream roster.
-func rosterNameFor(roster workstreamRoster, agentID string) (string, bool) {
-	for _, collaborator := range roster.Collaborators {
-		for _, agent := range collaborator.Agents {
-			if agent.AgentID == agentID {
-				return agent.Name, true
-			}
-		}
-	}
-	return "", false
 }
 
 func socketAddressForAgentID(agentID string) string { return "ac:" + agentID }

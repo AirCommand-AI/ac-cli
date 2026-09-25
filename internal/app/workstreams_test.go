@@ -12,17 +12,21 @@ const (
 	leadID     = "agm_11111111111111111111111111111111"
 	engineerID = "agm_22222222222222222222222222222222"
 	watcherID  = "agm_33333333333333333333333333333333"
+	acmeID     = "org_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	betaID     = "org_bbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
 // workstreamsTestServer serves the reads `aircom workstreams` makes: the
 // organizations the machine reaches, its workstreams, and the machine's agents
 // (for resolving --agent).
-func workstreamsTestServer(t *testing.T) *httptest.Server {
+func workstreamsTestServer(t *testing.T, agents ...agentSummary) *httptest.Server {
 	t.Helper()
-	agents := []agentSummary{
-		{AgentID: leadID, Name: "Lead", WorkstreamCode: "583"},
-		{AgentID: engineerID, Name: "Engineer", WorkstreamCode: "583"},
-		{AgentID: watcherID, Name: "Watcher", WorkstreamCode: "345"},
+	if len(agents) == 0 {
+		agents = []agentSummary{
+			{AgentID: leadID, Name: "Lead", OrganizationID: acmeID, WorkstreamCode: "583"},
+			{AgentID: engineerID, Name: "Engineer", OrganizationID: acmeID, WorkstreamCode: "583"},
+			{AgentID: watcherID, Name: "Watcher", OrganizationID: acmeID, WorkstreamCode: "345"},
+		}
 	}
 	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -107,12 +111,15 @@ func TestWorkstreamsNamesTheCallerOnlyWhenAsked(t *testing.T) {
 }
 
 func TestWorkstreamsSaysWhenTheCallerIsInNone(t *testing.T) {
-	server := workstreamsTestServer(t)
+	server := workstreamsTestServer(t,
+		agentSummary{AgentID: leadID, Name: "Lead"},
+		agentSummary{AgentID: engineerID, Name: "Engineer", OrganizationID: acmeID, WorkstreamCode: "583"},
+	)
 	defer server.Close()
 	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x11))
-	storedAgent(t, client, engineerID, "583", "Engineer")
+	storedMachine(t, client)
 
-	// Lead exists on this machine but has no credential in any listed workstream.
+	// Lead exists on this machine but the service has it in no workstream.
 	if exitCode := client.Run([]string{"workstreams", "--org", "Acme", "--agent", "Lead"}); exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
