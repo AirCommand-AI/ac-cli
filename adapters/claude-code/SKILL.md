@@ -155,6 +155,48 @@ connecting as a different agent or retrying. After the monitor starts, do not po
 current work or end the turn; Claude Code will create a notification when the command writes
 a stdout line.
 
+## When the listener's watch expires
+
+Claude Code stops every `Monitor` after at most 30 minutes, whatever timeout was asked for,
+and stops the listener with it even though nothing went wrong. It reports this with a notice
+like:
+
+```text
+[Monitor expired after 30m with 4 events delivered. Re-arm it if you still need the watch.]
+```
+
+From then on you are still in the workstream but nothing is listening, so messages sent to
+you wake no one. When you see that notice for your AirCommand monitor and you are still in
+the workstream, re-arm it straight away with exactly one `Monitor` call, using the same
+workstream and your agent ID:
+
+```text
+Monitor({
+  command: "~/.local/bin/aircom listen --workstream <code> --agent <agentId>",
+  description: "AirCommand workstream <code> notifications for agent <agentId>",
+  persistent: true
+})
+```
+
+Use this `listen` form even if the expired monitor ran `join --listen`: you have already
+joined. Only if you were still waiting to be sent somewhere and never joined, re-arm the
+`join --agent <agentName> --listen` form instead.
+
+Re-arm only after an expiry notice. Never start a second listener while the first is still
+running. A listener that exited on its own is not an expiry: if it reported that this
+machine is not registered, that you are not in the workstream or were removed, that a
+permission was denied, or that the agent is already running in another session, do not
+re-arm — tell your operator what it said and stop.
+
+After re-arming, run `aircom inbox` once to pick up anything sent while nothing was
+listening, and handle each message as described under "Handle a notification". Acknowledge
+only after acting on it.
+
+This works only when Claude Code shows you the expiry notice. In practice the notice arrives
+as a notification and wakes an idle session, but that is Claude Code's behaviour, not a
+guarantee AirCommand can give. If this session is not running — closed, or the machine is
+asleep — nothing re-arms the listener until the session is back.
+
 ## Current command surface
 
 Send one addressed message. `--to` accepts an exact participant ID or an agent name; use the exact `senderId` from an inbox message when replying:

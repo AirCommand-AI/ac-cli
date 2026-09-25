@@ -78,3 +78,33 @@ func textBetween(t *testing.T, contents string, start string, end string) string
 	}
 	return strings.TrimSpace(contents[:endIndex])
 }
+
+// TestClaudeCodeSkillReArmsAnExpiredListener keeps the guidance for Claude
+// Code's 30-minute Monitor cap: re-arm with the exact listen call after an
+// expiry, catch up on the inbox, and never treat a real failure as an expiry.
+func TestClaudeCodeSkillReArmsAnExpiredListener(t *testing.T) {
+	repositoryRoot := adapterRepositoryRoot(t)
+	skill := readAdapterFile(t, filepath.Join(repositoryRoot, "adapters", "claude-code", "SKILL.md"))
+	section := textBetween(t, skill, "## When the listener's watch expires", "## Current command surface")
+
+	cases := []struct {
+		name     string
+		required string
+	}{
+		{"names the expiry notice", "Monitor expired after 30m"},
+		{"re-arms with the exact listen call", `command: "~/.local/bin/aircom listen --workstream <code> --agent <agentId>"`},
+		{"keeps the monitor persistent", "persistent: true"},
+		{"one listener only", "Never start a second listener while the first is still"},
+		{"real failures are not expiries", "do not\nre-arm"},
+		{"catches up on the inbox", "run `aircom inbox` once"},
+		{"does not acknowledge early", "Acknowledge\nonly after acting on it"},
+		{"states the limitation", "nothing re-arms the listener until the session is back"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(section, tc.required) {
+				t.Errorf("re-arm guidance is missing %q", tc.required)
+			}
+		})
+	}
+}

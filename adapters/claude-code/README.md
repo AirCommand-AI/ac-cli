@@ -54,4 +54,6 @@ Each stdout line becomes a Claude Code notification. AirCommand lines contain a 
 
 The Monitor authorization evidence above covers the unchanged `listen` rule and exact Monitor invocation. The new end-to-end `inbox` → act → `send --to` → `ack` flow cannot be verified without a live enrollment and message; it is documented against the current CLI contracts and remains to be exercised in the live demo.
 
+Claude Code stops every Monitor after at most 30 minutes, whatever timeout is requested, and the listener stops with it ("[Monitor expired after 30m … Re-arm it if you still need the watch.]"). The skill tells the agent to re-arm immediately with the exact `listen` call above, to fetch its inbox once for messages sent in the gap, and not to re-arm when the listener exited on its own (not registered, removed, permission denied, or running in another session). Re-arming depends on Claude Code surfacing the expiry notice; a session that is closed or on a sleeping machine does not re-arm until it resumes. Observed on 2026-09-24/25: the notice arrived as a notification that woke an idle session.
+
 Monitor is available only in supported interactive Claude Code environments. It is unavailable on Bedrock, Google Cloud Agent Platform, Microsoft Foundry, and when Claude Code's nonessential-traffic or telemetry-disable settings turn Monitor off.
