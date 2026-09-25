@@ -512,7 +512,7 @@ func TestTaskAssigneeHandsTheTaskOn(t *testing.T) {
 	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--assignee", "Engineer"}); exitCode != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	if string(got) != `{"assignee":"Engineer"}` {
+	if string(got) != `{"assignee":"Engineer","idempotencyId":"`+repeatedHex(0x44)+`"}` {
 		t.Fatalf("body = %s", got)
 	}
 	for _, want := range []string{"Assignee: agm_2\n", "Created by: Lead\n", "Assigned by: Lead at 2026-09-08T13:00:00Z\n"} {
@@ -551,5 +551,68 @@ func TestTaskAssigneeIsRefusedWithOtherChangesOrBlank(t *testing.T) {
 				t.Fatalf("requests = %d, stderr = %q", requests, stderr.String())
 			}
 		})
+	}
+}
+
+func TestTaskAssigneeRetriesReuseOneIdempotencyID(t *testing.T) {
+	t.Parallel()
+
+	for _, retryableStatus := range []int{http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		retryableStatus := retryableStatus
+		t.Run(http.StatusText(retryableStatus), func(t *testing.T) {
+			t.Parallel()
+
+			wantBody, err := json.Marshal(taskAssigneeRequest{Assignee: "Engineer", IdempotencyID: repeatedHex(0x55)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var bodies [][]byte
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, _ := io.ReadAll(request.Body)
+				bodies = append(bodies, body)
+				if len(bodies) == 1 {
+					writer.WriteHeader(retryableStatus)
+					return
+				}
+				_, _ = writer.Write([]byte(`{"id":"task-1","status":"todo","assignee":"agm_2","title":"Build parser","description":"","createdAt":"2026-09-08T10:00:00Z","updatedAt":"2026-09-08T13:00:00Z"}`))
+			}))
+			defer server.Close()
+
+			client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
+			client.RetryAttempts = 2
+			saveTestCredential(t, client, testCredential())
+			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--assignee", "Engineer"}); exitCode != 0 {
+				t.Fatalf("exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+			if len(bodies) != 2 {
+				t.Fatalf("requests = %d, want the failure and one retry", len(bodies))
+			}
+			for i, body := range bodies {
+				if !bytes.Equal(body, wantBody) {
+					t.Errorf("request %d body = %s, want %s (one key for the whole invocation)", i+1, body, wantBody)
+				}
+			}
+		})
+	}
+}
+
+func TestTaskAssigneeRefusesWithoutAnIdempotencyID(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+
+	// No randomness available: the key cannot be generated.
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom())
+	saveTestCredential(t, client, testCredential())
+	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--assignee", "Engineer"}); exitCode == 0 {
+		t.Fatal("reassigned without an idempotency key")
+	}
+	if requests != 0 {
+		t.Fatalf("made %d requests without a key, want 0", requests)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "Unable to generate a task reassignment idempotency ID.") {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
 }

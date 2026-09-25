@@ -107,7 +107,8 @@ type taskStatusRequest struct {
 }
 
 type taskAssigneeRequest struct {
-	Assignee string `json:"assignee"`
+	Assignee      string `json:"assignee"`
+	IdempotencyID string `json:"idempotencyId"`
 }
 
 type taskCommentRequest struct {

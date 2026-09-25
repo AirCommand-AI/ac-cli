@@ -584,7 +584,13 @@ func (a *App) setTaskStatus(workstreamCode string, taskID string, status string,
 // setTaskAssignee hands a task to another agent in the workstream. The server
 // records who handed it over and posts that as an update on the task.
 func (a *App) setTaskAssignee(workstreamCode string, taskID string, assignee string, credential credentials.Credential) error {
-	payload, err := json.Marshal(taskAssigneeRequest{Assignee: assignee})
+	// One key per invocation, reused across its retries, so a retried handover
+	// is applied once and posts one reassignment update.
+	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
+	if err != nil {
+		return &publicError{message: "Unable to generate a task reassignment idempotency ID."}
+	}
+	payload, err := json.Marshal(taskAssigneeRequest{Assignee: assignee, IdempotencyID: idempotencyID})
 	if err != nil {
 		return &publicError{message: "Unable to prepare the task reassignment."}
 	}
