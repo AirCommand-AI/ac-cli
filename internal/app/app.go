@@ -203,7 +203,19 @@ type messageNotification struct {
 	SenderID     string `json:"senderId"`
 	SenderNature string `json:"senderNature"`
 	At           string `json:"at"`
+	// Kind and TaskID are set for messages the service sends about a task:
+	// assigned to this agent, or taken away from it. They say what the message
+	// is about, not what to do; the agent still reads the message and the task.
+	Kind   string `json:"kind,omitempty"`
+	TaskID string `json:"taskId,omitempty"`
 }
+
+// Kinds of task message the listener words specially. Any other kind is shown
+// as an ordinary message, so a kind added later still wakes the agent.
+const (
+	notificationKindTaskAssigned   = "task.assigned"
+	notificationKindTaskUnassigned = "task.unassigned"
+)
 
 type spooledMessageNotification struct {
 	Type         string `json:"type"`
@@ -211,6 +223,8 @@ type spooledMessageNotification struct {
 	SenderID     string `json:"senderId"`
 	SenderNature string `json:"senderNature"`
 	At           string `json:"at"`
+	Kind         string `json:"kind,omitempty"`
+	TaskID       string `json:"taskId,omitempty"`
 	Summary      string `json:"summary"`
 }
 
@@ -960,8 +974,25 @@ func decodeNotificationFeedResponse(body []byte) (notificationFeedResponse, erro
 		if notification.SenderNature != "agent" && notification.SenderNature != "human" {
 			return notificationFeedResponse{}, errors.New("notification response has an invalid sender nature")
 		}
+		if notification.Kind != "" && !validNotificationTaskID(notification.TaskID) {
+			return notificationFeedResponse{}, errors.New("notification response has a task message without a valid task ID")
+		}
 	}
 	return response, nil
+}
+
+// validNotificationTaskID accepts a task ID that is safe to put in a wake line:
+// short, and only letters, digits, '-' and '_'.
+func validNotificationTaskID(taskID string) bool {
+	if taskID == "" || len(taskID) > 64 {
+		return false
+	}
+	for _, r := range taskID {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) loadSenderNames(workstreamCode string, credential credentials.Credential) map[senderIdentity]string {
@@ -1003,6 +1034,14 @@ func composeNotificationSummary(notification messageNotification, workstreamCode
 	if name := senderNames[senderIdentity{ID: notification.SenderID, Nature: notification.SenderNature}]; name != "" {
 		sender = name
 	}
+	switch notification.Kind {
+	case notificationKindTaskAssigned:
+		return fmt.Sprintf("Task %s assigned to you by %s (%s) in workstream %s: %s; run aircom inbox.",
+			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
+	case notificationKindTaskUnassigned:
+		return fmt.Sprintf("Task %s reassigned away from you by %s (%s) in workstream %s: %s; run aircom inbox.",
+			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
+	}
 	return fmt.Sprintf(
 		"New message from %s (%s) in workstream %s: %s; run aircom inbox.",
 		singleLine(sender),
@@ -1019,6 +1058,8 @@ func spooledNotification(notification messageNotification, summary string) spool
 		SenderID:     notification.SenderID,
 		SenderNature: notification.SenderNature,
 		At:           notification.At,
+		Kind:         notification.Kind,
+		TaskID:       notification.TaskID,
 		Summary:      summary,
 	}
 }
