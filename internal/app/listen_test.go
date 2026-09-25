@@ -81,7 +81,7 @@ func TestListenEstablishesSilentBaselineThenComposesAndSpoolsOneWake(t *testing.
 	client, stdout, stderr := listenerApp(server.URL, home)
 	client.ListenPollLimit = 2
 	client.ListenSleep = func(_ time.Duration) {
-		cursor, found, err := stateStore.LoadCursor(credential.AgentID)
+		cursor, found, err := stateStore.LoadCursor(credential.AgentID, credential.WorkstreamKey())
 		if err != nil {
 			t.Fatalf("LoadCursor after baseline: %v", err)
 		}
@@ -118,7 +118,7 @@ func TestListenEstablishesSilentBaselineThenComposesAndSpoolsOneWake(t *testing.
 		t.Fatalf("notification requests = %d, roster requests = %d; want 3, 1", notificationRequests, rosterRequests)
 	}
 
-	cursor, found, err := stateStore.LoadCursor(credential.AgentID)
+	cursor, found, err := stateStore.LoadCursor(credential.AgentID, credential.WorkstreamKey())
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestListenCachesRosterNamesAndFallsBackToUnknownSenderID(t *testing.T) {
 		t.Fatalf("Save credential: %v", err)
 	}
 	stateStore := listenstore.NewStore(home)
-	if err := stateStore.SaveCursor(credential.AgentID, "2026-09-04T12:00:00.000000000Z#0000000000000000"); err != nil {
+	if err := stateStore.SaveCursor(credential.AgentID, credential.WorkstreamKey(), "2026-09-04T12:00:00.000000000Z#0000000000000000"); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestListenEmptyBaselinePersistsCursorAndContinuesWithPresentEmptySince(t *t
 	if stdout.Len() != 0 {
 		t.Fatalf("empty polls produced output %q", stdout.String())
 	}
-	cursor, found, err := listenstore.NewStore(home).LoadCursor(testCredential().AgentID)
+	cursor, found, err := listenstore.NewStore(home).LoadCursor(testCredential().AgentID, testCredential().WorkstreamKey())
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestListenRetriesVisibleHTTPFailuresWithSameCursorAndBackoff(t *testing.T) 
 		t.Fatalf("Save credential: %v", err)
 	}
 	stateStore := listenstore.NewStore(home)
-	if err := stateStore.SaveCursor(testCredential().AgentID, cursor); err != nil {
+	if err := stateStore.SaveCursor(testCredential().AgentID, testCredential().WorkstreamKey(), cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
 	client, stdout, stderr := listenerApp(server.URL, home)
@@ -411,7 +411,7 @@ func TestListenRetriesVisibleHTTPFailuresWithSameCursorAndBackoff(t *testing.T) 
 	if wantSleeps := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second}; !reflect.DeepEqual(sleeps, wantSleeps) {
 		t.Fatalf("retry sleeps = %v, want %v", sleeps, wantSleeps)
 	}
-	persisted, found, err := stateStore.LoadCursor(testCredential().AgentID)
+	persisted, found, err := stateStore.LoadCursor(testCredential().AgentID, testCredential().WorkstreamKey())
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestListenInvalidCursorStopsWithoutChangingStateOrLeakingResponse(t *testin
 		t.Fatalf("Save credential: %v", err)
 	}
 	stateStore := listenstore.NewStore(home)
-	if err := stateStore.SaveCursor(testCredential().AgentID, cursor); err != nil {
+	if err := stateStore.SaveCursor(testCredential().AgentID, testCredential().WorkstreamKey(), cursor); err != nil {
 		t.Fatalf("SaveCursor: %v", err)
 	}
 	client, stdout, stderr := listenerApp(server.URL, home)
@@ -448,7 +448,7 @@ func TestListenInvalidCursorStopsWithoutChangingStateOrLeakingResponse(t *testin
 	if strings.Contains(stderr.String(), "must_not_be_printed") {
 		t.Fatal("notification error response reached output")
 	}
-	persisted, found, err := stateStore.LoadCursor(testCredential().AgentID)
+	persisted, found, err := stateStore.LoadCursor(testCredential().AgentID, testCredential().WorkstreamKey())
 	if err != nil {
 		t.Fatalf("LoadCursor: %v", err)
 	}

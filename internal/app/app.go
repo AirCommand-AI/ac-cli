@@ -829,7 +829,7 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 		defer func() { _ = lock.Release() }()
 	}
 
-	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(credential.AgentID)
+	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(credential.AgentID, credential.WorkstreamKey())
 	if err != nil {
 		return storageError(err, "Unable to read the listener cursor state.")
 	}
@@ -924,7 +924,7 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 
 		nextCursor := *feed.Cursor
 		if !hasStoredCursor || nextCursor != cursor {
-			if err := a.ListenStore.SaveCursor(credential.AgentID, nextCursor); err != nil {
+			if err := a.ListenStore.SaveCursor(credential.AgentID, credential.WorkstreamKey(), nextCursor); err != nil {
 				return storageError(err, "Unable to persist the listener cursor.")
 			}
 			cursor = nextCursor

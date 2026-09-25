@@ -890,6 +890,7 @@ func (a *App) join(arguments []string) error {
 		AgentID:        joined.AgentID,
 		SocketAddress:  joined.SocketAddress,
 		AgentName:      joined.AgentName,
+		OrganizationID: organizationID,
 	}); err != nil {
 		return &publicError{message: "Joined the workstream but could not store the agent credential."}
 	}

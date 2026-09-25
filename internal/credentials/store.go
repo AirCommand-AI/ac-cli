@@ -24,6 +24,18 @@ type Credential struct {
 	// carry it, and it is never used for authentication -- only to recognise
 	// an agent this machine already owns and to label it for a human.
 	AgentName string `json:"agentName,omitempty"`
+	// OrganizationID is the organization the agent joined in. Workstream codes
+	// are unique only within an organization, so this plus the code is what
+	// identifies the workstream. Credentials written before joins recorded it,
+	// or by the older setup-link exchange, leave it empty.
+	OrganizationID string `json:"organizationId,omitempty"`
+}
+
+// WorkstreamKey identifies the workstream this credential belongs to, across
+// organizations. It tags state that is only meaningful in that workstream,
+// such as the listener's cursor.
+func (c Credential) WorkstreamKey() string {
+	return c.OrganizationID + "/" + c.WorkstreamCode
 }
 
 type File struct {
@@ -54,6 +66,17 @@ func (s *Store) Home() string { return s.home }
 
 func (s *Store) Path(agentID string) string {
 	return filepath.Join(storagepath.AgentDirectory(s.home, agentID), "credentials.json")
+}
+
+// Delete removes one agent's workstream credential. Only that file goes: the
+// agent's directory also holds its lock, listener cursor and spool, which a
+// listener still running in another process may be using. It is not an error
+// to delete a credential that is not present.
+func (s *Store) Delete(agentID string) error {
+	if err := os.Remove(s.Path(agentID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove agent credential: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) CheckLayout() error {

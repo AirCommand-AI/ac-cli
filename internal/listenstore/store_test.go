@@ -41,7 +41,7 @@ func TestTwoAgentsUseEntirelyDisjointStorageTrees(t *testing.T) {
 		if err := credentialStore.Save(credential); err != nil {
 			t.Fatalf("Save credential for %s: %v", agent.id, err)
 		}
-		if err := listenerStore.SaveCursor(agent.id, agent.cursor); err != nil {
+		if err := listenerStore.SaveCursor(agent.id, agent.workstream, agent.cursor); err != nil {
 			t.Fatalf("SaveCursor for %s: %v", agent.id, err)
 		}
 		if err := listenerStore.AppendNotification(agent.id, map[string]string{"summary": agent.notification}); err != nil {
@@ -155,4 +155,75 @@ func treeFiles(root string) ([]string, error) {
 	})
 	sort.Strings(files)
 	return files, err
+}
+
+// TestCursorBelongsToItsWorkstream keeps a listener from carrying a position
+// from one workstream's feed into another after the agent moves.
+func TestCursorBelongsToItsWorkstream(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		prepare   func(t *testing.T, store *listenstore.Store, statePath string)
+		load      string
+		wantFound bool
+		want      string
+	}{
+		{
+			name: "same workstream restart resumes",
+			prepare: func(t *testing.T, store *listenstore.Store, _ string) {
+				mustSave(t, store, "583", "c583")
+			},
+			load: "583", wantFound: true, want: "c583",
+		},
+		{
+			name: "a different workstream starts fresh",
+			prepare: func(t *testing.T, store *listenstore.Store, _ string) {
+				mustSave(t, store, "583", "c583")
+			},
+			load: "610", wantFound: false,
+		},
+		{
+			name: "a stale listener's late write cannot hand the new workstream its old cursor",
+			prepare: func(t *testing.T, store *listenstore.Store, _ string) {
+				mustSave(t, store, "610", "c610")
+				mustSave(t, store, "583", "c583-late")
+			},
+			load: "610", wantFound: false,
+		},
+		{
+			name: "a cursor saved before workstreams were recorded starts fresh",
+			prepare: func(t *testing.T, _ *listenstore.Store, statePath string) {
+				if err := os.MkdirAll(filepath.Dir(statePath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(statePath, []byte(`{"cursor":"legacy"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			load: "583", wantFound: false,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := listenstore.NewStore(t.TempDir())
+			tc.prepare(t, store, store.StatePath("agent-lead"))
+			got, found, err := store.LoadCursor("agent-lead", tc.load)
+			if err != nil {
+				t.Fatalf("LoadCursor: %v", err)
+			}
+			if found != tc.wantFound || got != tc.want {
+				t.Fatalf("LoadCursor(%q) = %q, %v; want %q, %v", tc.load, got, found, tc.want, tc.wantFound)
+			}
+		})
+	}
+}
+
+func mustSave(t *testing.T, store *listenstore.Store, workstreamCode, cursor string) {
+	t.Helper()
+	if err := store.SaveCursor("agent-lead", workstreamCode, cursor); err != nil {
+		t.Fatalf("SaveCursor: %v", err)
+	}
 }

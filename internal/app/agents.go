@@ -323,7 +323,26 @@ func (a *App) leave(arguments []string) error {
 	if response.status < 200 || response.status >= 300 {
 		return &publicError{message: "Unable to take that agent out of its workstream."}
 	}
+	// The server has ended the agent's credential there, so the local copy is
+	// now stale; left behind, it would make this machine still list the agent
+	// in the workstream it just left. Leaving is repeatable, so running it again
+	// also clears a credential left by an earlier leave.
+	if err := a.forgetWorkstreamCredential(agent); err != nil {
+		return err
+	}
 	fmt.Fprintf(a.outputWriter(), "%s is no longer in a workstream.\n", agent.Name)
+	return nil
+}
+
+// forgetWorkstreamCredential deletes an agent's stored workstream credential
+// after the server has ended it. A failure is reported rather than hidden: the
+// server side is done, but this machine would keep listing the agent there.
+func (a *App) forgetWorkstreamCredential(agent agentSummary) error {
+	if err := a.Store.Delete(agent.AgentID); err != nil {
+		return &publicError{message: fmt.Sprintf(
+			"%s has left its workstream, but its saved credential could not be removed (%v). Delete %s, or run aircom leave --agent %s again.",
+			agent.Name, err, a.Store.Path(agent.AgentID), agent.Name)}
+	}
 	return nil
 }
 
@@ -352,6 +371,11 @@ func (a *App) disconnect(arguments []string) error {
 	}
 	if response.status < 200 || response.status >= 300 {
 		return &publicError{message: "Unable to remove that agent."}
+	}
+	// Disconnecting leaves the workstream first, so the same stale credential
+	// would otherwise remain.
+	if err := a.forgetWorkstreamCredential(agent); err != nil {
+		return err
 	}
 	fmt.Fprintf(a.outputWriter(), "%s has been removed from this machine.\n", agent.Name)
 	return nil

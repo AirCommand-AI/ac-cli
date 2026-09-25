@@ -14,8 +14,15 @@ type Store struct {
 	home string
 }
 
+// cursorState is how far an agent's listener has read. The cursor is a
+// position in one workstream's notification feed, so it records which
+// workstream it belongs to: after the agent leaves and joins another, the old
+// position means nothing there and must not be sent as "since". The key is
+// opaque here; callers pass the credential's workstream key (organization and
+// code), since codes repeat across organizations.
 type cursorState struct {
-	Cursor string `json:"cursor"`
+	Cursor     string `json:"cursor"`
+	Workstream string `json:"workstream"`
 }
 
 func NewStore(home string) *Store {
@@ -30,7 +37,11 @@ func (s *Store) SpoolPath(agentID string) string {
 	return filepath.Join(storagepath.AgentDirectory(s.home, agentID), "spool.jsonl")
 }
 
-func (s *Store) LoadCursor(agentID string) (string, bool, error) {
+// LoadCursor returns the agent's stored cursor for workstream. A cursor saved
+// for a different workstream, or one saved before cursors recorded their
+// workstream, is reported as absent, so the listener takes a fresh baseline
+// rather than skipping or misreading the new workstream's messages.
+func (s *Store) LoadCursor(agentID string, workstream string) (string, bool, error) {
 	if err := storagepath.CheckLegacyLayout(s.home); err != nil {
 		return "", false, err
 	}
@@ -46,10 +57,14 @@ func (s *Store) LoadCursor(agentID string) (string, bool, error) {
 	if err := json.Unmarshal(contents, &state); err != nil {
 		return "", false, errors.New("cursor state is invalid")
 	}
+	if state.Workstream == "" || state.Workstream != workstream {
+		return "", false, nil
+	}
 	return state.Cursor, true, nil
 }
 
-func (s *Store) SaveCursor(agentID string, cursor string) error {
+// SaveCursor records how far the agent's listener has read in workstream.
+func (s *Store) SaveCursor(agentID string, workstream string, cursor string) error {
 	directory, err := storagepath.EnsureAgentDirectory(s.home, agentID)
 	if err != nil {
 		return err
@@ -66,7 +81,7 @@ func (s *Store) SaveCursor(agentID string, cursor string) error {
 		_ = temporary.Close()
 		return fmt.Errorf("secure temporary cursor state: %w", err)
 	}
-	if err := json.NewEncoder(temporary).Encode(cursorState{Cursor: cursor}); err != nil {
+	if err := json.NewEncoder(temporary).Encode(cursorState{Cursor: cursor, Workstream: workstream}); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("encode cursor state: %w", err)
 	}
