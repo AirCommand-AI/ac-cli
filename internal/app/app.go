@@ -294,7 +294,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] | exchange | send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId>] --body <text> | read --workstream <code> [--agent <agentId>] | task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>] | tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId>] --message <messageId> | listen --workstream <code> [--agent <agentId>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId|name>] --body <text> | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -327,11 +327,11 @@ func requestedHelp(arguments []string) (string, bool) {
 	case "exchange":
 		return "Usage: aircom exchange (supply the ticket on standard input)", true
 	case "send":
-		return "Usage: aircom send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>", true
+		return "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text>", true
 	case "update":
-		return "Usage: aircom update --workstream <code> [--agent <agentId>] --body <text>", true
+		return "Usage: aircom update --workstream <code> [--agent <agentId|name>] --body <text>", true
 	case "read":
-		return "Usage: aircom read --workstream <code> [--agent <agentId>]", true
+		return "Usage: aircom read --workstream <code> [--agent <agentId|name>]", true
 	case "task":
 		return taskUsage, true
 	case "tasks":
@@ -341,7 +341,7 @@ func requestedHelp(arguments []string) (string, bool) {
 	case "ack":
 		return ackUsage, true
 	case "listen":
-		return "Usage: aircom listen --workstream <code> [--agent <agentId>]", true
+		return "Usage: aircom listen --workstream <code> [--agent <agentId|name>]", true
 	default:
 		return "", false
 	}
@@ -437,7 +437,7 @@ func (a *App) send(arguments []string) error {
 	flags.StringVar(&recipient, "to", "", "recipient agent ID or name")
 	flags.StringVar(&body, "body", "", "message body")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || strings.TrimSpace(recipient) == "" || body == "" {
-		return &publicError{message: "Usage: aircom send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>"}
+		return &publicError{message: "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text>"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -484,7 +484,7 @@ func (a *App) update(arguments []string) error {
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&body, "body", "", "update body")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || body == "" {
-		return &publicError{message: "Usage: aircom update --workstream <code> [--agent <agentId>] --body <text>"}
+		return &publicError{message: "Usage: aircom update --workstream <code> [--agent <agentId|name>] --body <text>"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -759,7 +759,7 @@ func (a *App) read(arguments []string) error {
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
-		return &publicError{message: "Usage: aircom read --workstream <code> [--agent <agentId>]"}
+		return &publicError{message: "Usage: aircom read --workstream <code> [--agent <agentId|name>]"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -788,7 +788,7 @@ func (a *App) listen(arguments []string) error {
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
-		return &publicError{message: "Usage: aircom listen --workstream <code> [--agent <agentId>]"}
+		return &publicError{message: "Usage: aircom listen --workstream <code> [--agent <agentId|name>]"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -1182,15 +1182,30 @@ func (a *App) credentialFor(workstreamCode string, agentID string) (credentials.
 	}
 	if agentID != "" {
 		credential, err := a.Store.FindByAgent(workstreamCode, agentID)
+		if err == nil {
+			return credential, nil
+		}
+		if legacy := legacyStorageError(err); legacy != nil {
+			return credentials.Credential{}, legacy
+		}
+		// IDs take precedence everywhere: a reference that is any local agent's
+		// ID, or looks like one, is never read as a name, so an agent named after
+		// another agent's ID can't be selected in its place.
+		if a.isLocalAgentID(agentID) || looksLikeAgentID(agentID) {
+			return credentials.Credential{}, a.noStoredAgentIDError(workstreamCode, agentID)
+		}
+		// Otherwise it is a name, matched among this workstream's agents only.
+		resolvedID, err := a.storedAgentNamed(workstreamCode, agentID)
+		if err != nil {
+			return credentials.Credential{}, err
+		}
+		credential, err = a.Store.FindByAgent(workstreamCode, resolvedID)
 		if err != nil {
 			if legacy := legacyStorageError(err); legacy != nil {
 				return credentials.Credential{}, legacy
 			}
 			return credentials.Credential{}, &publicError{message: fmt.Sprintf(
-				"No stored credential matches agent %s in workstream %s.",
-				singleLine(agentID),
-				workstreamCode,
-			)}
+				"No stored credential matches agent %s in workstream %s.", singleLine(agentID), workstreamCode)}
 		}
 		return credential, nil
 	}
@@ -1209,12 +1224,99 @@ func (a *App) credentialFor(workstreamCode string, agentID string) (credentials.
 			agentIDs = append(agentIDs, singleLine(availableAgentID))
 		}
 		return credentials.Credential{}, &publicError{message: fmt.Sprintf(
-			"Multiple agents are enrolled on this machine. Available agent IDs: %s. Re-run for workstream %s with --agent <agentId>.",
+			"Multiple agents are enrolled on this machine. Available agent IDs: %s. Re-run for workstream %s with --agent <agentId|name>.",
 			strings.Join(agentIDs, ", "),
 			workstreamCode,
 		)}
 	}
 	return credentials.Credential{}, &publicError{message: fmt.Sprintf("No stored credentials match workstream %s.", workstreamCode)}
+}
+
+// storedAgentNamed resolves --agent given as a name to the ID of one agent
+// stored on this machine for workstreamCode, with the same precedence as the
+// machine-level commands: exact name, then case-insensitive name, and more
+// than one match fails rather than guessing. Only that workstream's agents are
+// considered, so a name never selects another workstream's credential.
+func (a *App) storedAgentNamed(workstreamCode string, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	here := a.localAgentsIn(workstreamCode)
+	var exact []credentials.LocalAgent
+	for _, agent := range here {
+		if strings.TrimSpace(agent.AgentName) == name {
+			exact = append(exact, agent)
+		}
+	}
+	matches := exact
+	if len(matches) == 0 {
+		matches = filterAgentsNamed(here, name)
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0].AgentID, nil
+	case 0:
+		return "", a.noStoredAgentError(workstreamCode, name, here)
+	default:
+		ids := make([]string, 0, len(matches))
+		for _, agent := range matches {
+			ids = append(ids, agent.AgentID)
+		}
+		sort.Strings(ids)
+		return "", &publicError{message: fmt.Sprintf(
+			"More than one agent in workstream %s is called %q. Use its ID: --agent %s",
+			workstreamCode, singleLine(name), strings.Join(ids, " or --agent "))}
+	}
+}
+
+// agentIDPrefix begins every agent ID the service issues. A reference with it
+// is an ID, never a name.
+const agentIDPrefix = "agm_"
+
+func looksLikeAgentID(reference string) bool {
+	return strings.HasPrefix(strings.TrimSpace(reference), agentIDPrefix)
+}
+
+// isLocalAgentID reports whether reference is the ID of any agent stored on
+// this machine, in any workstream.
+func (a *App) isLocalAgentID(reference string) bool {
+	for _, agent := range a.Store.ListLocalAgents() {
+		if agent.AgentID == reference {
+			return true
+		}
+	}
+	return false
+}
+
+// noStoredAgentIDError refuses an agent ID with no credential in workstreamCode,
+// saying where that agent is if it is on this machine.
+func (a *App) noStoredAgentIDError(workstreamCode, agentID string) error {
+	for _, agent := range a.Store.ListLocalAgents() {
+		if agent.AgentID == agentID {
+			return &publicError{message: fmt.Sprintf(
+				"Agent %s is in workstream %s on this machine, not %s.", singleLine(agentID), agent.WorkstreamCode, workstreamCode)}
+		}
+	}
+	return &publicError{message: fmt.Sprintf(
+		"No agent with ID %s is in workstream %s on this machine.", singleLine(agentID), workstreamCode)}
+}
+
+// noStoredAgentError explains why a name matched nothing in the workstream,
+// naming where an agent of that name is if it is on this machine in another one.
+func (a *App) noStoredAgentError(workstreamCode, reference string, here []credentials.LocalAgent) error {
+	for _, agent := range a.Store.ListLocalAgents() {
+		if agent.WorkstreamCode == workstreamCode {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(agent.AgentName), reference) {
+			return &publicError{message: fmt.Sprintf(
+				"Agent %s is in workstream %s on this machine, not %s.", singleLine(reference), agent.WorkstreamCode, workstreamCode)}
+		}
+	}
+	if len(here) == 0 {
+		return &publicError{message: fmt.Sprintf("No agent on this machine is in workstream %s.", workstreamCode)}
+	}
+	return &publicError{message: fmt.Sprintf(
+		"No agent called %s is in workstream %s on this machine. Agents here: %s.",
+		singleLine(reference), workstreamCode, strings.Join(agentLabels(here), ", "))}
 }
 
 func storageError(err error, fallback string) error {

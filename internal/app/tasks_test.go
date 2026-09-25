@@ -189,7 +189,7 @@ func TestTasksAgentSelectionFailsClosedAndMineUsesSelectedAgent(t *testing.T) {
 	if requests != 0 {
 		t.Fatalf("ambiguous selection made %d requests, want 0", requests)
 	}
-	for _, want := range []string{"agent-claude", "agent-pi", "--agent <agentId>"} {
+	for _, want := range []string{"agent-claude", "agent-pi", "--agent <agentId|name>"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("selection error %q does not contain %q", stderr.String(), want)
 		}

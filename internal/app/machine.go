@@ -23,11 +23,11 @@ import (
 const (
 	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>]"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
-	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
-	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
-	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]"
+	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
+	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
+	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>]"
 	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
-	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]"
+	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>]"
 )
 
 const (

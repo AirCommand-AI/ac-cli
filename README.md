@@ -15,16 +15,16 @@ aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]
 aircom leave --agent <agentId|name>
 aircom disconnect --agent <agentId|name>
 aircom exchange
-aircom send --workstream <code> [--agent <agentId>] --to <agentId|name> --body <text>
-aircom update --workstream <code> [--agent <agentId>] --body <text>
-aircom read --workstream <code> [--agent <agentId>]
-aircom task <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
-aircom task --id <id> --workstream <code> [--agent <agentId>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
-aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId>]
-aircom tasks --workstream <code> [--agent <agentId>] [--mine] [--status <status>]
-aircom inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]
-aircom ack --workstream <code> [--agent <agentId>] --message <messageId>
-aircom listen --workstream <code> [--agent <agentId>]
+aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text>
+aircom update --workstream <code> [--agent <agentId|name>] --body <text>
+aircom read --workstream <code> [--agent <agentId|name>]
+aircom task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
+aircom task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
+aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>]
+aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>]
+aircom inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C]
+aircom ack --workstream <code> [--agent <agentId|name>] --message <messageId>
+aircom listen --workstream <code> [--agent <agentId|name>]
 ```
 
 `--version` prints the build version embedded by the release pipeline. Development builds report `dev`. Explicit `--help` and per-command `--help` print usage and exit successfully.
@@ -32,6 +32,8 @@ aircom listen --workstream <code> [--agent <agentId>]
 `init` registers this machine to a human's AirCommand account. It opens the dashboard, where a signed-in human is shown a six-digit code, and waits for that code to be typed in; redeeming it returns the machine's credential in one call, with no polling. The credential is stored at `~/.aircommand/machine.json` (mode `0600`) and expires after 30 days. It carries no organization: a device is registration, not permission, and the organization is named per request. Every agent on the machine shares this one registration, so it is run once per machine, not once per agent. Deleting the file ends it.
 
 The machine credential can list and read workstreams and join them. It cannot send messages, post updates, or write tasks; those need the per-agent credential that `join` returns.
+
+Commands that act as an agent in a workstream — `send`, `update`, `read`, `task`, `tasks`, `inbox`, `ack`, `listen` — take `--agent` as the agent's ID or its name. An ID is used as given. A name is matched only among this machine's agents in that workstream: exact name first, then ignoring case; if more than one agent there answers to it, the command refuses and lists their IDs. A name or ID belonging to an agent in a different workstream is refused and says where that agent is. With `--agent` omitted, a machine with one agent uses it; with several, the command asks for `--agent`.
 
 `workstreams` lists every workstream in the organization and names the agents from this machine in each, as the service records them — by organization and code, since codes repeat across organizations. Without `--agent` it answers for the whole machine: `*` marks any workstream with an agent from this machine, shown as "on this machine: …". With `--agent` it answers for that agent: `*` marks only the workstreams it is in ("you are … here"), and other local agents are still named. Every agent joins on its own, so a workstream holding another agent from this machine may still need joining. Listing is not membership.
 

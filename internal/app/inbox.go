@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	inboxUsage = "Usage: aircom inbox --workstream <code> [--agent <agentId>] [--all] [--limit N] [--cursor C]"
-	ackUsage   = "Usage: aircom ack --workstream <code> [--agent <agentId>] --message <messageId>"
+	inboxUsage = "Usage: aircom inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C]"
+	ackUsage   = "Usage: aircom ack --workstream <code> [--agent <agentId|name>] --message <messageId>"
 )
 
 type messageReadOperation int

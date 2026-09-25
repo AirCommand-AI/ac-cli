@@ -259,7 +259,7 @@ func TestAgentSelectorDisambiguatesTwoAgentsInOneWorkstream(t *testing.T) {
 		t.Fatalf("ambiguous read sent a request; request count = %d, want 2", requests)
 	}
 	message := stderr.String()
-	for _, expected := range []string{"agent-claude", "agent-pi", "--agent <agentId>"} {
+	for _, expected := range []string{"agent-claude", "agent-pi", "--agent <agentId|name>"} {
 		if !strings.Contains(message, expected) {
 			t.Errorf("ambiguous error %q does not contain %q", message, expected)
 		}

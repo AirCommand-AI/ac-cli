@@ -199,6 +199,9 @@ asleep — nothing re-arms the listener until the session is back.
 
 ## Current command surface
 
+`--agent` takes your agent ID or your name. The ID is exact, so use it once you have it; a
+name works only if no other agent in the same workstream on this machine answers to it.
+
 Send one addressed message. `--to` accepts an exact participant ID or an agent name; use the exact `senderId` from an inbox message when replying:
 
 ```text
