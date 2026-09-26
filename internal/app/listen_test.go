@@ -18,6 +18,18 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 )
 
+// stripListenerTimestamps keeps older behavioral tests focused on their wake
+// text while timestamp behavior is asserted separately.
+func stripListenerTimestamps(output string) string {
+	lines := strings.SplitAfter(output, "\n")
+	for index, line := range lines {
+		if marker := strings.Index(line, " [AirCommand] "); marker >= 0 {
+			lines[index] = "[AirCommand] " + line[marker+len(" [AirCommand] "):]
+		}
+	}
+	return strings.Join(lines, "")
+}
+
 func TestListenEstablishesSilentBaselineThenComposesAndSpoolsOneWake(t *testing.T) {
 	t.Parallel()
 
@@ -102,7 +114,7 @@ func TestListenEstablishesSilentBaselineThenComposesAndSpoolsOneWake(t *testing.
 	if exitCode := client.Run([]string{"listen", "--workstream", "694", "--agent", credential.AgentID}); exitCode != 0 {
 		t.Fatalf("initial listen exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "[AirCommand] "+summary+"\n"; got != want {
+	if got, want := stripListenerTimestamps(stdout.String()), "[AirCommand] "+summary+"\n"; got != want {
 		t.Fatalf("initial listen output = %q, want %q", got, want)
 	}
 
@@ -223,7 +235,7 @@ func TestListenCachesRosterNamesAndFallsBackToUnknownSenderID(t *testing.T) {
 		"[AirCommand] New message from Alice (human) in workstream 694: 2222222222222222; run aircom inbox.",
 		"[AirCommand] New message from agm_unknown (agent) in workstream 694: 3333333333333333; run aircom inbox.",
 	}
-	if got := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n"); !reflect.DeepEqual(got, wantLines) {
+	if got := strings.Split(strings.TrimSuffix(stripListenerTimestamps(stdout.String()), "\n"), "\n"); !reflect.DeepEqual(got, wantLines) {
 		t.Fatalf("wake lines = %v, want %v", got, wantLines)
 	}
 	spool, err := os.ReadFile(stateStore.SpoolPath(credential.AgentID))
@@ -344,7 +356,7 @@ func TestListenTerminalFailureLines(t *testing.T) {
 			if exitCode := client.Run([]string{"listen", "--workstream", "694"}); exitCode == 0 {
 				t.Fatal("terminal listener failure exited successfully")
 			}
-			if got := stdout.String(); got != test.want {
+			if got := stripListenerTimestamps(stdout.String()); got != test.want {
 				t.Fatalf("stdout = %q, want %q", got, test.want)
 			}
 			if stderr.Len() != 0 {

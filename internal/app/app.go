@@ -216,9 +216,13 @@ type rosterAgent struct {
 }
 
 type serviceErrorResponse struct {
-	Message string `json:"message"`
-	Error   string `json:"error"`
-	Code    string `json:"code"`
+	Message   string            `json:"message"`
+	Error     string            `json:"error"`
+	Code      string            `json:"code"`
+	Reason    string            `json:"reason"`
+	RevokedBy string            `json:"revokedBy"`
+	RevokedAt string            `json:"revokedAt"`
+	Details   map[string]string `json:"details"`
 }
 
 type exchangeResponse struct {
@@ -519,7 +523,7 @@ func (a *App) send(arguments []string) error {
 		return err
 	}
 	if response.status != http.StatusCreated {
-		return messageStatusError(response.status, response.body, workstreamCode, resolvedRecipient)
+		return messageStatusError(response.status, response.body, workstreamCode, resolvedRecipient, credential)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
 }
@@ -558,7 +562,7 @@ func (a *App) update(arguments []string) error {
 		return err
 	}
 	if response.status < 200 || response.status >= 300 {
-		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, true)
+		return workstreamResponseStatusError(response.status, response.body, workstreamCode, true, credential)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
 }
@@ -575,7 +579,7 @@ func (a *App) resolveMessageRecipient(workstreamCode string, recipient string, c
 		return "", err
 	}
 	if response.status < 200 || response.status >= 300 {
-		return "", rosterStatusError(response.status, workstreamCode)
+		return "", rosterStatusError(response.status, response.body, workstreamCode, credential)
 	}
 	roster, err := decodeWorkstreamRoster(response.body)
 	if err != nil {
@@ -686,7 +690,10 @@ func ambiguousRecipientError(name string, matches []rosterAgent) error {
 	)}
 }
 
-func rosterStatusError(status int, workstreamCode string) error {
+func rosterStatusError(status int, body []byte, workstreamCode string, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
 	switch status {
 	case http.StatusUnauthorized:
 		return &publicError{message: fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)}
@@ -845,7 +852,7 @@ func (a *App) read(arguments []string) error {
 		return err
 	}
 	if response.status < 200 || response.status >= 300 {
-		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, false)
+		return workstreamResponseStatusError(response.status, response.body, workstreamCode, false, credential)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
 }
@@ -918,7 +925,17 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 			path += "?" + query.Encode()
 		}
 		response, requestErr := a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
-		if terminalErr := a.notificationTerminalError(response.status, workstreamCode); terminalErr != nil {
+		if response.status == http.StatusUnauthorized {
+			// A dashboard Stop may race a successful rejoin which atomically
+			// replaces credentials.json. Re-read once and retry only when the
+			// bearer actually changed; repeating a known-revoked token cannot
+			// recover access and would turn a clear lifecycle answer into a loop.
+			if refreshed, err := a.Store.FindByAgent(workstreamCode, credential.AgentID); err == nil && refreshed.APIToken != credential.APIToken {
+				credential = refreshed
+				response, requestErr = a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
+			}
+		}
+		if terminalErr := a.notificationTerminalError(response.status, response.body, credential); terminalErr != nil {
 			return terminalErr
 		}
 		if requestErr != nil {
@@ -1122,15 +1139,19 @@ func spooledNotification(notification messageNotification, summary string) spool
 	}
 }
 
-func (a *App) notificationTerminalError(status int, workstreamCode string) error {
+func (a *App) notificationTerminalError(status int, body []byte, credential credentials.Credential) error {
 	switch status {
 	case http.StatusUnauthorized:
-		if err := a.writeActionLine(fmt.Sprintf("You were stopped or removed from workstream %s.", workstreamCode)); err != nil {
+		message := fmt.Sprintf("You were stopped or removed from workstream %s.", credential.WorkstreamCode)
+		if revoked := revokedSessionError(status, body, credential); revoked != nil {
+			message = revoked.Error()
+		}
+		if err := a.writeActionLine(message); err != nil {
 			return err
 		}
 		return &silentError{}
 	case http.StatusNotFound:
-		if err := a.writeActionLine(fmt.Sprintf("Workstream %s no longer exists.", workstreamCode)); err != nil {
+		if err := a.writeActionLine(fmt.Sprintf("Workstream %s no longer exists.", credential.WorkstreamCode)); err != nil {
 			return err
 		}
 		return &silentError{}
@@ -1163,8 +1184,15 @@ func notificationStatusError(status int, body []byte) error {
 }
 
 func (a *App) writeActionLine(message string) error {
-	if _, err := io.WriteString(a.outputWriter(), "[AirCommand] "+message+"\n"); err != nil {
-		return &publicError{message: "Unable to write listener output."}
+	// Recovery guidance intentionally spans several physical lines. Prefix each
+	// one so a log's ordering is still useful and no listener output appears
+	// un-timestamped beside the wake lines.
+	timestamp := a.listenNow().UTC().Format(time.RFC3339)
+	for _, text := range strings.Split(message, "\n") {
+		line := fmt.Sprintf("%s [AirCommand] %s\n", timestamp, text)
+		if _, err := io.WriteString(a.outputWriter(), line); err != nil {
+			return &publicError{message: "Unable to write listener output."}
+		}
 	}
 	return nil
 }
@@ -1445,7 +1473,10 @@ func exchangeStatusError(status int) error {
 	}
 }
 
-func messageStatusError(status int, body []byte, workstreamCode string, recipientID string) error {
+func messageStatusError(status int, body []byte, workstreamCode string, recipientID string, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
 	response := serviceError(body)
 	recipient := singleLine(recipientID)
 	switch status {
@@ -1513,7 +1544,97 @@ func serviceError(body []byte) serviceErrorResponse {
 	return response
 }
 
-func taskCreateStatusError(status int, body []byte, workstreamCode string) error {
+// revokedSessionError gives every agent command the same actionable answer for
+// a server-confirmed revoked credential. Unknown 401s keep their existing
+// command-specific errors: only SessionRevoked proves this agent used to have
+// access and names the lifecycle action that ended it.
+func revokedSessionError(status int, body []byte, credential credentials.Credential) error {
+	if status != http.StatusUnauthorized || serviceError(body).Code != "SessionRevoked" {
+		return nil
+	}
+	return revokedSessionRecoveryError(body, credential)
+}
+
+// revokedSessionRecoveryError is deliberately also used by join's already-there
+// path. A 401 there proves the stored bearer cannot be used, even if a legacy
+// server does not include the newer SessionRevoked code.
+func revokedSessionRecoveryError(body []byte, credential credentials.Credential) error {
+	response := serviceError(body)
+	reason := humanLifecycleReason(response.Reason)
+	actor := lifecycleActor(response.RevokedBy)
+	when := lifecycleTime(response.RevokedAt)
+	if reason == "stopped" || reason == "removed" {
+		return stoppedOrRemovedRecovery(reason, actor, when)
+	}
+	organization := singleLine(strings.TrimSpace(credential.OrganizationID))
+	if organization == "" {
+		organization = "<organization>"
+	}
+	agentID := singleLine(strings.TrimSpace(credential.AgentID))
+	workstreamCode := singleLine(strings.TrimSpace(credential.WorkstreamCode))
+	return &publicError{message: fmt.Sprintf(
+		"Agent access was %s by %s at %s. To recover, run:\n    aircom leave --agent %s\n    aircom join --agent %s --org %s --workstream %s",
+		reason, actor, when, agentID, agentID, organization, workstreamCode,
+	)}
+}
+
+// joinLifecycleError translates the policy-bearing 409s returned after a
+// machine has left a stopped/removed workstream. These are not generic join
+// conflicts: only a person may resume or re-add the agent.
+func joinLifecycleError(status int, body []byte) error {
+	response := serviceError(body)
+	if status == http.StatusConflict {
+		switch response.Code {
+		case "AgentStopped":
+			return stoppedOrRemovedRecovery("stopped", lifecycleActor(response.Details["stoppedBy"]), lifecycleTime(response.Details["stoppedAt"]))
+		case "AgentRemoved":
+			return stoppedOrRemovedRecovery("removed", lifecycleActor(response.Details["removedBy"]), lifecycleTime(response.Details["removedAt"]))
+		}
+	}
+	return &publicError{message: joinRejectionMessage(body)}
+}
+
+func stoppedOrRemovedRecovery(reason, actor, when string) error {
+	action := "resume it"
+	if reason == "removed" {
+		action = "add it back"
+	}
+	return &publicError{message: fmt.Sprintf("Agent was %s by %s at %s. Ask a person to %s from the AirCommand dashboard.", reason, actor, when, action)}
+}
+
+func lifecycleActor(value string) string {
+	if value = singleLine(strings.TrimSpace(value)); value != "" {
+		return value
+	}
+	return "an unknown person"
+}
+
+func lifecycleTime(value string) string {
+	if value = singleLine(strings.TrimSpace(value)); value != "" {
+		return value
+	}
+	return "an unknown time"
+}
+
+func humanLifecycleReason(value string) string {
+	switch strings.TrimSpace(value) {
+	case "agent_stopped":
+		return "stopped"
+	case "agent_removed":
+		return "removed"
+	case "agent_left":
+		return "left"
+	case "device_revoked", "device_removed":
+		return "revoked"
+	default:
+		return "revoked"
+	}
+}
+
+func taskCreateStatusError(status int, body []byte, workstreamCode string, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
 	code := responseCode(body)
 	switch status {
 	case http.StatusBadRequest:
@@ -1546,7 +1667,10 @@ func taskCreateStatusError(status int, body []byte, workstreamCode string) error
 	}
 }
 
-func taskCommentStatusError(status int, body []byte, workstreamCode string, taskID string) error {
+func taskCommentStatusError(status int, body []byte, workstreamCode string, taskID string, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
 	code := responseCode(body)
 	switch status {
 	case http.StatusBadRequest:
@@ -1571,7 +1695,10 @@ func taskCommentStatusError(status int, body []byte, workstreamCode string, task
 	}
 }
 
-func taskStatusError(status int, body []byte, workstreamCode string, taskID string) error {
+func taskStatusError(status int, body []byte, workstreamCode string, taskID string, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
 	code := responseCode(body)
 	switch status {
 	case http.StatusBadRequest:
@@ -1596,7 +1723,10 @@ func taskStatusError(status int, body []byte, workstreamCode string, taskID stri
 	}
 }
 
-func taskAssigneeError(status int, body []byte, workstreamCode string, taskID string) error {
+func taskAssigneeError(status int, body []byte, workstreamCode string, taskID string, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
 	code := responseCode(body)
 	switch {
 	case status == http.StatusConflict && code == "TaskAssigneeAmbiguous":
@@ -1614,6 +1744,9 @@ func taskAssigneeError(status int, body []byte, workstreamCode string, taskID st
 	}
 }
 
+// workstreamStatusError is the legacy status/code mapper used by direct unit
+// tests and callers that already decoded the response. New command paths use
+// workstreamResponseStatusError so a SessionRevoked body can supply recovery.
 func workstreamStatusError(status int, code string, workstreamCode string, write bool) error {
 	switch status {
 	case http.StatusUnauthorized:
@@ -1630,6 +1763,13 @@ func workstreamStatusError(status int, code string, workstreamCode string, write
 		}
 	}
 	return &publicError{message: fmt.Sprintf("AirCommand request failed (HTTP %d).", status)}
+}
+
+func workstreamResponseStatusError(status int, body []byte, workstreamCode string, write bool, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
+	return workstreamStatusError(status, responseCode(body), workstreamCode, write)
 }
 
 func responseCode(body []byte) string {

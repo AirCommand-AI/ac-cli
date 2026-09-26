@@ -73,6 +73,8 @@ func (s *leaveServer) handler(t *testing.T) http.Handler {
 		case request.Method == http.MethodGet && strings.HasSuffix(path, "/notifications"):
 			s.feedQueries = append(s.feedQueries, path+"?"+request.URL.RawQuery)
 			_, _ = writer.Write([]byte(`{"notifications":[],"cursor":"fresh","pollAfterSeconds":30}`))
+		case request.Method == http.MethodGet && strings.HasPrefix(path, "/agent/v1/workstreams/"):
+			_, _ = writer.Write([]byte(`{"workstream":{"code":"610"}}`))
 		case request.Method == http.MethodPost && strings.HasPrefix(path, "/v1/agents/"):
 			parts := strings.Split(strings.TrimPrefix(path, "/v1/agents/"), "/")
 			id, code := parts[0], parts[2]

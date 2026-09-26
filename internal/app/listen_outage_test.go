@@ -164,7 +164,7 @@ func TestListenAnnouncesOnlyProlongedOutages(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("exit code = %d", code)
 			}
-			if out != tc.want {
+			if got := stripListenerTimestamps(out); got != tc.want {
 				t.Fatalf("stdout = %q, want %q", out, tc.want)
 			}
 			// Failed polls never move the cursor.
@@ -209,7 +209,7 @@ func TestListenStopsAtOnceOnATerminalFailureDuringAnOutage(t *testing.T) {
 		t.Fatal("listener kept running after being removed")
 	}
 	want := fmt.Sprintf("[AirCommand] You were stopped or removed from workstream %s.\n", testCredential().WorkstreamCode)
-	if out != want {
+	if got := stripListenerTimestamps(out); got != want {
 		t.Fatalf("stdout = %q, want only the terminal line %q", out, want)
 	}
 	if strings.Contains(out, "Lost connection") {

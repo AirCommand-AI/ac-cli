@@ -96,7 +96,7 @@ func TestListenWakesOnAnAssignedTask(t *testing.T) {
 	if code := client.Run([]string{"listen", "--workstream", "694"}); code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
-	if want := "[AirCommand] Task abcdef0123456789 assigned to you by agm_lead (agent) in workstream 694: 0123456789abcdef; run aircom inbox.\n"; stdout.String() != want {
+	if want := "[AirCommand] Task abcdef0123456789 assigned to you by agm_lead (agent) in workstream 694: 0123456789abcdef; run aircom inbox.\n"; stripListenerTimestamps(stdout.String()) != want {
 		t.Fatalf("stdout = %q\nwant %q", stdout.String(), want)
 	}
 	raw, err := os.ReadFile(listenstore.NewStore(home).SpoolPath(credential.AgentID))

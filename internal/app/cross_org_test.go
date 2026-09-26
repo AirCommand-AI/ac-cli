@@ -16,6 +16,16 @@ func crossOrgFixture(t *testing.T) (*leaveServer, *App, func(args ...string) (in
 	fake.workstreams[leadID], fake.orgs[leadID] = "610", acmeID
 	fake.workstreams[engineerID], fake.orgs[engineerID] = "610", betaID
 	fake.mu.Unlock()
+	// The service says Lead is already in Acme's 610, so the locally stored
+	// bearer must describe that same workstream for join's liveness check.
+	lead, err := client.Store.FindByAgent("583", leadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lead.WorkstreamCode, lead.OrganizationID = "610", acmeID
+	if err := client.Store.Save(lead); err != nil {
+		t.Fatal(err)
+	}
 	return fake, client, func(args ...string) (int, string, string) {
 		return run(t, client, stdout, stderr, args...)
 	}

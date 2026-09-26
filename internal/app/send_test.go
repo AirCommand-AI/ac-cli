@@ -412,7 +412,7 @@ func TestMessageStatusErrorMapsEveryDocumentedContractError(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := messageStatusError(test.status, []byte(test.body), "694", "agm_recipient")
+			err := messageStatusError(test.status, []byte(test.body), "694", "agm_recipient", testCredential())
 			visible, ok := err.(*publicError)
 			if !ok {
 				t.Fatalf("error type = %T, want *publicError", err)

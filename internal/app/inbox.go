@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+
+	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
 const (
@@ -69,7 +71,7 @@ func (a *App) inbox(arguments []string) error {
 		return err
 	}
 	if response.status != http.StatusOK {
-		return messageReadStatusError(response.status, response.body, messageListOperation, workstreamCode, "")
+		return messageReadStatusError(response.status, response.body, messageListOperation, workstreamCode, "", credential)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
 }
@@ -103,7 +105,7 @@ func (a *App) ack(arguments []string) error {
 		return err
 	}
 	if response.status != http.StatusOK {
-		return messageReadStatusError(response.status, response.body, messageAcknowledgeOperation, workstreamCode, messageID)
+		return messageReadStatusError(response.status, response.body, messageAcknowledgeOperation, workstreamCode, messageID, credential)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
 }
@@ -136,7 +138,10 @@ func validMessageID(messageID string) bool {
 	return true
 }
 
-func messageReadStatusError(status int, body []byte, operation messageReadOperation, workstreamCode string, messageID string) error {
+func messageReadStatusError(status int, body []byte, operation messageReadOperation, workstreamCode string, messageID string, credential credentials.Credential) error {
+	if err := revokedSessionError(status, body, credential); err != nil {
+		return err
+	}
 	response := serviceError(body)
 	switch status {
 	case http.StatusBadRequest:

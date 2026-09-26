@@ -128,7 +128,7 @@ func (a *App) readTaskDetail(workstreamCode string, credential credentials.Crede
 		return taskListEnvelope{}, err
 	}
 	if response.status < 200 || response.status >= 300 {
-		return taskListEnvelope{}, workstreamStatusError(response.status, responseCode(response.body), workstreamCode, false)
+		return taskListEnvelope{}, workstreamResponseStatusError(response.status, response.body, workstreamCode, false, credential)
 	}
 	detail, err := decodeTaskDetail(response.body)
 	if err != nil {

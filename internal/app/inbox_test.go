@@ -408,7 +408,7 @@ func TestMessageReadStatusErrorMapsEveryDocumentedError(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := messageReadStatusError(test.status, []byte(test.body), test.operation, "694", "0123456789abcdef")
+			err := messageReadStatusError(test.status, []byte(test.body), test.operation, "694", "0123456789abcdef", testCredential())
 			visible, ok := err.(*publicError)
 			if !ok {
 				t.Fatalf("error type = %T, want *publicError", err)

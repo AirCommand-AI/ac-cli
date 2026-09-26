@@ -525,7 +525,7 @@ func (a *App) createTask(arguments []string) error {
 		if fieldErr := taskFieldError(response.body); fieldErr != nil {
 			return fieldErr
 		}
-		return taskCreateStatusError(response.status, response.body, workstreamCode)
+		return taskCreateStatusError(response.status, response.body, workstreamCode, credential)
 	}
 	created, err := decodeTaskResponse(response.body)
 	if err != nil {
@@ -576,7 +576,7 @@ func (a *App) addTaskComment(workstreamCode string, taskID string, body string, 
 	}
 	if response.status < 200 || response.status >= 300 {
 		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
-		return taskCommentStatusError(response.status, response.body, workstreamCode, protectedTaskID)
+		return taskCommentStatusError(response.status, response.body, workstreamCode, protectedTaskID, credential)
 	}
 	comment, err := decodeTaskCommentResponse(response.body)
 	if err != nil || comment.TaskID != taskID || comment.Body != body {
@@ -621,7 +621,7 @@ func (a *App) setTaskStatus(workstreamCode string, taskID string, change taskSta
 			return fieldErr
 		}
 		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
-		return taskStatusError(response.status, response.body, workstreamCode, protectedTaskID)
+		return taskStatusError(response.status, response.body, workstreamCode, protectedTaskID, credential)
 	}
 	updated, err := decodeTaskResponse(response.body)
 	if err != nil || updated.ID != taskID || updated.Status != status {
@@ -653,7 +653,7 @@ func (a *App) setTaskAssignee(workstreamCode string, taskID string, assignee str
 	}
 	if response.status < 200 || response.status >= 300 {
 		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
-		return taskAssigneeError(response.status, response.body, workstreamCode, protectedTaskID)
+		return taskAssigneeError(response.status, response.body, workstreamCode, protectedTaskID, credential)
 	}
 	updated, err := decodeTaskResponse(response.body)
 	if err != nil || updated.ID != taskID {
@@ -773,7 +773,7 @@ func (a *App) tasks(arguments []string) error {
 		return err
 	}
 	if response.status < 200 || response.status >= 300 {
-		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, false)
+		return workstreamResponseStatusError(response.status, response.body, workstreamCode, false, credential)
 	}
 	tasks, err := decodeTaskList(response.body)
 	if err != nil {
@@ -966,8 +966,30 @@ func (a *App) join(arguments []string) error {
 	// organization and code as the service records for the agent. An agent with
 	// no organization recorded is never assumed to be where it was asked to go.
 	if strings.TrimSpace(agent.WorkstreamCode) == workstreamCode && agent.OrganizationID != "" && agent.OrganizationID == organizationID {
+		// A dashboard Stop leaves this machine-level binding in place while
+		// revoking its agent bearer. Do not hand a restarted runtime a dead
+		// credential: prove the locally stored bearer still works first.
+		credential, err := a.Store.FindByAgent(workstreamCode, agent.AgentID)
+		if err != nil {
+			if legacy := legacyStorageError(err); legacy != nil {
+				return legacy
+			}
+			return &publicError{message: fmt.Sprintf(
+				"%s is already in workstream %s, but its stored credential cannot be verified. To recover, run:\n    aircom leave --agent %s\n    aircom join --agent %s --org %s --workstream %s",
+				agent.Name, workstreamCode, agent.AgentID, agent.AgentID, organizationID, workstreamCode)}
+		}
+		response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
+		if err != nil {
+			return err
+		}
+		if response.status == http.StatusUnauthorized {
+			return revokedSessionRecoveryError(response.body, credential)
+		}
+		if response.status < 200 || response.status >= 300 {
+			return workstreamResponseStatusError(response.status, response.body, workstreamCode, false, credential)
+		}
 		// Already there. Re-running join is how a restarted runtime asks for
-		// its agent back, so report the identity rather than failing.
+		// its agent back, so report the identity only after its bearer is live.
 		a.reportAgentIdentity(listen, agent.AgentID, agent.Name, workstreamCode, socketAddressForAgentID(agent.AgentID))
 		if listen {
 			return a.listenAs(workstreamCode, agent.AgentID, held)
@@ -1022,7 +1044,7 @@ func (a *App) join(arguments []string) error {
 	case response.status == http.StatusNotFound:
 		return &publicError{message: fmt.Sprintf("Workstream %s was not found in that organization.", workstreamCode)}
 	case response.status == http.StatusConflict:
-		return &publicError{message: joinRejectionMessage(response.body)}
+		return joinLifecycleError(response.status, response.body)
 	case response.status == http.StatusBadRequest:
 		return &publicError{message: joinRejectionMessage(response.body)}
 	case response.status < 200 || response.status >= 300:

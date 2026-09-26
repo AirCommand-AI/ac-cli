@@ -57,6 +57,8 @@ func joinTestServer(t *testing.T, agent agentSummary, onNotify func()) *httptest
 		case request.URL.Path == "/v1/agents":
 			body, _ := json.Marshal(listAgentsResponse{Agents: []agentSummary{agent}})
 			_, _ = writer.Write(body)
+		case strings.HasPrefix(request.URL.Path, "/agent/v1/workstreams/") && !strings.Contains(request.URL.Path, "/notifications"):
+			_, _ = writer.Write([]byte(`{"workstream":{"code":"694"}}`))
 		case strings.Contains(request.URL.Path, "/notifications"):
 			if onNotify != nil {
 				onNotify()
