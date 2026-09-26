@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,11 +24,11 @@ import (
 const (
 	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>]"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
-	taskByIDUsage    = "Usage: aircom task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
-	taskIDFlagUsage  = "Usage: aircom task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]"
-	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>]"
+	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <text>] [--assignee <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]..."
+	taskIDFlagUsage  = "Usage: aircom task --id <id|number> --workstream <code> [same flags as above]"
+	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]"
 	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
-	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>]"
+	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>]"
 )
 
 const (
@@ -300,8 +301,10 @@ func (a *App) task(arguments []string) error {
 	return a.taskByID(arguments)
 }
 
-// taskByID reads one workstream detail payload and renders the selected task
-// plus its task-scoped updates. A positional ID must precede all flags.
+// taskByID reads one task and its task-scoped updates, or changes it: its
+// status, a comment, its assignee, or its structured fields, each as a separate
+// command. The task is named by ID or number; a positional reference must
+// precede all flags.
 func (a *App) taskByID(arguments []string) error {
 	taskID := ""
 	flagArguments := arguments
@@ -311,18 +314,17 @@ func (a *App) taskByID(arguments []string) error {
 	}
 	flags := flag.NewFlagSet("task", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var explicitTaskID string
-	var workstreamCode string
-	var agentID string
-	var status string
-	var comment string
-	var assignee string
+	var explicitTaskID, workstreamCode, agentID, status, comment, assignee, reason, replacedBy string
+	var fields taskFieldFlags
 	flags.StringVar(&explicitTaskID, "id", "", "explicit task ID")
 	flags.StringVar(&assignee, "assignee", "", "hand the task to this agent")
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&status, "status", "", "new task status")
 	flags.StringVar(&comment, "comment", "", "task comment")
+	flags.StringVar(&reason, "reason", "", "why the task is cancelled")
+	flags.StringVar(&replacedBy, "replaced-by", "", "the task replacing a cancelled one")
+	fields.register(flags)
 	if flags.Parse(flagArguments) != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: taskUsage}
 	}
@@ -336,80 +338,90 @@ func (a *App) taskByID(arguments []string) error {
 	if taskID == "" {
 		return &publicError{message: taskUsage}
 	}
-	commentSet := false
-	assigneeSet := false
-	flags.Visit(func(current *flag.Flag) {
-		switch current.Name {
-		case "comment":
-			commentSet = true
-		case "assignee":
-			assigneeSet = true
-		}
-	})
-	if err := validateWorkstreamCode(workstreamCode); err != nil {
+	set := map[string]bool{}
+	flags.Visit(func(current *flag.Flag) { set[current.Name] = true })
+	if err := validateTaskChange(set, workstreamCode, status, comment, assignee, reason); err != nil {
 		return err
-	}
-	if status != "" && !validTaskListStatus(status) {
-		return &publicError{message: "--status must be one of todo, in_flight, blocked, or landed."}
-	}
-	if commentSet && strings.TrimSpace(comment) == "" {
-		return &publicError{message: "--comment must contain non-whitespace text."}
-	}
-	if commentSet && status != "" {
-		return &publicError{message: "--comment and --status cannot be used together; run them as separate commands."}
-	}
-	if assigneeSet && strings.TrimSpace(assignee) == "" {
-		return &publicError{message: "--assignee must name an agent."}
-	}
-	if assigneeSet && (commentSet || status != "") {
-		return &publicError{message: "--assignee cannot be combined with --status or --comment; run them as separate commands."}
 	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
 	}
-	if commentSet {
+	editSet := taskFieldsSet(set)
+	if set["comment"] || status != "" || set["assignee"] || editSet {
+		if taskID, err = a.resolveTaskID(workstreamCode, taskID, credential); err != nil {
+			return err
+		}
+	}
+	switch {
+	case set["comment"]:
 		return a.addTaskComment(workstreamCode, taskID, comment, credential)
-	}
-	if status != "" {
-		return a.setTaskStatus(workstreamCode, taskID, status, credential)
-	}
-	if assigneeSet {
+	case status != "":
+		return a.setTaskStatus(workstreamCode, taskID, taskStatusRequest{
+			Status: status, CancelReason: strings.TrimSpace(reason), ReplacedBy: strings.TrimSpace(replacedBy),
+		}, credential)
+	case set["assignee"]:
 		return a.setTaskAssignee(workstreamCode, taskID, strings.TrimSpace(assignee), credential)
+	case editSet:
+		return a.editTask(workstreamCode, taskID, fields.editRequest(set), credential)
 	}
+	return a.showTask(workstreamCode, taskID, credential)
+}
 
-	response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
+// validateTaskChange checks that a task command asks for one kind of change,
+// with the values that change needs.
+func validateTaskChange(set map[string]bool, workstreamCode, status, comment, assignee, reason string) error {
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+	if status != "" && !validTaskListStatus(status) {
+		return &publicError{message: taskStatusChoices}
+	}
+	switch {
+	case set["comment"] && strings.TrimSpace(comment) == "":
+		return &publicError{message: "--comment must contain non-whitespace text."}
+	case set["comment"] && status != "":
+		return &publicError{message: "--comment and --status cannot be used together; run them as separate commands."}
+	case set["assignee"] && strings.TrimSpace(assignee) == "":
+		return &publicError{message: "--assignee must name an agent."}
+	case set["assignee"] && (set["comment"] || status != ""):
+		return &publicError{message: "--assignee cannot be combined with --status or --comment; run them as separate commands."}
+	case (set["reason"] || set["replaced-by"]) && status != taskStatusCancelled:
+		return &publicError{message: "--reason and --replaced-by go only with --status cancelled."}
+	case status == taskStatusCancelled && strings.TrimSpace(reason) == "":
+		return &publicError{message: "--status cancelled requires --reason <text>."}
+	case taskFieldsSet(set) && (set["comment"] || status != "" || set["assignee"]):
+		return &publicError{message: "--milestone, --type, --acceptance, --validation, --depends-on and --link cannot be combined with --status, --comment or --assignee; run them as separate commands."}
+	}
+	return nil
+}
+
+func taskFieldsSet(set map[string]bool) bool {
+	for name := range taskFieldNames {
+		if set[name] {
+			return true
+		}
+	}
+	return false
+}
+
+// showTask prints one task, named by ID or number, and its comments oldest
+// first.
+func (a *App) showTask(workstreamCode string, ref string, credential credentials.Credential) error {
+	detail, err := a.readTaskDetail(workstreamCode, credential)
 	if err != nil {
 		return err
 	}
-	if response.status < 200 || response.status >= 300 {
-		return workstreamStatusError(response.status, responseCode(response.body), workstreamCode, false)
-	}
-	detail, err := decodeTaskDetail(response.body)
-	if err != nil {
-		return &publicError{message: "The workstream service returned an invalid task response."}
-	}
-
-	var selected *taskListItem
-	for index := range detail.Tasks {
-		if detail.Tasks[index].ID == taskID {
-			selected = &detail.Tasks[index]
-			break
-		}
+	selected := findTask(detail.Tasks, ref)
+	if selected == nil {
+		return taskNotFoundError(ref, workstreamCode, credential)
 	}
 	protected := []string{credential.APIToken, credential.SocketKey}
-	if selected == nil {
-		return &publicError{message: fmt.Sprintf(
-			"Task %s was not found in workstream %s.",
-			safeMetadata(taskID, protected...),
-			safeMetadata(workstreamCode, protected...),
-		)}
-	}
 
 	comments := make([]taskCommentItem, 0)
 	for _, update := range detail.Updates {
-		if update.TaskID == taskID {
+		if update.TaskID == selected.ID {
 			comments = append(comments, update)
 		}
 	}
@@ -421,20 +433,21 @@ func (a *App) taskByID(arguments []string) error {
 	})
 
 	safe := func(value string) string { return safeMetadata(value, protected...) }
-	orDash := func(value string) string {
-		if value == "" {
-			return "-"
-		}
-		return safe(value)
-	}
 	var output strings.Builder
-	output.WriteString(formatTaskState(*selected, protected...))
+	output.WriteString(formatTaskState(*selected, detail.Tasks, protected...))
 	output.WriteString("Comments:\n")
 	if len(comments) == 0 {
-		fmt.Fprintf(&output, "No comments for task %s.\n", safe(taskID))
+		fmt.Fprintf(&output, "No comments for task %s.\n", safe(ref))
 	} else {
 		for _, comment := range comments {
-			fmt.Fprintf(&output, "%s\t%s\t%s\n", safe(comment.CreatedAt), orDash(comment.Author), safe(comment.Body))
+			author := comment.Author
+			if comment.AuthorActor != nil && comment.AuthorActor.Name != "" {
+				author = comment.AuthorActor.Name
+			}
+			if author == "" {
+				author = "-"
+			}
+			fmt.Fprintf(&output, "%s\t%s\t%s\n", safe(comment.CreatedAt), safe(author), safe(comment.Body))
 		}
 	}
 	if _, err := io.WriteString(a.outputWriter(), output.String()); err != nil {
@@ -451,6 +464,8 @@ func (a *App) createTask(arguments []string) error {
 	var title string
 	var description string
 	var assignee string
+	var number int
+	var fields taskFieldFlags
 	status := "todo"
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
@@ -458,16 +473,14 @@ func (a *App) createTask(arguments []string) error {
 	flags.StringVar(&description, "description", "", "task description")
 	flags.StringVar(&assignee, "assignee", "", "task assignee")
 	flags.StringVar(&status, "status", "todo", "task status")
+	flags.IntVar(&number, "number", 0, "task number")
+	fields.register(flags)
 	if flags.Parse(arguments) != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: taskCreateUsage}
 	}
-	titleSet := false
-	flags.Visit(func(current *flag.Flag) {
-		if current.Name == "title" {
-			titleSet = true
-		}
-	})
-	if !titleSet {
+	set := map[string]bool{}
+	flags.Visit(func(current *flag.Flag) { set[current.Name] = true })
+	if !set["title"] {
 		return &publicError{message: taskCreateUsage}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
@@ -477,7 +490,13 @@ func (a *App) createTask(arguments []string) error {
 		return &publicError{message: "--title must contain non-whitespace text."}
 	}
 	if !validTaskListStatus(status) {
-		return &publicError{message: "--status must be one of todo, in_flight, blocked, or landed."}
+		return &publicError{message: taskStatusChoices}
+	}
+	if status == taskStatusCancelled {
+		return &publicError{message: "A task cannot be created cancelled."}
+	}
+	if set["number"] && (number < 1 || number > maxTaskNumber) {
+		return &publicError{message: fmt.Sprintf("--number must be between 1 and %d.", maxTaskNumber)}
 	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
@@ -491,6 +510,8 @@ func (a *App) createTask(arguments []string) error {
 	payload, err := json.Marshal(taskCreateRequest{
 		Title: title, Description: description, Assignee: assignee,
 		Status: status, IdempotencyID: idempotencyID,
+		Number: number, Milestone: fields.milestone, Type: fields.taskType, Acceptance: fields.acceptance.values,
+		Validation: fields.validation, DependsOn: fields.dependsOn.values, Links: fields.links.values,
 	})
 	if err != nil {
 		return &publicError{message: "Unable to prepare task creation."}
@@ -501,16 +522,42 @@ func (a *App) createTask(arguments []string) error {
 		return err
 	}
 	if response.status < 200 || response.status >= 300 {
+		if fieldErr := taskFieldError(response.body); fieldErr != nil {
+			return fieldErr
+		}
 		return taskCreateStatusError(response.status, response.body, workstreamCode)
 	}
 	created, err := decodeTaskResponse(response.body)
 	if err != nil {
 		return &publicError{message: "The workstream service returned an invalid task creation response."}
 	}
-	if _, err := fmt.Fprintf(a.outputWriter(), "Created task: %s\n", safeMetadata(created.ID, credential.APIToken, credential.SocketKey)); err != nil {
+	protected := []string{credential.APIToken, credential.SocketKey}
+	var output strings.Builder
+	fmt.Fprintf(&output, "Created task: %s\n", safeMetadata(created.ID, protected...))
+	if created.Number > 0 {
+		fmt.Fprintf(&output, "Number: #%d\n", created.Number)
+	}
+	if _, err := io.WriteString(a.outputWriter(), output.String()); err != nil {
 		return &publicError{message: "Unable to write task creation output."}
 	}
+	a.warnMissingTaskChecks(created, workstreamCode, protected)
 	return nil
+}
+
+// warnMissingTaskChecks reminds the creator, on stderr, that a task without
+// acceptance criteria or validation cannot be checked when it lands.
+func (a *App) warnMissingTaskChecks(task taskListItem, workstreamCode string, protected []string) {
+	ref := task.ID
+	if task.Number > 0 {
+		ref = strconv.Itoa(task.Number)
+	}
+	ref = safeMetadata(ref, protected...)
+	if len(task.Acceptance) == 0 {
+		fmt.Fprintf(a.errorWriter(), "Warning: the task has no acceptance criteria; add them with: aircom task %s --workstream %s --acceptance <text>\n", ref, workstreamCode)
+	}
+	if strings.TrimSpace(task.Validation) == "" {
+		fmt.Fprintf(a.errorWriter(), "Warning: the task has no validation; add it with: aircom task %s --workstream %s --validation <text>\n", ref, workstreamCode)
+	}
 }
 
 func (a *App) addTaskComment(workstreamCode string, taskID string, body string, credential credentials.Credential) error {
@@ -553,12 +600,14 @@ func (a *App) addTaskComment(workstreamCode string, taskID string, body string, 
 	return nil
 }
 
-func (a *App) setTaskStatus(workstreamCode string, taskID string, status string, credential credentials.Credential) error {
+func (a *App) setTaskStatus(workstreamCode string, taskID string, change taskStatusRequest, credential credentials.Credential) error {
+	status := change.Status
 	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
 	if err != nil {
 		return &publicError{message: "Unable to generate a task status idempotency ID."}
 	}
-	payload, err := json.Marshal(taskStatusRequest{Status: status, IdempotencyID: idempotencyID})
+	change.IdempotencyID = idempotencyID
+	payload, err := json.Marshal(change)
 	if err != nil {
 		return &publicError{message: "Unable to prepare the task status change."}
 	}
@@ -568,6 +617,9 @@ func (a *App) setTaskStatus(workstreamCode string, taskID string, status string,
 		return err
 	}
 	if response.status < 200 || response.status >= 300 {
+		if fieldErr := taskFieldError(response.body); fieldErr != nil {
+			return fieldErr
+		}
 		protectedTaskID := safeMetadata(taskID, credential.APIToken, credential.SocketKey)
 		return taskStatusError(response.status, response.body, workstreamCode, protectedTaskID)
 	}
@@ -575,7 +627,7 @@ func (a *App) setTaskStatus(workstreamCode string, taskID string, status string,
 	if err != nil || updated.ID != taskID || updated.Status != status {
 		return &publicError{message: "The workstream service returned an invalid task status response."}
 	}
-	if _, err := io.WriteString(a.outputWriter(), formatTaskState(updated, credential.APIToken, credential.SocketKey)); err != nil {
+	if _, err := io.WriteString(a.outputWriter(), formatTaskState(updated, nil, credential.APIToken, credential.SocketKey)); err != nil {
 		return &publicError{message: "Unable to write task output."}
 	}
 	return nil
@@ -607,13 +659,15 @@ func (a *App) setTaskAssignee(workstreamCode string, taskID string, assignee str
 	if err != nil || updated.ID != taskID {
 		return &publicError{message: "The workstream service returned an invalid task reassignment response."}
 	}
-	if _, err := io.WriteString(a.outputWriter(), formatTaskState(updated, credential.APIToken, credential.SocketKey)); err != nil {
+	if _, err := io.WriteString(a.outputWriter(), formatTaskState(updated, nil, credential.APIToken, credential.SocketKey)); err != nil {
 		return &publicError{message: "Unable to write task output."}
 	}
 	return nil
 }
 
-func formatTaskState(task taskListItem, protected ...string) string {
+// formatTaskState prints a task's fields; tasks, when given, names its
+// dependencies and replacement by number, title and status.
+func formatTaskState(task taskListItem, tasks []taskListItem, protected ...string) string {
 	safe := func(value string) string { return safeMetadata(value, protected...) }
 	orDash := func(value string) string {
 		if value == "" {
@@ -621,7 +675,16 @@ func formatTaskState(task taskListItem, protected ...string) string {
 		}
 		return safe(value)
 	}
+	describe := func(id string) string {
+		if other := findTaskByID(tasks, id); other != nil {
+			return fmt.Sprintf("%s %s (%s)", taskLabel(*other), safe(other.Title), safe(other.Status))
+		}
+		return safe(id)
+	}
 	var output strings.Builder
+	if task.Number > 0 {
+		fmt.Fprintf(&output, "Number: #%d\n", task.Number)
+	}
 	fmt.Fprintf(&output, "Title: %s\n", safe(task.Title))
 	fmt.Fprintf(&output, "Description: %s\n", orDash(task.Description))
 	fmt.Fprintf(&output, "Status: %s\n", safe(task.Status))
@@ -634,7 +697,46 @@ func formatTaskState(task taskListItem, protected ...string) string {
 	if task.AssignedBy != nil && task.AssignedAt != "" {
 		fmt.Fprintf(&output, "Assigned by: %s at %s\n", safe(task.AssignedBy.Name), safe(task.AssignedAt))
 	}
+	if task.Milestone != "" {
+		fmt.Fprintf(&output, "Milestone: %s\n", safe(task.Milestone))
+	}
+	if task.Type != "" {
+		fmt.Fprintf(&output, "Type: %s\n", safe(task.Type))
+	}
+	writeList := func(heading string, items []string, render func(string) string) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Fprintf(&output, "%s:\n", heading)
+		for _, item := range items {
+			fmt.Fprintf(&output, "  - %s\n", render(item))
+		}
+	}
+	writeList("Acceptance", task.Acceptance, safe)
+	if task.Validation != "" {
+		fmt.Fprintf(&output, "Validation: %s\n", safe(task.Validation))
+	}
+	writeList("Depends on", task.DependsOn, describe)
+	writeList("Links", task.Links, safe)
+	if task.CancelReason != "" {
+		fmt.Fprintf(&output, "Cancelled: %s\n", safe(task.CancelReason))
+		if task.CancelledBy != nil {
+			fmt.Fprintf(&output, "Cancelled by: %s at %s\n", safe(task.CancelledBy.Name), safe(task.CancelledAt))
+		}
+		if task.ReplacedBy != "" {
+			fmt.Fprintf(&output, "Replaced by: %s\n", describe(task.ReplacedBy))
+		}
+	}
 	return output.String()
+}
+
+func findTaskByID(tasks []taskListItem, id string) *taskListItem {
+	for index := range tasks {
+		if tasks[index].ID == id {
+			return &tasks[index]
+		}
+	}
+	return nil
 }
 
 // tasks reads the existing workstream detail and prints a stable tab-separated
@@ -645,11 +747,13 @@ func (a *App) tasks(arguments []string) error {
 	var workstreamCode string
 	var agentID string
 	var mine bool
-	var status string
+	var status, milestone, taskType string
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.BoolVar(&mine, "mine", false, "show only tasks assigned to the selected agent")
 	flags.StringVar(&status, "status", "", "task status")
+	flags.StringVar(&milestone, "milestone", "", "show only tasks in this milestone")
+	flags.StringVar(&taskType, "type", "", "show only tasks of this type (Other: no type)")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: tasksUsage}
 	}
@@ -657,7 +761,7 @@ func (a *App) tasks(arguments []string) error {
 		return err
 	}
 	if status != "" && !validTaskListStatus(status) {
-		return &publicError{message: "--status must be one of todo, in_flight, blocked, or landed."}
+		return &publicError{message: taskStatusChoices}
 	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
@@ -686,28 +790,55 @@ func (a *App) tasks(arguments []string) error {
 		if status != "" && task.Status != status {
 			continue
 		}
+		if milestone != "" && !strings.EqualFold(task.Milestone, strings.TrimSpace(milestone)) {
+			continue
+		}
+		if taskType != "" && !strings.EqualFold(displayTaskType(task.Type), strings.TrimSpace(taskType)) {
+			continue
+		}
 		matches++
-		assignee := task.Assignee
-		if assignee == "" {
-			assignee = "-"
+		orDash := func(value string) string {
+			if value == "" {
+				return "-"
+			}
+			return value
+		}
+		number := "-"
+		if task.Number > 0 {
+			number = "#" + strconv.Itoa(task.Number)
 		}
 		if _, err := fmt.Fprintf(
 			writer,
-			"%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			number,
 			safeMetadata(task.ID, protected...),
 			safeMetadata(task.Status, protected...),
-			safeMetadata(assignee, protected...),
+			safeMetadata(orDash(task.Assignee), protected...),
+			safeMetadata(orDash(task.Milestone), protected...),
+			safeMetadata(displayTaskType(task.Type), protected...),
 			safeMetadata(task.Title, protected...),
 		); err != nil {
 			return &publicError{message: "Unable to write task output."}
 		}
 	}
 	if matches == 0 {
-		if _, err := fmt.Fprintln(writer, emptyTaskListMessage(workstreamCode, status, mine)); err != nil {
+		message := emptyTaskListMessage(workstreamCode, status, mine)
+		if milestone != "" || taskType != "" {
+			message = fmt.Sprintf("No tasks match those filters in workstream %s.", workstreamCode)
+		}
+		if _, err := fmt.Fprintln(writer, message); err != nil {
 			return &publicError{message: "Unable to write task output."}
 		}
 	}
 	return nil
+}
+
+// displayTaskType shows a task without a type as Other.
+func displayTaskType(taskType string) string {
+	if taskType == "" {
+		return "Other"
+	}
+	return taskType
 }
 
 func emptyTaskListMessage(workstreamCode string, status string, mine bool) string {

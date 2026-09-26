@@ -25,7 +25,8 @@ func TestDecodeAcceptsTaskNoticesAndRefusesBadTaskIDs(t *testing.T) {
 		{"ordinary message", ``, true},
 		{"task assigned", `,"kind":"task.assigned","taskId":"abcdef0123456789"`, true},
 		{"task unassigned", `,"kind":"task.unassigned","taskId":"abcdef0123456789"`, true},
-		{"a later kind is still accepted", `,"kind":"task.cancelled","taskId":"abcdef0123456789"`, true},
+		{"task cancelled", `,"kind":"task.cancelled","taskId":"abcdef0123456789"`, true},
+		{"a later kind is still accepted", `,"kind":"task.reopened","taskId":"abcdef0123456789"`, true},
 		{"task notice without a task", `,"kind":"task.assigned"`, false},
 		{"task id that would break the wake line", `,"kind":"task.assigned","taskId":"abc\ninjected"`, false},
 		{"task id with spaces", `,"kind":"task.assigned","taskId":"abc def"`, false},
@@ -50,7 +51,8 @@ func TestTaskNoticeWakeLines(t *testing.T) {
 	}{
 		{"assigned", "task.assigned", "Task abcdef0123456789 assigned to you by ac-lead (agent) in workstream 610: 0123456789abcdef; run aircom inbox."},
 		{"taken away", "task.unassigned", "Task abcdef0123456789 reassigned away from you by ac-lead (agent) in workstream 610: 0123456789abcdef; run aircom inbox."},
-		{"a later kind reads as a message", "task.cancelled", "New message from ac-lead (agent) in workstream 610: 0123456789abcdef; run aircom inbox."},
+		{"cancelled", "task.cancelled", "Task abcdef0123456789 cancelled by ac-lead (agent) in workstream 610: 0123456789abcdef; run aircom inbox."},
+		{"a later kind reads as a message", "task.reopened", "New message from ac-lead (agent) in workstream 610: 0123456789abcdef; run aircom inbox."},
 		{"ordinary", "", "New message from ac-lead (agent) in workstream 610: 0123456789abcdef; run aircom inbox."},
 	}
 	for _, tc := range cases {

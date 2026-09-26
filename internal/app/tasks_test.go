@@ -21,27 +21,27 @@ func TestTasksListsAndFiltersWorkstreamDetail(t *testing.T) {
 	}{
 		{
 			name: "all tasks",
-			want: "task-1\ttodo\tagent-7\tOwn todo\n" +
-				"task-2\tlanded\tagent-other\tOther landed\n" +
-				"task-3\tblocked\t-\tUnassigned\n" +
-				"task-4\tlanded\tagent-7\tOwn landed\n",
+			want: "-\ttask-1\ttodo\tagent-7\t-\tOther\tOwn todo\n" +
+				"-\ttask-2\tlanded\tagent-other\t-\tOther\tOther landed\n" +
+				"-\ttask-3\tblocked\t-\t-\tOther\tUnassigned\n" +
+				"-\ttask-4\tlanded\tagent-7\t-\tOther\tOwn landed\n",
 		},
 		{
 			name: "mine",
 			args: []string{"--mine"},
-			want: "task-1\ttodo\tagent-7\tOwn todo\n" +
-				"task-4\tlanded\tagent-7\tOwn landed\n",
+			want: "-\ttask-1\ttodo\tagent-7\t-\tOther\tOwn todo\n" +
+				"-\ttask-4\tlanded\tagent-7\t-\tOther\tOwn landed\n",
 		},
 		{
 			name: "status",
 			args: []string{"--status", "landed"},
-			want: "task-2\tlanded\tagent-other\tOther landed\n" +
-				"task-4\tlanded\tagent-7\tOwn landed\n",
+			want: "-\ttask-2\tlanded\tagent-other\t-\tOther\tOther landed\n" +
+				"-\ttask-4\tlanded\tagent-7\t-\tOther\tOwn landed\n",
 		},
 		{
 			name: "mine and status",
 			args: []string{"--mine", "--status", "landed"},
-			want: "task-4\tlanded\tagent-7\tOwn landed\n",
+			want: "-\ttask-4\tlanded\tagent-7\t-\tOther\tOwn landed\n",
 		},
 		{
 			name: "no status matches",
@@ -150,7 +150,7 @@ func TestTasksRejectsInvalidStatusBeforeRequest(t *testing.T) {
 			if requests != 0 {
 				t.Fatalf("invalid status made %d requests, want 0", requests)
 			}
-			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "todo, in_flight, blocked, or landed") {
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "todo, in_flight, blocked, landed, or cancelled") {
 				t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 			}
 		})
@@ -203,7 +203,7 @@ func TestTasksAgentSelectionFailsClosedAndMineUsesSelectedAgent(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("selected tasks made %d requests, want 1", requests)
 	}
-	if got, want := stdout.String(), "task-pi\tin_flight\tagent-pi\tSelected\n"; got != want {
+	if got, want := stdout.String(), "-\ttask-pi\tin_flight\tagent-pi\t-\tOther\tSelected\n"; got != want {
 		t.Fatalf("selected stdout = %q, want %q", got, want)
 	}
 }
@@ -218,7 +218,8 @@ func TestDecodeTaskListRejectsMalformedDetail(t *testing.T) {
 		{name: "missing tasks", body: `{}`},
 		{name: "null tasks", body: `{"tasks":null}`},
 		{name: "missing id", body: `{"tasks":[{"status":"todo","title":"No ID"}]}`},
-		{name: "invalid status", body: `{"tasks":[{"id":"task-1","status":"doing","title":"Bad"}]}`},
+		{name: "invalid status", body: `{"tasks":[{"id":"task-1","status":"In Flight!","title":"Bad"}]}`},
+		{name: "empty status", body: `{"tasks":[{"id":"task-1","status":"","title":"Bad"}]}`},
 		{name: "trailing json", body: `{"tasks":[]} {}`},
 	}
 	for _, test := range tests {

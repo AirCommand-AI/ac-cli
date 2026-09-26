@@ -337,7 +337,7 @@ func TestTaskStatusRejectsInvalidValueBeforeRequest(t *testing.T) {
 			if requests != 0 {
 				t.Fatalf("invalid status made %d requests, want 0", requests)
 			}
-			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "todo, in_flight, blocked, or landed") {
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "todo, in_flight, blocked, landed, or cancelled") {
 				t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 			}
 		})

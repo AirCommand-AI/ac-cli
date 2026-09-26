@@ -18,10 +18,11 @@ aircom exchange
 aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text>
 aircom update --workstream <code> [--agent <agentId|name>] --body <text>
 aircom read --workstream <code> [--agent <agentId|name>]
-aircom task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
-aircom task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>]
-aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>]
-aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>]
+aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <text>] [--assignee <agentId|name>]
+aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]...
+aircom task --id <id|number> --workstream <code> [same flags]
+aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]
+aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>]
 aircom inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C]
 aircom ack --workstream <code> [--agent <agentId|name>] --message <messageId>
 aircom listen --workstream <code> [--agent <agentId|name>]
@@ -67,7 +68,15 @@ Adding `--comment <text>` posts one task-scoped update through the existing upda
 
 `task create` requires a nonblank `--title`, accepts optional description and active assignee ID or name, defaults an omitted status to `todo`, and leaves an omitted assignee unassigned. It posts a fresh idempotency ID to the task endpoint, reuses the same request across bounded retries, and prints the created task ID returned by the server. Invalid titles and statuses are rejected before any request.
 
-`tasks` reads the existing workstream detail endpoint and prints one tab-separated line per matching task in API order: task ID, status, canonical assignee ID, and title. An unassigned task prints `-` in the assignee column. `--mine` keeps only tasks assigned to the selected local agent ID. `--status` accepts `todo`, `in_flight`, `blocked`, or `landed`; any other value is rejected before an HTTP request is made. The two filters can be combined. When nothing matches, the command prints a filter-aware message instead of returning silent output.
+`tasks` reads the existing workstream detail endpoint and prints one tab-separated line per matching task in API order: number (`#17`), task ID, status, canonical assignee ID, milestone, type, and title. An unassigned task prints `-` in the assignee column, a task without a milestone `-`, and a task without a type `Other`. `--mine` keeps only tasks assigned to the selected local agent ID. `--status` accepts `todo`, `in_flight`, `blocked`, `landed`, or `cancelled`; any other value is rejected before an HTTP request is made. `--milestone` and `--type` match ignoring case (`--type Other` matches tasks without a type). The filters can be combined. Cancelled tasks are listed with the rest. When nothing matches, the command prints a filter-aware message instead of returning silent output. A status the service adds later is shown as it is rather than failing the command.
+
+**Structured tasks.** A task is addressed by its ID or its number in the workstream: `aircom task 17` or `aircom task '#17'` (quote a leading `#`, which the shell otherwise reads as a comment). A number is looked up from the workstream detail before a change is sent, so changes always go to the task's ID. `task <task>` also prints the task's number, milestone, type, acceptance criteria, validation, dependencies (as `#n title (status)`), links, and, for a cancelled task, the reason, who cancelled it and when, and its replacement. Comments show the author's verified name.
+
+`task create` accepts `--number` (otherwise the service assigns the next one; a number in use is refused), `--milestone`, `--type`, `--acceptance` (repeatable, one criterion each), `--validation`, `--depends-on` (repeatable, ID or number), and `--link` (repeatable, http or https). It prints the created task's ID and number, and warns on standard error when acceptance criteria or validation are missing.
+
+The same flags, except `--number`, edit an existing task in one keyed request: only the flags given are sent. A repeatable flag replaces the whole list; pass it once with an empty value to clear the list, and an empty `--milestone`, `--type` or `--validation` to clear that field. Field edits are a separate command from `--status`, `--comment` and `--assignee`.
+
+`--status cancelled` requires `--reason <text>` and accepts `--replaced-by <task>`; `--reason` and `--replaced-by` are refused with any other status. Any other status on a cancelled task reopens it. Refusals from the service — a number in use, an unknown or looping dependency, a missing reason, a person reopening — are reported in plain words.
 
 `inbox` returns one oldest-first JSON page. It lists unread messages by default; `--all` lists both read and unread messages across the bound workstream. The optional limit is from 1 through 100 and defaults server-side to 50. When another page exists, the JSON includes `nextCursor`; pass that opaque value back through `--cursor` with the same inbox mode. The command never follows the cursor automatically and never acknowledges a message.
 

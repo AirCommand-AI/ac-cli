@@ -33,8 +33,11 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 
 	for _, required := range []string{
 		"aircom tasks --workstream",
-		"aircom task <taskId>",
+		"aircom task <task>",
 		"--status in_flight",
+		"--status cancelled --reason",
+		"--acceptance",
+		"--validation",
 		"--comment",
 		"--status landed",
 		"exact structural senderId",

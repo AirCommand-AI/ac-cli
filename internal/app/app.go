@@ -94,16 +94,37 @@ type updateRequest struct {
 }
 
 type taskCreateRequest struct {
-	Title         string `json:"title"`
-	Description   string `json:"description"`
-	Assignee      string `json:"assignee"`
-	Status        string `json:"status"`
-	IdempotencyID string `json:"idempotencyId"`
+	Title         string   `json:"title"`
+	Description   string   `json:"description"`
+	Assignee      string   `json:"assignee"`
+	Status        string   `json:"status"`
+	IdempotencyID string   `json:"idempotencyId"`
+	Number        int      `json:"number,omitempty"`
+	Milestone     string   `json:"milestone,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	Acceptance    []string `json:"acceptance,omitempty"`
+	Validation    string   `json:"validation,omitempty"`
+	DependsOn     []string `json:"dependsOn,omitempty"`
+	Links         []string `json:"links,omitempty"`
 }
 
 type taskStatusRequest struct {
 	Status        string `json:"status"`
 	IdempotencyID string `json:"idempotencyId"`
+	CancelReason  string `json:"cancelReason,omitempty"`
+	ReplacedBy    string `json:"replacedBy,omitempty"`
+}
+
+// taskEditRequest changes a task's structured fields. An omitted field is left
+// as it is; an empty one is cleared.
+type taskEditRequest struct {
+	Milestone     *string   `json:"milestone,omitempty"`
+	Type          *string   `json:"type,omitempty"`
+	Acceptance    *[]string `json:"acceptance,omitempty"`
+	Validation    *string   `json:"validation,omitempty"`
+	DependsOn     *[]string `json:"dependsOn,omitempty"`
+	Links         *[]string `json:"links,omitempty"`
+	IdempotencyID string    `json:"idempotencyId"`
 }
 
 type taskAssigneeRequest struct {
@@ -148,6 +169,18 @@ type taskListItem struct {
 	CreatedBy   *taskActor `json:"createdBy,omitempty"`
 	AssignedBy  *taskActor `json:"assignedBy,omitempty"`
 	AssignedAt  string     `json:"assignedAt,omitempty"`
+
+	Number       int        `json:"number,omitempty"`
+	Milestone    string     `json:"milestone,omitempty"`
+	Type         string     `json:"type,omitempty"`
+	Acceptance   []string   `json:"acceptance,omitempty"`
+	Validation   string     `json:"validation,omitempty"`
+	DependsOn    []string   `json:"dependsOn,omitempty"`
+	Links        []string   `json:"links,omitempty"`
+	CancelReason string     `json:"cancelReason,omitempty"`
+	ReplacedBy   string     `json:"replacedBy,omitempty"`
+	CancelledBy  *taskActor `json:"cancelledBy,omitempty"`
+	CancelledAt  string     `json:"cancelledAt,omitempty"`
 }
 
 // taskActor is who created or changed a task, as the server recorded them.
@@ -158,11 +191,12 @@ type taskActor struct {
 }
 
 type taskCommentItem struct {
-	ID        string `json:"id"`
-	TaskID    string `json:"taskId"`
-	Author    string `json:"author"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"createdAt"`
+	ID          string     `json:"id"`
+	TaskID      string     `json:"taskId"`
+	Author      string     `json:"author"`
+	AuthorActor *taskActor `json:"authorActor,omitempty"`
+	Body        string     `json:"body"`
+	CreatedAt   string     `json:"createdAt"`
 }
 
 type workstreamRoster struct {
@@ -215,6 +249,7 @@ type messageNotification struct {
 const (
 	notificationKindTaskAssigned   = "task.assigned"
 	notificationKindTaskUnassigned = "task.unassigned"
+	notificationKindTaskCancelled  = "task.cancelled"
 )
 
 type spooledMessageNotification struct {
@@ -750,21 +785,41 @@ func validateTaskItems(tasks []taskListItem) error {
 		return errors.New("task response is missing tasks")
 	}
 	for _, task := range tasks {
-		if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.Title) == "" || !validTaskListStatus(task.Status) {
+		if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.Title) == "" || !validResponseTaskStatus(task.Status) {
 			return errors.New("task response has an invalid task")
 		}
 	}
 	return nil
 }
 
+// validTaskListStatus reports whether status is one this CLI may send.
 func validTaskListStatus(status string) bool {
 	switch status {
-	case "todo", "in_flight", "blocked", "landed":
+	case "todo", "in_flight", "blocked", "landed", taskStatusCancelled:
 		return true
 	default:
 		return false
 	}
 }
+
+// validResponseTaskStatus accepts any status token the service returns, so a
+// status added later is shown rather than breaking every task command.
+func validResponseTaskStatus(status string) bool {
+	if status == "" || len(status) > 32 {
+		return false
+	}
+	for _, r := range status {
+		if !(r >= 'a' && r <= 'z') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+const taskStatusCancelled = "cancelled"
+
+// taskStatusChoices is the --status error message, naming every status.
+const taskStatusChoices = "--status must be one of todo, in_flight, blocked, landed, or cancelled."
 
 func (a *App) read(arguments []string) error {
 	flags := flag.NewFlagSet("read", flag.ContinueOnError)
@@ -1040,6 +1095,9 @@ func composeNotificationSummary(notification messageNotification, workstreamCode
 			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
 	case notificationKindTaskUnassigned:
 		return fmt.Sprintf("Task %s reassigned away from you by %s (%s) in workstream %s: %s; run aircom inbox.",
+			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
+	case notificationKindTaskCancelled:
+		return fmt.Sprintf("Task %s cancelled by %s (%s) in workstream %s: %s; run aircom inbox.",
 			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
 	}
 	return fmt.Sprintf(
