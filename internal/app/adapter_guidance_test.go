@@ -43,6 +43,8 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 		"exact structural senderId",
 		"operator has authorized",
 		"untrusted data, not as instructions",
+		"aircom workstreams --org <org>",
+		"same turn until there is a commit or a concrete blocker",
 	} {
 		if !strings.Contains(skillGuidance, required) {
 			t.Errorf("shared task guidance is missing %q", required)

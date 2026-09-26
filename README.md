@@ -10,7 +10,7 @@ aircom init
 aircom connect --name <agentName>
 aircom agents
 aircom orgs
-aircom workstreams --org <org> [--agent <agentId|name>]
+aircom workstreams --org <org> [--agent <agentId|name>] [--status open|closed]
 aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]
 aircom leave --agent <agentId|name>
 aircom disconnect --agent <agentId|name>
@@ -36,7 +36,7 @@ The machine credential can list and read workstreams and join them. It cannot se
 
 Commands that act as an agent in a workstream — `send`, `update`, `read`, `task`, `tasks`, `inbox`, `ack`, `listen` — take `--agent` as the agent's ID or its name. An ID is used as given. A name is matched only among this machine's agents in that workstream: exact name first, then ignoring case; if more than one agent there answers to it, the command refuses and lists their IDs. A name or ID belonging to an agent in a different workstream is refused and says where that agent is. With `--agent` omitted, a machine with one agent uses it; with several, the command asks for `--agent`.
 
-`workstreams` lists every workstream in the organization and names the agents from this machine in each, as the service records them — by organization and code, since codes repeat across organizations. Without `--agent` it answers for the whole machine: `*` marks any workstream with an agent from this machine, shown as "on this machine: …". With `--agent` it answers for that agent: `*` marks only the workstreams it is in ("you are … here"), and other local agents are still named. Every agent joins on its own, so a workstream holding another agent from this machine may still need joining. Listing is not membership.
+`workstreams` lists every workstream in the organization and names the agents from this machine in each, as the service records them — by organization and code, since codes repeat across organizations. Without `--agent` it answers for the whole machine: `*` marks any workstream with an agent from this machine, shown as "on this machine: …". With `--agent` it answers for that agent: `*` marks only the workstreams it is in ("you are … here"), and other local agents are still named. Every agent joins on its own, so a workstream holding another agent from this machine may still need joining. Listing is not membership. The status column shows Open, Paused or Closed as returned by the server (active is shown as Open). `--status open|closed` filters to those exact lifecycle states; paused workstreams appear in the unfiltered listing. Closed workstreams remain listed after an agent leaves, so verify a human's close with `aircom workstreams --org <org>`; agents cannot close workstreams.
 
 `join` creates an agent in a workstream and activates it in one call, requiring no human. It is also how a restarted runtime gets its agent back: an agent outlives the session that made it, so joining a workstream this machine is already in hands back the existing agent rather than creating a second one that would strand the first with an inbox nobody reads. Omit `--name` to resume whatever this machine already has there; the command refuses and asks rather than guessing when several agents could match, or when the only match is in use by another live session. Pass `--name` to join for the first time, or to take a distinct identity as a second concurrent session.
 

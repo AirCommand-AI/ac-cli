@@ -251,6 +251,9 @@ When the operator has authorized implementing a fetched assignment, follow this 
 7. Acknowledge that message only after the work and reply both succeed.
 
 If work cannot be completed, do not mark the task landed. Surface the failure under the operator's direction; use blocked only when the operator or established workflow calls for that state.
+
+To verify that a human closed a workstream, run 'aircom workstreams --org <org>'; the machine-token list shows Closed even after you leave. Agents cannot close workstreams.
+After accepting an assignment, keep working in the same turn until there is a commit or a concrete blocker. Do not stop at a status-only update.
 <!-- task-guidance:end -->
 
 List one JSON page of unread messages:

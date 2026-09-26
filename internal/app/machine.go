@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>]"
+	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>] [--status open|closed]"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
 	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <text>] [--assignee <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]..."
 	taskIDFlagUsage  = "Usage: aircom task --id <id|number> --workstream <code> [same flags as above]"
@@ -179,9 +179,11 @@ func (a *App) workstreams(arguments []string) error {
 	flags.SetOutput(io.Discard)
 	var organizationReference string
 	var agentReference string
+	var statusFilter string
 	flags.StringVar(&organizationReference, "org", "", "organization name or id, as shown by aircom orgs")
 	flags.StringVar(&agentReference, "agent", "", "the agent asking, by name or id, so its workstreams are marked as yours")
-	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+	flags.StringVar(&statusFilter, "status", "", "filter by open or closed workstreams")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || (statusFilter != "" && statusFilter != "open" && statusFilter != "closed") {
 		return &publicError{message: workstreamsUsage}
 	}
 	machine, err := a.machineCredential()
@@ -213,38 +215,93 @@ func (a *App) workstreams(arguments []string) error {
 	a.Organization = organizationID
 	defer func() { a.Organization = previousOrganization }()
 
-	response, err := a.request(http.MethodGet, "/v1/workstreams", machine.APIToken, nil)
-	if err != nil {
-		return err
-	}
-	if response.status == http.StatusUnauthorized {
-		return &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
-	}
-	if response.status < 200 || response.status >= 300 {
-		return &publicError{message: "Unable to list workstreams."}
-	}
-	var list listWorkstreamsResponse
-	if err := json.Unmarshal(response.body, &list); err != nil {
-		return &publicError{message: "The AirCommand service returned an invalid response."}
+	// The public machine-token list includes closed workstreams and is paged.
+	// Fetch every page before filtering so a close can be verified even when
+	// its row is beyond the first page (and after the caller has left).
+	all := []workstreamSummary{}
+	seenCursors := map[string]bool{}
+	cursor := ""
+	for {
+		path := "/v1/workstreams"
+		if cursor != "" {
+			path += "?cursor=" + url.QueryEscape(cursor)
+		}
+		response, err := a.request(http.MethodGet, path, machine.APIToken, nil)
+		if err != nil {
+			return err
+		}
+		if response.status == http.StatusUnauthorized {
+			return &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
+		}
+		if response.status < 200 || response.status >= 300 {
+			return &publicError{message: "Unable to list workstreams."}
+		}
+		var list listWorkstreamsResponse
+		if err := json.Unmarshal(response.body, &list); err != nil {
+			return &publicError{message: "The AirCommand service returned an invalid response."}
+		}
+		all = append(all, list.Workstreams...)
+		if list.NextCursor == "" {
+			break
+		}
+		if seenCursors[list.NextCursor] {
+			return &publicError{message: "The AirCommand service returned an invalid workstream cursor."}
+		}
+		seenCursors[list.NextCursor] = true
+		cursor = list.NextCursor
 	}
 	local := agentsByWorkstream(agents, organizationID)
 	writer := a.outputWriter()
-	if len(list.Workstreams) == 0 {
+	if len(all) == 0 {
 		fmt.Fprintln(writer, "No workstreams in this organization.")
 		return nil
 	}
-	// Every workstream is listed, including ones with no local agent -- those
-	// are the joinable ones, and omitting them hides the only useful action.
+	// Listing is not membership: keep unjoined and closed rows visible.
 	marked := false
-	for _, workstream := range list.Workstreams {
+	printed := 0
+	for _, workstream := range all {
+		if statusFilter != "" && workstreamStatusFilter(workstream.Status) != statusFilter {
+			continue
+		}
 		marker, suffix := workstreamMembership(local[workstream.Code], caller.AgentID)
 		if marker == "*" {
 			marked = true
 		}
-		fmt.Fprintf(writer, "%s %-8s %s%s\n", marker, workstream.Code, workstream.Name, suffix)
+		fmt.Fprintf(writer, "%s %-8s %-7s %s%s\n", marker, workstream.Code, workstreamStatusLabel(workstream.Status), workstream.Name, suffix)
+		printed++
+	}
+	if printed == 0 {
+		fmt.Fprintf(writer, "No %s workstreams in this organization.\n", statusFilter)
+		return nil
 	}
 	fmt.Fprint(writer, workstreamsFootnote(caller, marked, len(local) > 0))
 	return nil
+}
+
+func workstreamStatusFilter(status string) string {
+	switch status {
+	case "active", "open":
+		return "open"
+	case "closed":
+		return "closed"
+	default:
+		return ""
+	}
+}
+
+func workstreamStatusLabel(status string) string {
+	switch status {
+	case "active", "open":
+		return "Open"
+	case "closed":
+		return "Closed"
+	case "paused":
+		return "Paused"
+	case "":
+		return "Unknown"
+	default:
+		return strings.ToUpper(status[:1]) + status[1:]
+	}
 }
 
 // workstreamMembership describes which of this machine's agents are in one

@@ -41,13 +41,13 @@ func TestWorkstreamsShowOnlyAgentsInThatOrganization(t *testing.T) {
 		notWant []string
 	}{
 		{"Acme without --agent", []string{"workstreams", "--org", "Acme"},
-			[]string{"* 610      Fixes  (on this machine: Lead)\n"}, []string{"Engineer"}},
+			[]string{"* 610      Open    Fixes  (on this machine: Lead)\n"}, []string{"Engineer"}},
 		{"Beta without --agent", []string{"workstreams", "--org", "Beta"},
-			[]string{"* 610      Fixes  (on this machine: Engineer)\n"}, []string{"Lead"}},
+			[]string{"* 610      Open    Fixes  (on this machine: Engineer)\n"}, []string{"Lead"}},
 		{"Acme as Lead", []string{"workstreams", "--org", "Acme", "--agent", "Lead"},
-			[]string{"* 610      Fixes  (you are Lead here)\n"}, []string{"Engineer"}},
+			[]string{"* 610      Open    Fixes  (you are Lead here)\n"}, []string{"Engineer"}},
 		{"Beta as Lead: Lead's 610 is Acme's, not Beta's", []string{"workstreams", "--org", "Beta", "--agent", "Lead"},
-			[]string{"  610      Fixes  (on this machine: Engineer)\n", "Lead is not in any of these workstreams"}, []string{"you are Lead"}},
+			[]string{"  610      Open    Fixes  (on this machine: Engineer)\n", "Lead is not in any of these workstreams"}, []string{"you are Lead"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

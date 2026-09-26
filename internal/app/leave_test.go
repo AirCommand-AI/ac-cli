@@ -49,7 +49,7 @@ func (s *leaveServer) handler(t *testing.T) http.Handler {
 		case request.Method == http.MethodGet && path == "/v1/organizations":
 			_, _ = writer.Write([]byte(`{"organizations":[{"organizationId":"org_aaaaaaaaaaaaaaaaaaaaaaaaaa","name":"Acme"},{"organizationId":"org_bbbbbbbbbbbbbbbbbbbbbbbbbb","name":"Beta"}]}`))
 		case request.Method == http.MethodGet && path == "/v1/workstreams":
-			_, _ = writer.Write([]byte(`{"workstreams":[{"code":"583","name":"Budget"},{"code":"610","name":"Fixes"}]}`))
+			_, _ = writer.Write([]byte(`{"workstreams":[{"code":"583","name":"Budget","status":"active"},{"code":"610","name":"Fixes","status":"active"}]}`))
 		case request.Method == http.MethodGet && path == "/v1/agents":
 			var agents []agentSummary
 			for id, name := range s.names {
@@ -136,11 +136,11 @@ func TestLeaveForgetsOnlyThatAgentsCredential(t *testing.T) {
 		notWant []string
 	}{
 		{"machine view", []string{"workstreams", "--org", "Acme"},
-			[]string{"* 583      Budget  (on this machine: Engineer)\n"}, []string{"Lead"}},
+			[]string{"* 583      Open    Budget  (on this machine: Engineer)\n"}, []string{"Lead"}},
 		{"as the agent that left", []string{"workstreams", "--org", "Acme", "--agent", "Lead"},
-			[]string{"  583      Budget  (on this machine: Engineer)\n", "Lead is not in any of these workstreams"}, []string{"you are Lead"}},
+			[]string{"  583      Open    Budget  (on this machine: Engineer)\n", "Lead is not in any of these workstreams"}, []string{"you are Lead"}},
 		{"as the agent that stayed", []string{"workstreams", "--org", "Acme", "--agent", "Engineer"},
-			[]string{"* 583      Budget  (you are Engineer here)\n"}, []string{"also on this machine"}},
+			[]string{"* 583      Open    Budget  (you are Engineer here)\n"}, []string{"also on this machine"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestRejoinAfterLeaveStoresTheNewWorkstream(t *testing.T) {
 		t.Fatalf("rejoin exit code = %d, stderr = %q", code, errText)
 	}
 	_, out, _ := run(t, client, stdout, stderr, "workstreams", "--org", "Acme", "--agent", "Lead")
-	for _, want := range []string{"* 610      Fixes  (you are Lead here)\n", "  583      Budget  (on this machine: Engineer)\n"} {
+	for _, want := range []string{"* 610      Open    Fixes  (you are Lead here)\n", "  583      Open    Budget  (on this machine: Engineer)\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q after rejoin:\n%s", want, out)
 		}
