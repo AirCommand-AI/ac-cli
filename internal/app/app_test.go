@@ -171,7 +171,31 @@ func TestUpdatePostsSummaryDetailAndTaskWithStructuredSafeConfirmation(t *testin
 	}
 }
 
-func TestUpdateRejectsLegacyAndInvalidContentBeforeRequest(t *testing.T) {
+func TestUpdateKeepsLegacyBodyCompatible(t *testing.T) {
+	credential := testCredential()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload updateRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Body != "Legacy title\nlegacy detail" || payload.Summary != "" || payload.IdempotencyID == "" {
+			t.Fatalf("legacy payload = %+v", payload)
+		}
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = writer.Write([]byte(`{"id":"legacy-update","summary":"Legacy title","detail":"legacy detail","createdAt":"2026-09-27T19:30:00Z"}`))
+	}))
+	defer server.Close()
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x44))
+	saveTestCredential(t, client, credential)
+	if exitCode := client.Run([]string{"update", "--workstream", "694", "--body", "Legacy title\nlegacy detail"}); exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Summary: Legacy title") || !strings.Contains(stdout.String(), "Detail: legacy detail") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestUpdateRejectsInvalidContentBeforeRequest(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -179,11 +203,13 @@ func TestUpdateRejectsLegacyAndInvalidContentBeforeRequest(t *testing.T) {
 		arguments []string
 		want      string
 	}{
-		{"legacy body", []string{"--body", "old"}, "--body is no longer supported"},
 		{"missing summary", nil, "--summary"},
+		{"mixed body and summary", []string{"--body", "old", "--summary", "new"}, "either legacy --body"},
 		{"blank summary", []string{"--summary", "  "}, "non-whitespace"},
 		{"multiline summary", []string{"--summary", "one\ntwo"}, "one line"},
 		{"trailing newline", []string{"--summary", "one\n"}, "one line"},
+		{"tab in summary", []string{"--summary", "one\ttwo"}, "control characters"},
+		{"line separator", []string{"--summary", "one\u2028two"}, "control characters"},
 		{"oversized summary", []string{"--summary", strings.Repeat("界", 121)}, "120 characters"},
 		{"oversized detail", []string{"--summary", "valid", "--detail", strings.Repeat("x", maxActivityDetailBytes+1)}, "32768 bytes"},
 		{"blank task", []string{"--summary", "valid", "--task", "  "}, "--task must name"},

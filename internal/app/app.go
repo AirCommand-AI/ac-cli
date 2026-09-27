@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
@@ -33,8 +34,8 @@ const (
 	maxActivitySummaryRunes     = 120
 	maxActivityDetailBytes      = 32 * 1024
 
-	updateUsage   = "Usage: aircom update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>]"
-	activityUsage = "Usage: aircom activity --workstream <code> [--agent <agentId|name>] [--kind task|update|message|agent|workstream] [--task <id>] [--limit N] [--cursor C] [--after C]"
+	updateUsage = "Usage: aircom update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text> [--detail <text>]) [--task <id|number>]"
+	eventsUsage = "Usage: aircom events --workstream <code> [--agent <agentId|name>] [--kind task|update|message|agent|workstream] [--task <id>] [--limit N] [--cursor C] [--since C]"
 )
 
 var validWorkstreamCode = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -95,8 +96,9 @@ type exchangeRequest struct {
 }
 
 type updateRequest struct {
-	Summary       string `json:"summary"`
+	Summary       string `json:"summary,omitempty"`
 	Detail        string `json:"detail,omitempty"`
+	Body          string `json:"body,omitempty"`
 	TaskID        string `json:"taskId,omitempty"`
 	IdempotencyID string `json:"idempotencyId"`
 }
@@ -141,8 +143,9 @@ type taskAssigneeRequest struct {
 }
 
 type taskCommentRequest struct {
-	Summary       string `json:"summary"`
+	Summary       string `json:"summary,omitempty"`
 	Detail        string `json:"detail,omitempty"`
+	Body          string `json:"body,omitempty"`
 	TaskID        string `json:"taskId"`
 	IdempotencyID string `json:"idempotencyId"`
 }
@@ -331,8 +334,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.send(arguments[1:])
 		case "update":
 			err = a.update(arguments[1:])
-		case "activity":
-			err = a.activity(arguments[1:])
+		case "events", "activity":
+			err = a.events(arguments[1:])
 		case "read":
 			err = a.read(arguments[1:])
 		case "task":
@@ -367,7 +370,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>] | activity --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--after C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -403,8 +406,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]", true
 	case "update":
 		return updateUsage, true
-	case "activity":
-		return activityUsage, true
+	case "events", "activity":
+		return eventsUsage, true
 	case "read":
 		return "Usage: aircom read --workstream <code> [--agent <agentId|name>]", true
 	case "task":
@@ -567,22 +570,34 @@ func (a *App) update(arguments []string) error {
 	flags.StringVar(&summary, "summary", "", "one-line update summary")
 	flags.StringVar(&detail, "detail", "", "optional update detail")
 	flags.StringVar(&taskRef, "task", "", "optional task ID or number")
-	// Keep parsing --body only to return a direct migration message.
-	flags.StringVar(&legacyBody, "body", "", "legacy update body")
+	flags.StringVar(&legacyBody, "body", "", "legacy combined update body")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: updateUsage}
 	}
 	set := map[string]bool{}
 	flags.Visit(func(current *flag.Flag) { set[current.Name] = true })
-	if set["body"] {
-		return &publicError{message: "--body is no longer supported for updates; use --summary <text> and optional --detail <text>."}
+	if set["body"] && set["summary"] {
+		return &publicError{message: "Use either legacy --body or --summary, not both."}
 	}
-	if !set["summary"] {
+	if !set["body"] && !set["summary"] {
 		return &publicError{message: updateUsage}
 	}
-	summary, err := validateActivityContent(summary, detail, "--summary", "--detail")
-	if err != nil {
-		return err
+	if set["summary"] {
+		var err error
+		summary, detail, err = validateActivityContent(summary, detail, "--summary", "--detail")
+		if err != nil {
+			return err
+		}
+	} else {
+		if strings.TrimSpace(legacyBody) == "" {
+			return &publicError{message: "--body must not be blank."}
+		}
+		if len(legacyBody) > maxActivityDetailBytes {
+			return &publicError{message: fmt.Sprintf("--body must be at most %d bytes.", maxActivityDetailBytes)}
+		}
+		if len(detail) > maxActivityDetailBytes {
+			return &publicError{message: fmt.Sprintf("--detail must be at most %d bytes.", maxActivityDetailBytes)}
+		}
 	}
 	if set["task"] && strings.TrimSpace(taskRef) == "" {
 		return &publicError{message: "--task must name a task ID or number."}
@@ -599,7 +614,7 @@ func (a *App) update(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate an update idempotency ID."}
 	}
-	payload, err := json.Marshal(updateRequest{Summary: summary, Detail: detail, TaskID: strings.TrimSpace(taskRef), IdempotencyID: idempotencyID})
+	payload, err := json.Marshal(updateRequest{Summary: summary, Detail: detail, Body: legacyBody, TaskID: strings.TrimSpace(taskRef), IdempotencyID: idempotencyID})
 	if err != nil {
 		return &publicError{message: "Unable to prepare the workstream update."}
 	}
@@ -612,16 +627,17 @@ func (a *App) update(arguments []string) error {
 		return workstreamResponseStatusError(response.status, response.body, workstreamCode, true, credential)
 	}
 	posted, err := decodePostedUpdateResponse(response.body, false)
-	if err != nil || posted.Summary != summary || posted.Detail != detail || (set["task"] && strings.TrimSpace(posted.TaskID) == "") || (!set["task"] && posted.TaskID != "") {
+	if err != nil || (set["summary"] && (posted.Summary != summary || posted.Detail != strings.TrimSpace(detail))) || (set["task"] && strings.TrimSpace(posted.TaskID) == "") || (!set["task"] && posted.TaskID != "") {
 		return &publicError{message: "The workstream service returned an invalid update response."}
 	}
 	return writeUpdateConfirmation(a.outputWriter(), "Update posted", posted, credential.APIToken, credential.SocketKey)
 }
 
-// activity pulls canonical history on demand. It deliberately does not use the
+// events pulls canonical history on demand. It deliberately does not use the
 // listener or create a notification class: callers page or poll with cursors.
-func (a *App) activity(arguments []string) error {
-	flags := flag.NewFlagSet("activity", flag.ContinueOnError)
+// "activity" and "--after" remain aliases for clients that adopted them early.
+func (a *App) events(arguments []string) error {
+	flags := flag.NewFlagSet("events", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var workstreamCode, agentID, kind, taskID, cursor, after string
 	var limit int
@@ -631,9 +647,10 @@ func (a *App) activity(arguments []string) error {
 	flags.StringVar(&taskID, "task", "", "task ID")
 	flags.IntVar(&limit, "limit", 50, "events per page")
 	flags.StringVar(&cursor, "cursor", "", "older-page cursor")
-	flags.StringVar(&after, "after", "", "forward-poll cursor")
+	flags.StringVar(&after, "since", "", "forward-poll cursor")
+	flags.StringVar(&after, "after", "", "forward-poll cursor (legacy alias)")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || strings.TrimSpace(workstreamCode) == "" {
-		return &publicError{message: activityUsage}
+		return &publicError{message: eventsUsage}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -647,7 +664,7 @@ func (a *App) activity(arguments []string) error {
 		return &publicError{message: "--limit must be an integer from 1 to 100."}
 	}
 	if strings.TrimSpace(cursor) != "" && strings.TrimSpace(after) != "" {
-		return &publicError{message: "Use either --cursor for older activity or --after for newer activity, not both."}
+		return &publicError{message: "Use either --cursor for older events or --since for newer events, not both."}
 	}
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
@@ -679,6 +696,7 @@ func (a *App) activity(arguments []string) error {
 		Events       []json.RawMessage `json:"events"`
 		NextCursor   string            `json:"nextCursor,omitempty"`
 		LatestCursor string            `json:"latestCursor,omitempty"`
+		PollCursor   string            `json:"pollCursor,omitempty"`
 	}
 	if err := json.Unmarshal(response.body, &page); err != nil || page.Events == nil {
 		return &publicError{message: "The workstream service returned an invalid activity response."}
@@ -859,20 +877,22 @@ func decodePostedUpdateResponse(body []byte, requireTask bool) (taskCommentItem,
 	return update, nil
 }
 
-func validateActivityContent(summary, detail, summaryFlag, detailFlag string) (string, error) {
+func validateActivityContent(summary, detail, summaryFlag, detailFlag string) (string, string, error) {
 	rawSummary := summary
-	summary = strings.TrimSpace(summary)
+	summary, detail = strings.TrimSpace(summary), strings.TrimSpace(detail)
 	switch {
 	case summary == "":
-		return "", &publicError{message: summaryFlag + " must contain non-whitespace text."}
-	case strings.ContainsAny(rawSummary, "\r\n"):
-		return "", &publicError{message: summaryFlag + " must be one line."}
+		return "", "", &publicError{message: summaryFlag + " must contain non-whitespace text."}
+	case strings.IndexFunc(rawSummary, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)
+	}) >= 0:
+		return "", "", &publicError{message: summaryFlag + " must be one line without control characters."}
 	case len([]rune(summary)) > maxActivitySummaryRunes:
-		return "", &publicError{message: fmt.Sprintf("%s must be at most %d characters.", summaryFlag, maxActivitySummaryRunes)}
+		return "", "", &publicError{message: fmt.Sprintf("%s must be at most %d characters.", summaryFlag, maxActivitySummaryRunes)}
 	case len(detail) > maxActivityDetailBytes:
-		return "", &publicError{message: fmt.Sprintf("%s must be at most %d bytes.", detailFlag, maxActivityDetailBytes)}
+		return "", "", &publicError{message: fmt.Sprintf("%s must be at most %d bytes.", detailFlag, maxActivityDetailBytes)}
 	}
-	return summary, nil
+	return summary, detail, nil
 }
 
 func activityUpdateText(update taskCommentItem) string {

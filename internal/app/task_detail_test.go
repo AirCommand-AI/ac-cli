@@ -171,7 +171,7 @@ func TestTaskCommentPostsOnlyTaskScopedUpdateAndPrintsConfirmation(t *testing.T)
 
 	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
 	saveTestCredential(t, client, credential)
-	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment-summary", "  Finished  ", "--comment-detail", commentDetail}); exitCode != 0 {
+	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--summary", "  Finished  ", "--detail", commentDetail}); exitCode != 0 {
 		t.Fatalf("task comment exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
 	if requests != 1 {
@@ -185,6 +185,30 @@ func TestTaskCommentPostsOnlyTaskScopedUpdateAndPrintsConfirmation(t *testing.T)
 		"Created: 2026-09-08T14:00:00.000000000Z\n"
 	if got := stdout.String(); got != wantOutput {
 		t.Fatalf("stdout = %q, want %q", got, wantOutput)
+	}
+}
+
+func TestTaskCommentKeepsLegacyCommentCompatible(t *testing.T) {
+	credential := testCredential()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload taskCommentRequest
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Body != "Legacy comment\nmore" || payload.Summary != "" || payload.TaskID != "task-1" {
+			t.Fatalf("legacy task comment = %+v", payload)
+		}
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = writer.Write([]byte(`{"id":"legacy-comment","taskId":"task-1","summary":"Legacy comment","detail":"more","createdAt":"2026-09-08T14:00:00Z"}`))
+	}))
+	defer server.Close()
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
+	saveTestCredential(t, client, credential)
+	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment", "Legacy comment\nmore"}); exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Summary: Legacy comment") || !strings.Contains(stdout.String(), "Detail: more") {
+		t.Fatalf("stdout=%q", stdout.String())
 	}
 }
 
@@ -211,7 +235,7 @@ func TestTaskCommentRejectsBlankTextBeforeRequest(t *testing.T) {
 			defer server.Close()
 
 			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
-			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment-summary", test.comment}); exitCode == 0 {
+			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--summary", test.comment}); exitCode == 0 {
 				t.Fatal("task unexpectedly accepted a blank comment")
 			}
 			if requests != 0 {
@@ -224,7 +248,7 @@ func TestTaskCommentRejectsBlankTextBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestTaskCommentRejectsLegacyAndInvalidStructuredFlagsBeforeRequest(t *testing.T) {
+func TestTaskCommentRejectsInvalidStructuredFlagsBeforeRequest(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -232,8 +256,8 @@ func TestTaskCommentRejectsLegacyAndInvalidStructuredFlagsBeforeRequest(t *testi
 		flags []string
 		want  string
 	}{
-		{"legacy comment", []string{"--comment", "old"}, "--comment is no longer supported"},
-		{"detail without summary", []string{"--comment-detail", "context"}, "requires --comment-summary"},
+		{"detail without summary", []string{"--detail", "context"}, "requires --summary"},
+		{"mixed legacy and structured", []string{"--comment", "old", "--summary", "new"}, "either legacy --comment"},
 		{"multiline summary", []string{"--comment-summary", "one\ntwo"}, "one line"},
 		{"trailing newline", []string{"--comment-summary", "one\n"}, "one line"},
 		{"oversized summary", []string{"--comment-summary", strings.Repeat("界", 121)}, "120 characters"},

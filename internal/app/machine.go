@@ -24,7 +24,7 @@ import (
 const (
 	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>] [--status open|closed]"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
-	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]..."
+	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]..."
 	taskIDFlagUsage  = "Usage: aircom task --id <id|number> --workstream <code> [same flags as above]"
 	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]"
 	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
@@ -378,10 +378,12 @@ func (a *App) taskByID(arguments []string) error {
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.StringVar(&status, "status", "", "new task status")
+	flags.StringVar(&commentSummary, "summary", "", "one-line task comment summary")
+	flags.StringVar(&commentDetail, "detail", "", "optional task comment detail")
+	// Keep the first structured spelling as an alias for clients that adopted it.
 	flags.StringVar(&commentSummary, "comment-summary", "", "one-line task comment summary")
 	flags.StringVar(&commentDetail, "comment-detail", "", "optional task comment detail")
-	// Parse the removed flag so callers get a direct migration message.
-	flags.StringVar(&legacyComment, "comment", "", "legacy task comment")
+	flags.StringVar(&legacyComment, "comment", "", "legacy combined task comment")
 	flags.StringVar(&reason, "reason", "", "why the task is cancelled")
 	flags.StringVar(&replacedBy, "replaced-by", "", "the task replacing a cancelled one")
 	fields.register(flags)
@@ -400,7 +402,7 @@ func (a *App) taskByID(arguments []string) error {
 	}
 	set := map[string]bool{}
 	flags.Visit(func(current *flag.Flag) { set[current.Name] = true })
-	commentSummary, err := validateTaskChange(set, workstreamCode, status, commentSummary, commentDetail, assignee, reason)
+	commentSummary, commentDetail, legacyComment, err := validateTaskChange(set, workstreamCode, status, commentSummary, commentDetail, legacyComment, assignee, reason)
 	if err != nil {
 		return err
 	}
@@ -410,7 +412,7 @@ func (a *App) taskByID(arguments []string) error {
 		return err
 	}
 	editSet := taskFieldsSet(set)
-	commentSet := set["comment-summary"] || set["comment-detail"]
+	commentSet := set["comment"] || set["summary"] || set["detail"] || set["comment-summary"] || set["comment-detail"]
 	if commentSet || status != "" || set["assignee"] || editSet {
 		if taskID, err = a.resolveTaskID(workstreamCode, taskID, credential); err != nil {
 			return err
@@ -418,7 +420,7 @@ func (a *App) taskByID(arguments []string) error {
 	}
 	switch {
 	case commentSet:
-		return a.addTaskComment(workstreamCode, taskID, commentSummary, commentDetail, credential)
+		return a.addTaskComment(workstreamCode, taskID, commentSummary, commentDetail, legacyComment, credential)
 	case status != "":
 		return a.setTaskStatus(workstreamCode, taskID, taskStatusRequest{
 			Status: status, CancelReason: strings.TrimSpace(reason), ReplacedBy: strings.TrimSpace(replacedBy),
@@ -433,42 +435,52 @@ func (a *App) taskByID(arguments []string) error {
 
 // validateTaskChange checks that a task command asks for one kind of change,
 // with the values that change needs.
-func validateTaskChange(set map[string]bool, workstreamCode, status, commentSummary, commentDetail, assignee, reason string) (string, error) {
+func validateTaskChange(set map[string]bool, workstreamCode, status, commentSummary, commentDetail, legacyComment, assignee, reason string) (string, string, string, error) {
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	if status != "" && !validTaskListStatus(status) {
-		return "", &publicError{message: taskStatusChoices}
+		return "", "", "", &publicError{message: taskStatusChoices}
+	}
+	structuredSummary := set["summary"] || set["comment-summary"]
+	structuredDetail := set["detail"] || set["comment-detail"]
+	if set["comment"] && (structuredSummary || structuredDetail) {
+		return "", "", "", &publicError{message: "Use either legacy --comment or structured --summary/--detail, not both."}
+	}
+	if structuredDetail && !structuredSummary {
+		return "", "", "", &publicError{message: "--detail requires --summary <text>."}
+	}
+	if structuredSummary {
+		validatedSummary, validatedDetail, err := validateActivityContent(commentSummary, commentDetail, "--summary", "--detail")
+		if err != nil {
+			return "", "", "", err
+		}
+		commentSummary, commentDetail = validatedSummary, validatedDetail
 	}
 	if set["comment"] {
-		return "", &publicError{message: "--comment is no longer supported; use --comment-summary <text> and optional --comment-detail <text>."}
-	}
-	commentSet := set["comment-summary"] || set["comment-detail"]
-	if set["comment-detail"] && !set["comment-summary"] {
-		return "", &publicError{message: "--comment-detail requires --comment-summary <text>."}
-	}
-	if commentSet {
-		validated, err := validateActivityContent(commentSummary, commentDetail, "--comment-summary", "--comment-detail")
-		if err != nil {
-			return "", err
+		if strings.TrimSpace(legacyComment) == "" {
+			return "", "", "", &publicError{message: "--comment must not be blank."}
 		}
-		commentSummary = validated
+		if len(legacyComment) > maxActivityDetailBytes {
+			return "", "", "", &publicError{message: fmt.Sprintf("--comment must be at most %d bytes.", maxActivityDetailBytes)}
+		}
 	}
+	commentSet := set["comment"] || structuredSummary || structuredDetail
 	switch {
 	case commentSet && status != "":
-		return "", &publicError{message: "Task comments and --status cannot be used together; run them as separate commands."}
+		return "", "", "", &publicError{message: "Task comments and --status cannot be used together; run them as separate commands."}
 	case set["assignee"] && strings.TrimSpace(assignee) == "":
-		return "", &publicError{message: "--assignee must name an agent."}
+		return "", "", "", &publicError{message: "--assignee must name an agent."}
 	case set["assignee"] && (commentSet || status != ""):
-		return "", &publicError{message: "--assignee cannot be combined with --status or task comment flags; run them as separate commands."}
+		return "", "", "", &publicError{message: "--assignee cannot be combined with --status or task comment flags; run them as separate commands."}
 	case (set["reason"] || set["replaced-by"]) && status != taskStatusCancelled:
-		return "", &publicError{message: "--reason and --replaced-by go only with --status cancelled."}
+		return "", "", "", &publicError{message: "--reason and --replaced-by go only with --status cancelled."}
 	case status == taskStatusCancelled && strings.TrimSpace(reason) == "":
-		return "", &publicError{message: "--status cancelled requires --reason <text>."}
+		return "", "", "", &publicError{message: "--status cancelled requires --reason <text>."}
 	case taskFieldsSet(set) && (commentSet || status != "" || set["assignee"]):
-		return "", &publicError{message: "--milestone, --type, --acceptance, --validation, --depends-on and --link cannot be combined with --status, task comment flags or --assignee; run them as separate commands."}
+		return "", "", "", &publicError{message: "--milestone, --type, --acceptance, --validation, --depends-on and --link cannot be combined with --status, task comment flags or --assignee; run them as separate commands."}
 	}
-	return commentSummary, nil
+	return commentSummary, commentDetail, legacyComment, nil
 }
 
 func taskFieldsSet(set map[string]bool) bool {
@@ -634,12 +646,12 @@ func (a *App) warnMissingTaskChecks(task taskListItem, workstreamCode string, pr
 	}
 }
 
-func (a *App) addTaskComment(workstreamCode string, taskID string, summary string, detail string, credential credentials.Credential) error {
+func (a *App) addTaskComment(workstreamCode string, taskID string, summary string, detail string, legacyBody string, credential credentials.Credential) error {
 	idempotencyID, err := secrets.IdempotencyID(a.randomReader())
 	if err != nil {
 		return &publicError{message: "Unable to generate a task comment idempotency ID."}
 	}
-	payload, err := json.Marshal(taskCommentRequest{Summary: summary, Detail: detail, TaskID: taskID, IdempotencyID: idempotencyID})
+	payload, err := json.Marshal(taskCommentRequest{Summary: summary, Detail: detail, Body: legacyBody, TaskID: taskID, IdempotencyID: idempotencyID})
 	if err != nil {
 		return &publicError{message: "Unable to prepare the task comment."}
 	}
@@ -653,7 +665,7 @@ func (a *App) addTaskComment(workstreamCode string, taskID string, summary strin
 		return taskCommentStatusError(response.status, response.body, workstreamCode, protectedTaskID, credential)
 	}
 	comment, err := decodeTaskCommentResponse(response.body)
-	if err != nil || comment.TaskID != taskID || comment.Summary != summary || comment.Detail != detail {
+	if err != nil || comment.TaskID != taskID || (legacyBody == "" && (comment.Summary != summary || comment.Detail != detail)) {
 		return &publicError{message: "The workstream service returned an invalid task comment response."}
 	}
 	return writeUpdateConfirmation(a.outputWriter(), "Comment added", comment, credential.APIToken, credential.SocketKey)
