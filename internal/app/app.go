@@ -639,7 +639,7 @@ func (a *App) update(arguments []string) error {
 func (a *App) events(arguments []string) error {
 	flags := flag.NewFlagSet("events", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var workstreamCode, agentID, kind, taskID, cursor, after string
+	var workstreamCode, agentID, kind, taskID, cursor, since, legacyAfter string
 	var limit int
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
@@ -647,8 +647,8 @@ func (a *App) events(arguments []string) error {
 	flags.StringVar(&taskID, "task", "", "task ID")
 	flags.IntVar(&limit, "limit", 50, "events per page")
 	flags.StringVar(&cursor, "cursor", "", "older-page cursor")
-	flags.StringVar(&after, "since", "", "forward-poll cursor")
-	flags.StringVar(&after, "after", "", "forward-poll cursor (legacy alias)")
+	flags.StringVar(&since, "since", "", "forward-poll cursor")
+	flags.StringVar(&legacyAfter, "after", "", "forward-poll cursor (legacy alias)")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || strings.TrimSpace(workstreamCode) == "" {
 		return &publicError{message: eventsUsage}
 	}
@@ -662,6 +662,15 @@ func (a *App) events(arguments []string) error {
 	}
 	if limit < 1 || limit > 100 {
 		return &publicError{message: "--limit must be an integer from 1 to 100."}
+	}
+	set := map[string]bool{}
+	flags.Visit(func(current *flag.Flag) { set[current.Name] = true })
+	if set["since"] && set["after"] {
+		return &publicError{message: "Use either --since or legacy --after, not both."}
+	}
+	after := since
+	if set["after"] {
+		after = legacyAfter
 	}
 	if strings.TrimSpace(cursor) != "" && strings.TrimSpace(after) != "" {
 		return &publicError{message: "Use either --cursor for older events or --since for newer events, not both."}

@@ -55,6 +55,22 @@ func TestEventsSinceAndActivityAfterStayCompatible(t *testing.T) {
 	}
 }
 
+func TestEventsRejectsSinceAndLegacyAfterTogetherBeforeRequest(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+	app, _, stderr := testApp(t, server.URL, "", deterministicRandom(1))
+	if err := app.Store.Save(testCredential()); err != nil {
+		t.Fatal(err)
+	}
+	if code := app.Run([]string{"events", "--workstream", "694", "--since", "newer", "--after", "legacy"}); code != 1 {
+		t.Fatalf("exit = %d", code)
+	}
+	if requests != 0 || !strings.Contains(stderr.String(), "not both") {
+		t.Fatalf("requests = %d, stderr = %q", requests, stderr.String())
+	}
+}
+
 func TestEventsRejectsTwoCursorDirectionsBeforeRequest(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))

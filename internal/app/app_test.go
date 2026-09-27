@@ -178,7 +178,7 @@ func TestUpdateKeepsLegacyBodyCompatible(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload.Body != "Legacy title\nlegacy detail" || payload.Summary != "" || payload.IdempotencyID == "" {
+		if payload.Body != "Legacy\ttitle\nlegacy detail" || payload.Summary != "" || payload.IdempotencyID == "" {
 			t.Fatalf("legacy payload = %+v", payload)
 		}
 		writer.WriteHeader(http.StatusCreated)
@@ -187,7 +187,7 @@ func TestUpdateKeepsLegacyBodyCompatible(t *testing.T) {
 	defer server.Close()
 	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x44))
 	saveTestCredential(t, client, credential)
-	if exitCode := client.Run([]string{"update", "--workstream", "694", "--body", "Legacy title\nlegacy detail"}); exitCode != 0 {
+	if exitCode := client.Run([]string{"update", "--workstream", "694", "--body", "Legacy\ttitle\nlegacy detail"}); exitCode != 0 {
 		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Summary: Legacy title") || !strings.Contains(stdout.String(), "Detail: legacy detail") {
