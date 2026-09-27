@@ -29,6 +29,10 @@ const (
 	maxTicketBytes              = 16 * 1024
 	maxResponseBytes            = 4 * 1024 * 1024
 	maxMessagePageResponseBytes = 24 * 1024 * 1024
+	maxActivitySummaryRunes     = 120
+	maxActivityDetailBytes      = 32 * 1024
+
+	updateUsage = "Usage: aircom update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>]"
 )
 
 var validWorkstreamCode = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -89,7 +93,9 @@ type exchangeRequest struct {
 }
 
 type updateRequest struct {
-	Body          string `json:"body"`
+	Summary       string `json:"summary"`
+	Detail        string `json:"detail,omitempty"`
+	TaskID        string `json:"taskId,omitempty"`
 	IdempotencyID string `json:"idempotencyId"`
 }
 
@@ -133,7 +139,8 @@ type taskAssigneeRequest struct {
 }
 
 type taskCommentRequest struct {
-	Body          string `json:"body"`
+	Summary       string `json:"summary"`
+	Detail        string `json:"detail,omitempty"`
 	TaskID        string `json:"taskId"`
 	IdempotencyID string `json:"idempotencyId"`
 }
@@ -196,8 +203,11 @@ type taskCommentItem struct {
 	TaskID      string     `json:"taskId"`
 	Author      string     `json:"author"`
 	AuthorActor *taskActor `json:"authorActor,omitempty"`
-	Body        string     `json:"body"`
-	CreatedAt   string     `json:"createdAt"`
+	Summary     string     `json:"summary"`
+	Detail      string     `json:"detail,omitempty"`
+	// Body is present on old update rows and during the server transition.
+	Body      string `json:"body,omitempty"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type workstreamRoster struct {
@@ -353,7 +363,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] --body <text> | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -388,7 +398,7 @@ func requestedHelp(arguments []string) (string, bool) {
 	case "send":
 		return "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]", true
 	case "update":
-		return "Usage: aircom update --workstream <code> [--agent <agentId|name>] --body <text>", true
+		return updateUsage, true
 	case "read":
 		return "Usage: aircom read --workstream <code> [--agent <agentId|name>]", true
 	case "task":
@@ -545,14 +555,31 @@ func (a *App) send(arguments []string) error {
 func (a *App) update(arguments []string) error {
 	flags := flag.NewFlagSet("update", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var workstreamCode string
-	var agentID string
-	var body string
+	var workstreamCode, agentID, summary, detail, taskRef, legacyBody string
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
-	flags.StringVar(&body, "body", "", "update body")
-	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || body == "" {
-		return &publicError{message: "Usage: aircom update --workstream <code> [--agent <agentId|name>] --body <text>"}
+	flags.StringVar(&summary, "summary", "", "one-line update summary")
+	flags.StringVar(&detail, "detail", "", "optional update detail")
+	flags.StringVar(&taskRef, "task", "", "optional task ID or number")
+	// Keep parsing --body only to return a direct migration message.
+	flags.StringVar(&legacyBody, "body", "", "legacy update body")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" {
+		return &publicError{message: updateUsage}
+	}
+	set := map[string]bool{}
+	flags.Visit(func(current *flag.Flag) { set[current.Name] = true })
+	if set["body"] {
+		return &publicError{message: "--body is no longer supported for updates; use --summary <text> and optional --detail <text>."}
+	}
+	if !set["summary"] {
+		return &publicError{message: updateUsage}
+	}
+	summary, err := validateActivityContent(summary, detail, "--summary", "--detail")
+	if err != nil {
+		return err
+	}
+	if set["task"] && strings.TrimSpace(taskRef) == "" {
+		return &publicError{message: "--task must name a task ID or number."}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -566,19 +593,23 @@ func (a *App) update(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate an update idempotency ID."}
 	}
-	payload, err := json.Marshal(updateRequest{Body: body, IdempotencyID: idempotencyID})
+	payload, err := json.Marshal(updateRequest{Summary: summary, Detail: detail, TaskID: strings.TrimSpace(taskRef), IdempotencyID: idempotencyID})
 	if err != nil {
 		return &publicError{message: "Unable to prepare the workstream update."}
 	}
 	path := "/agent/v1/workstreams/" + workstreamCode + "/updates"
-	response, err := a.request(http.MethodPost, path, credential.APIToken, payload)
+	response, err := a.messageAPIRequest(http.MethodPost, path, credential.APIToken, payload)
 	if err != nil {
 		return err
 	}
 	if response.status < 200 || response.status >= 300 {
 		return workstreamResponseStatusError(response.status, response.body, workstreamCode, true, credential)
 	}
-	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
+	posted, err := decodePostedUpdateResponse(response.body, false)
+	if err != nil || posted.Summary != summary || posted.Detail != detail || (set["task"] && strings.TrimSpace(posted.TaskID) == "") || (!set["task"] && posted.TaskID != "") {
+		return &publicError{message: "The workstream service returned an invalid update response."}
+	}
+	return writeUpdateConfirmation(a.outputWriter(), "Update posted", posted, credential.APIToken, credential.SocketKey)
 }
 
 func (a *App) resolveMessageRecipient(workstreamCode string, recipient string, credential credentials.Credential) (string, error) {
@@ -730,21 +761,84 @@ func decodeTaskList(body []byte) ([]taskListItem, error) {
 }
 
 func decodeTaskCommentResponse(body []byte) (taskCommentItem, error) {
+	return decodePostedUpdateResponse(body, true)
+}
+
+func decodePostedUpdateResponse(body []byte, requireTask bool) (taskCommentItem, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	var comment taskCommentItem
-	if err := decoder.Decode(&comment); err != nil {
+	var update taskCommentItem
+	if err := decoder.Decode(&update); err != nil {
 		return taskCommentItem{}, err
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
 		return taskCommentItem{}, err
 	}
-	if strings.TrimSpace(comment.ID) == "" ||
-		strings.TrimSpace(comment.TaskID) == "" ||
-		strings.TrimSpace(comment.Body) == "" ||
-		strings.TrimSpace(comment.CreatedAt) == "" {
+	if strings.TrimSpace(update.ID) == "" || strings.TrimSpace(update.Summary) == "" || strings.TrimSpace(update.CreatedAt) == "" {
+		return taskCommentItem{}, errors.New("update response is incomplete")
+	}
+	if requireTask && strings.TrimSpace(update.TaskID) == "" {
 		return taskCommentItem{}, errors.New("task comment response is incomplete")
 	}
-	return comment, nil
+	if strings.ContainsAny(update.Summary, "\r\n") || len([]rune(update.Summary)) > maxActivitySummaryRunes || len(update.Detail) > maxActivityDetailBytes {
+		return taskCommentItem{}, errors.New("update response has invalid content")
+	}
+	return update, nil
+}
+
+func validateActivityContent(summary, detail, summaryFlag, detailFlag string) (string, error) {
+	rawSummary := summary
+	summary = strings.TrimSpace(summary)
+	switch {
+	case summary == "":
+		return "", &publicError{message: summaryFlag + " must contain non-whitespace text."}
+	case strings.ContainsAny(rawSummary, "\r\n"):
+		return "", &publicError{message: summaryFlag + " must be one line."}
+	case len([]rune(summary)) > maxActivitySummaryRunes:
+		return "", &publicError{message: fmt.Sprintf("%s must be at most %d characters.", summaryFlag, maxActivitySummaryRunes)}
+	case len(detail) > maxActivityDetailBytes:
+		return "", &publicError{message: fmt.Sprintf("%s must be at most %d bytes.", detailFlag, maxActivityDetailBytes)}
+	}
+	return summary, nil
+}
+
+func activityUpdateText(update taskCommentItem) string {
+	if strings.TrimSpace(update.Summary) == "" {
+		return update.Body
+	}
+	if update.Detail == "" {
+		return update.Summary
+	}
+	return update.Summary + " — " + update.Detail
+}
+
+func writeUpdateConfirmation(output io.Writer, heading string, update taskCommentItem, protected ...string) error {
+	safe := func(value string) string { return safeMetadata(value, protected...) }
+	author := update.Author
+	if update.AuthorActor != nil && strings.TrimSpace(update.AuthorActor.Name) != "" {
+		author = update.AuthorActor.Name
+	}
+	if author == "" {
+		author = "-"
+	}
+	detail := update.Detail
+	if detail == "" {
+		detail = "-"
+	}
+	taskID := update.TaskID
+	if taskID == "" {
+		taskID = "-"
+	}
+	var formatted strings.Builder
+	fmt.Fprintf(&formatted, "%s: %s\n", heading, safe(update.ID))
+	fmt.Fprintf(&formatted, "Summary: %s\n", safe(update.Summary))
+	fmt.Fprintf(&formatted, "Detail: %s\n", safe(detail))
+	fmt.Fprintf(&formatted, "Task: %s\n", safe(taskID))
+	fmt.Fprintf(&formatted, "Author: %s\n", safe(author))
+	fmt.Fprintf(&formatted, "Created: %s\n", safe(update.CreatedAt))
+	if _, err := io.WriteString(output, formatted.String()); err != nil {
+		return &publicError{message: "Unable to write update output."}
+	}
+	return nil
 }
 
 func decodeTaskResponse(body []byte) (taskListItem, error) {
@@ -782,7 +876,7 @@ func decodeTaskDetail(body []byte) (taskListEnvelope, error) {
 		}
 	}
 	for _, update := range envelope.Updates {
-		if strings.TrimSpace(update.ID) == "" || strings.TrimSpace(update.Body) == "" || strings.TrimSpace(update.CreatedAt) == "" {
+		if strings.TrimSpace(update.ID) == "" || (strings.TrimSpace(update.Summary) == "" && strings.TrimSpace(update.Body) == "") || strings.TrimSpace(update.CreatedAt) == "" {
 			return taskListEnvelope{}, errors.New("task response has an invalid update")
 		}
 	}

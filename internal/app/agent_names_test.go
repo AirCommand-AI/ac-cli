@@ -17,7 +17,7 @@ import (
 
 var agentCommandFamilies = map[string][]string{
 	"send":   {"send", "--workstream", "694", "--to", "agm_other", "--body", "hi"},
-	"update": {"update", "--workstream", "694", "--body", "hi"},
+	"update": {"update", "--workstream", "694", "--summary", "Hi"},
 	"read":   {"read", "--workstream", "694"},
 	"task":   {"task", "t1", "--workstream", "694"},
 	"tasks":  {"tasks", "--workstream", "694"},

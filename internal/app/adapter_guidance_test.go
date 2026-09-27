@@ -43,6 +43,10 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 		t.Fatal("pi tool prompt snippet does not advertise task support")
 	}
 
+	if !strings.Contains(skill, "aircom update --workstream <code> --agent <agentId> --summary <one-line-text> [--detail <text>] [--task <id|number>]") {
+		t.Fatal("Claude Code skill does not document canonical update flags")
+	}
+
 	for _, required := range []string{
 		"aircom send --urgent",
 		"operator and task workflow",
@@ -54,13 +58,14 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	}
 
 	for _, required := range []string{
+		"aircom update --workstream <code> --agent <agentId> --summary",
 		"aircom tasks --workstream",
 		"aircom task <task>",
 		"--status in_flight",
 		"--status cancelled --reason",
 		"--acceptance",
 		"--validation",
-		"--comment",
+		"--comment-summary",
 		"--status landed",
 		"exact structural senderId",
 		"operator has authorized",

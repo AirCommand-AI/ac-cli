@@ -191,8 +191,8 @@ func TestTaskChangeRulesBeforeAnyRequest(t *testing.T) {
 		{"cancel with a blank reason", []string{"--status", "cancelled", "--reason", " "}, "--status cancelled requires --reason <text>."},
 		{"a reason without cancelling", []string{"--status", "landed", "--reason", "x"}, "--reason and --replaced-by go only with --status cancelled."},
 		{"a replacement without cancelling", []string{"--replaced-by", "1"}, "--reason and --replaced-by go only with --status cancelled."},
-		{"an edit with a status", []string{"--status", "landed", "--milestone", "x"}, "cannot be combined with --status, --comment or --assignee"},
-		{"an edit with a comment", []string{"--comment", "hi", "--type", "x"}, "cannot be combined with --status, --comment or --assignee"},
+		{"an edit with a status", []string{"--status", "landed", "--milestone", "x"}, "cannot be combined with --status, task comment flags or --assignee"},
+		{"an edit with a comment", []string{"--comment-summary", "hi", "--type", "x"}, "cannot be combined with --status, task comment flags or --assignee"},
 		{"a number cannot be edited", []string{"--number", "3"}, taskByIDUsage},
 	}
 	for _, tc := range cases {

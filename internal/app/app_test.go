@@ -119,12 +119,12 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 	}
 }
 
-func TestUpdateIntegrationPreservesBroadcastBehavior(t *testing.T) {
+func TestUpdatePostsSummaryDetailAndTaskWithStructuredSafeConfirmation(t *testing.T) {
 	t.Parallel()
 
 	credential := testCredential()
 	idempotencyID := repeatedHex(0x44)
-	wantBody, err := json.Marshal(updateRequest{Body: "starting on the parser", IdempotencyID: idempotencyID})
+	wantBody, err := json.Marshal(updateRequest{Summary: "Starting parser", Detail: "Implementation and tests.", TaskID: "#17", IdempotencyID: idempotencyID})
 	if err != nil {
 		t.Fatalf("marshal expected request: %v", err)
 	}
@@ -147,7 +147,8 @@ func TestUpdateIntegrationPreservesBroadcastBehavior(t *testing.T) {
 			t.Errorf("body = %s, want %s", body, wantBody)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"updateId":"update-1"}`))
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = fmt.Fprintf(writer, `{"id":"update-1","taskId":"task-17","author":"%s","summary":"Starting parser","detail":"Implementation and tests.","createdAt":"2026-09-27T19:30:00Z"}`, credential.APIToken)
 	}))
 	defer server.Close()
 
@@ -155,12 +156,93 @@ func TestUpdateIntegrationPreservesBroadcastBehavior(t *testing.T) {
 	if err := client.Store.Save(credential); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	arguments := []string{"update", "--workstream", "694", "--body", "starting on the parser"}
+	arguments := []string{"update", "--workstream", "694", "--summary", "  Starting parser  ", "--detail", "Implementation and tests.", "--task", "#17"}
 	if exitCode := client.Run(arguments); exitCode != 0 {
 		t.Fatalf("update exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	if got, want := stdout.String(), "{\"updateId\":\"update-1\"}\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
+	want := "Update posted: update-1\n" +
+		"Summary: Starting parser\n" +
+		"Detail: Implementation and tests.\n" +
+		"Task: task-17\n" +
+		"Author: [REDACTED]\n" +
+		"Created: 2026-09-27T19:30:00Z\n"
+	if got := stdout.String(); got != want || strings.Contains(got, credential.APIToken) {
+		t.Fatalf("stdout = %q, want %q without token", got, want)
+	}
+}
+
+func TestUpdateRejectsLegacyAndInvalidContentBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		arguments []string
+		want      string
+	}{
+		{"legacy body", []string{"--body", "old"}, "--body is no longer supported"},
+		{"missing summary", nil, "--summary"},
+		{"blank summary", []string{"--summary", "  "}, "non-whitespace"},
+		{"multiline summary", []string{"--summary", "one\ntwo"}, "one line"},
+		{"trailing newline", []string{"--summary", "one\n"}, "one line"},
+		{"oversized summary", []string{"--summary", strings.Repeat("界", 121)}, "120 characters"},
+		{"oversized detail", []string{"--summary", "valid", "--detail", strings.Repeat("x", maxActivityDetailBytes+1)}, "32768 bytes"},
+		{"blank task", []string{"--summary", "valid", "--task", "  "}, "--task must name"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			defer server.Close()
+			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x44))
+			arguments := append([]string{"update", "--workstream", "694"}, test.arguments...)
+			if exitCode := client.Run(arguments); exitCode == 0 {
+				t.Fatal("update unexpectedly accepted invalid content")
+			}
+			if requests != 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("requests=%d stdout=%q stderr=%q, want %q", requests, stdout.String(), stderr.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestUpdateRetriesWithOneIdempotentPayload(t *testing.T) {
+	t.Parallel()
+
+	for _, retryableStatus := range []int{http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		retryableStatus := retryableStatus
+		t.Run(http.StatusText(retryableStatus), func(t *testing.T) {
+			t.Parallel()
+			credential := testCredential()
+			idempotencyID := repeatedHex(0x44)
+			wantBody, err := json.Marshal(updateRequest{Summary: "Retry safely", IdempotencyID: idempotencyID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var bodies [][]byte
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				body, _ := io.ReadAll(request.Body)
+				bodies = append(bodies, body)
+				if len(bodies) == 1 {
+					writer.WriteHeader(retryableStatus)
+					return
+				}
+				writer.WriteHeader(http.StatusCreated)
+				_, _ = writer.Write([]byte(`{"id":"update-retry","summary":"Retry safely","createdAt":"2026-09-27T19:30:00Z"}`))
+			}))
+			defer server.Close()
+
+			client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x44))
+			client.RetryAttempts = 2
+			saveTestCredential(t, client, credential)
+			if exitCode := client.Run([]string{"update", "--workstream", "694", "--summary", "Retry safely"}); exitCode != 0 {
+				t.Fatalf("update exit code = %d, stderr = %q", exitCode, stderr.String())
+			}
+			if len(bodies) != 2 || !bytes.Equal(bodies[0], wantBody) || !bytes.Equal(bodies[1], wantBody) {
+				t.Fatalf("retry bodies = %q, want two %q", bodies, wantBody)
+			}
+		})
 	}
 }
 
@@ -224,6 +306,10 @@ func TestAgentSelectorDisambiguatesTwoAgentsInOneWorkstream(t *testing.T) {
 			t.Errorf("Authorization = %q, want %q", got, want)
 		}
 		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodPost {
+			_, _ = writer.Write([]byte(`{"id":"update-1","summary":"Hello","createdAt":"2026-09-27T19:30:00Z"}`))
+			return
+		}
 		_, _ = writer.Write([]byte(`{}`))
 	}))
 	defer server.Close()
@@ -238,7 +324,7 @@ func TestAgentSelectorDisambiguatesTwoAgentsInOneWorkstream(t *testing.T) {
 		t.Fatalf("invalidate unselected credential: %v", err)
 	}
 
-	if exitCode := client.Run([]string{"update", "--workstream", "694", "--agent", "agent-pi", "--body", "hello"}); exitCode != 0 {
+	if exitCode := client.Run([]string{"update", "--workstream", "694", "--agent", "agent-pi", "--summary", "Hello"}); exitCode != 0 {
 		t.Fatalf("selected update exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
 	stdout.Reset()

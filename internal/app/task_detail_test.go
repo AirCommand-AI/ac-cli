@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const taskDetailTestResponse = `{"workstream":{"code":"694"},"tasks":[{"id":"task-1","status":"in_flight","assignee":"agent-7","title":"Build parser","description":"First line\nsecond line","createdAt":"2026-09-08T10:00:00.000000000Z","updatedAt":"2026-09-08T12:00:00.000000000Z"},{"id":"task-2","status":"todo","assignee":"","title":"No comments yet","description":"","createdAt":"2026-09-08T11:00:00.000000000Z","updatedAt":"2026-09-08T11:00:00.000000000Z"}],"updates":[{"id":"update-new","taskId":"task-1","author":"Claude","body":"Newer comment","createdAt":"2026-09-08T11:30:00.000000000Z"},{"id":"update-other","taskId":"task-other","author":"Operator","body":"Unrelated","createdAt":"2026-09-08T09:00:00.000000000Z"},{"id":"update-old","taskId":"task-1","author":"Pi","body":"Older\ncomment","createdAt":"2026-09-08T10:30:00.000000000Z"}]}`
+const taskDetailTestResponse = `{"workstream":{"code":"694"},"tasks":[{"id":"task-1","status":"in_flight","assignee":"agent-7","title":"Build parser","description":"First line\nsecond line","createdAt":"2026-09-08T10:00:00.000000000Z","updatedAt":"2026-09-08T12:00:00.000000000Z"},{"id":"task-2","status":"todo","assignee":"","title":"No comments yet","description":"","createdAt":"2026-09-08T11:00:00.000000000Z","updatedAt":"2026-09-08T11:00:00.000000000Z"}],"updates":[{"id":"update-new","taskId":"task-1","author":"Claude","summary":"Newer","detail":"comment","createdAt":"2026-09-08T11:30:00.000000000Z"},{"id":"update-other","taskId":"task-other","author":"Operator","body":"Unrelated","createdAt":"2026-09-08T09:00:00.000000000Z"},{"id":"update-old","taskId":"task-1","author":"Pi","body":"Older\ncomment","createdAt":"2026-09-08T10:30:00.000000000Z"}]}`
 
 func TestTaskWithoutStatusShowsDetailAndHandlesMissingCommentsOrTask(t *testing.T) {
 	t.Parallel()
@@ -34,7 +34,7 @@ func TestTaskWithoutStatusShowsDetailAndHandlesMissingCommentsOrTask(t *testing.
 				"Updated: 2026-09-08T12:00:00.000000000Z\n" +
 				"Comments:\n" +
 				"2026-09-08T10:30:00.000000000Z\tPi\tOlder comment\n" +
-				"2026-09-08T11:30:00.000000000Z\tClaude\tNewer comment\n",
+				"2026-09-08T11:30:00.000000000Z\tClaude\tNewer — comment\n",
 		},
 		{
 			name:     "no comments",
@@ -134,14 +134,15 @@ func TestTaskCommentPostsOnlyTaskScopedUpdateAndPrintsConfirmation(t *testing.T)
 	t.Parallel()
 
 	credential := testCredential()
-	commentBody := "  Finished\nwith tests  "
+	commentSummary := "Finished"
+	commentDetail := "with tests\nand docs"
 	idempotencyID := repeatedHex(0x55)
-	wantBody, err := json.Marshal(taskCommentRequest{Body: commentBody, TaskID: "task-1", IdempotencyID: idempotencyID})
+	wantBody, err := json.Marshal(taskCommentRequest{Summary: commentSummary, Detail: commentDetail, TaskID: "task-1", IdempotencyID: idempotencyID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	responseBody, err := json.Marshal(taskCommentItem{
-		ID: "update-1", TaskID: "task-1", Author: "Builder", Body: commentBody,
+		ID: "update-1", TaskID: "task-1", Author: "Builder", Summary: commentSummary, Detail: commentDetail,
 		CreatedAt: "2026-09-08T14:00:00.000000000Z",
 	})
 	if err != nil {
@@ -170,17 +171,18 @@ func TestTaskCommentPostsOnlyTaskScopedUpdateAndPrintsConfirmation(t *testing.T)
 
 	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
 	saveTestCredential(t, client, credential)
-	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment", commentBody}); exitCode != 0 {
+	if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment-summary", "  Finished  ", "--comment-detail", commentDetail}); exitCode != 0 {
 		t.Fatalf("task comment exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
 	if requests != 1 {
 		t.Fatalf("requests = %d, want one POST and no task PATCH/GET", requests)
 	}
 	wantOutput := "Comment added: update-1\n" +
+		"Summary: Finished\n" +
+		"Detail: with tests and docs\n" +
 		"Task: task-1\n" +
 		"Author: Builder\n" +
-		"Created: 2026-09-08T14:00:00.000000000Z\n" +
-		"Body:   Finished with tests  \n"
+		"Created: 2026-09-08T14:00:00.000000000Z\n"
 	if got := stdout.String(); got != wantOutput {
 		t.Fatalf("stdout = %q, want %q", got, wantOutput)
 	}
@@ -209,7 +211,7 @@ func TestTaskCommentRejectsBlankTextBeforeRequest(t *testing.T) {
 			defer server.Close()
 
 			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
-			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment", test.comment}); exitCode == 0 {
+			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment-summary", test.comment}); exitCode == 0 {
 				t.Fatal("task unexpectedly accepted a blank comment")
 			}
 			if requests != 0 {
@@ -222,6 +224,40 @@ func TestTaskCommentRejectsBlankTextBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestTaskCommentRejectsLegacyAndInvalidStructuredFlagsBeforeRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{"legacy comment", []string{"--comment", "old"}, "--comment is no longer supported"},
+		{"detail without summary", []string{"--comment-detail", "context"}, "requires --comment-summary"},
+		{"multiline summary", []string{"--comment-summary", "one\ntwo"}, "one line"},
+		{"trailing newline", []string{"--comment-summary", "one\n"}, "one line"},
+		{"oversized summary", []string{"--comment-summary", strings.Repeat("界", 121)}, "120 characters"},
+		{"oversized detail", []string{"--comment-summary", "valid", "--comment-detail", strings.Repeat("x", maxActivityDetailBytes+1)}, "32768 bytes"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+			defer server.Close()
+			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
+			arguments := append([]string{"task", "task-1", "--workstream", "694"}, test.flags...)
+			if exitCode := client.Run(arguments); exitCode == 0 {
+				t.Fatal("task unexpectedly accepted invalid comment flags")
+			}
+			if requests != 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("requests=%d stdout=%q stderr=%q, want %q", requests, stdout.String(), stderr.String(), test.want)
+			}
+		})
+	}
+}
+
 func TestTaskCommentAndStatusAreRejectedTogetherBeforeRequest(t *testing.T) {
 	t.Parallel()
 
@@ -229,8 +265,8 @@ func TestTaskCommentAndStatusAreRejectedTogetherBeforeRequest(t *testing.T) {
 		name  string
 		flags []string
 	}{
-		{name: "comment then status", flags: []string{"--comment", "done", "--status", "landed"}},
-		{name: "status then comment", flags: []string{"--status", "landed", "--comment", "done"}},
+		{name: "comment then status", flags: []string{"--comment-summary", "done", "--status", "landed"}},
+		{name: "status then comment", flags: []string{"--status", "landed", "--comment-summary", "done"}},
 	}
 	for _, test := range tests {
 		test := test
@@ -268,12 +304,12 @@ func TestTaskCommentRetryableStatusesReuseOneServerIdempotencyID(t *testing.T) {
 
 			credential := testCredential()
 			idempotencyID := repeatedHex(0x55)
-			wantBody, err := json.Marshal(taskCommentRequest{Body: "retry safely", TaskID: "task-1", IdempotencyID: idempotencyID})
+			wantBody, err := json.Marshal(taskCommentRequest{Summary: "Retry safely", TaskID: "task-1", IdempotencyID: idempotencyID})
 			if err != nil {
 				t.Fatal(err)
 			}
 			responseBody, err := json.Marshal(taskCommentItem{
-				ID: "update-retry", TaskID: "task-1", Author: "Builder", Body: "retry safely",
+				ID: "update-retry", TaskID: "task-1", Author: "Builder", Summary: "Retry safely",
 				CreatedAt: "2026-09-08T14:00:00.000000000Z",
 			})
 			if err != nil {
@@ -298,7 +334,7 @@ func TestTaskCommentRetryableStatusesReuseOneServerIdempotencyID(t *testing.T) {
 			client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x55))
 			client.RetryAttempts = 2
 			saveTestCredential(t, client, credential)
-			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment", "retry safely"}); exitCode != 0 {
+			if exitCode := client.Run([]string{"task", "task-1", "--workstream", "694", "--comment-summary", "Retry safely"}); exitCode != 0 {
 				t.Fatalf("task comment exit code = %d, stderr = %q", exitCode, stderr.String())
 			}
 			if len(bodies) != 2 {
@@ -531,7 +567,7 @@ func TestTaskAssigneeIsRefusedWithOtherChangesOrBlank(t *testing.T) {
 		want      string
 	}{
 		{"with status", []string{"--assignee", "Engineer", "--status", "landed"}, "cannot be combined"},
-		{"with comment", []string{"--assignee", "Engineer", "--comment", "hi"}, "cannot be combined"},
+		{"with comment", []string{"--assignee", "Engineer", "--comment-summary", "hi"}, "cannot be combined"},
 		{"blank", []string{"--assignee", " "}, "must name an agent"},
 	}
 	for _, tc := range cases {
