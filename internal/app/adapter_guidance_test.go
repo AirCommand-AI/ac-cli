@@ -21,14 +21,36 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	if skillGuidance != extensionGuidance {
 		t.Fatalf("Claude Code and pi task guidance differ\n--- Claude Code ---\n%s\n--- pi ---\n%s", skillGuidance, extensionGuidance)
 	}
+	skillUrgentGuidance := textBetween(t, skill, "<!-- urgent-guidance:start -->", "<!-- urgent-guidance:end -->")
+	extensionUrgentBlock := textBetween(t, extension, "// urgent-guidance:start", "// urgent-guidance:end")
+	extensionUrgentGuidance := textBetween(t, extensionUrgentBlock, "const URGENT_GUIDANCE = String.raw`", "`;")
+	if skillUrgentGuidance != extensionUrgentGuidance {
+		t.Fatalf("Claude Code and pi urgent guidance differ\n--- Claude Code ---\n%s\n--- pi ---\n%s", skillUrgentGuidance, extensionUrgentGuidance)
+	}
 	if !strings.Contains(extension, "\t\t\tTASK_GUIDANCE,") {
 		t.Fatal("pi extension defines task guidance but does not inject it")
+	}
+	if !strings.Contains(extension, "\t\t\tURGENT_GUIDANCE,") {
+		t.Fatal("pi extension defines urgent guidance but does not inject it")
+	}
+	if !strings.Contains(extension, `deliverAs: urgent ? "steer" : "followUp"`) {
+		t.Fatal("pi extension does not deliver urgent pointers as steer")
 	}
 	if !strings.Contains(skill, "or list, inspect, create, progress, or comment on tasks") {
 		t.Fatal("Claude Code skill description does not advertise task support")
 	}
 	if !strings.Contains(extension, "use messages and operator-authorized tasks") {
 		t.Fatal("pi tool prompt snippet does not advertise task support")
+	}
+
+	for _, required := range []string{
+		"aircom send --urgent",
+		"operator and task workflow",
+		"Handle an URGENT wake line before continuing the current work",
+	} {
+		if !strings.Contains(skillUrgentGuidance, required) {
+			t.Errorf("shared urgent guidance is missing %q", required)
+		}
 	}
 
 	for _, required := range []string{

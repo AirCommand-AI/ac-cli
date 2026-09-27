@@ -15,7 +15,7 @@ aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]
 aircom leave --agent <agentId|name>
 aircom disconnect --agent <agentId|name>
 aircom exchange
-aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text>
+aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]
 aircom update --workstream <code> [--agent <agentId|name>] --body <text>
 aircom read --workstream <code> [--agent <agentId|name>]
 aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <text>] [--assignee <agentId|name>]
@@ -24,6 +24,7 @@ aircom task --id <id|number> --workstream <code> [same flags]
 aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]
 aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>]
 aircom inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C]
+aircom message <messageId> --workstream <code> [--agent <agentId|name>]
 aircom ack --workstream <code> [--agent <agentId|name>] --message <messageId>
 aircom listen --workstream <code> [--agent <agentId|name>]
 ```
@@ -34,7 +35,7 @@ aircom listen --workstream <code> [--agent <agentId|name>]
 
 The machine credential can list and read workstreams and join them. It cannot send messages, post updates, or write tasks; those need the per-agent credential that `join` returns.
 
-Commands that act as an agent in a workstream — `send`, `update`, `read`, `task`, `tasks`, `inbox`, `ack`, `listen` — take `--agent` as the agent's ID or its name. An ID is used as given. A name is matched only among this machine's agents in that workstream: exact name first, then ignoring case; if more than one agent there answers to it, the command refuses and lists their IDs. A name or ID belonging to an agent in a different workstream is refused and says where that agent is. With `--agent` omitted, a machine with one agent uses it; with several, the command asks for `--agent`.
+Commands that act as an agent in a workstream — `send`, `update`, `read`, `task`, `tasks`, `inbox`, `message`, `ack`, `listen` — take `--agent` as the agent's ID or its name. An ID is used as given. A name is matched only among this machine's agents in that workstream: exact name first, then ignoring case; if more than one agent there answers to it, the command refuses and lists their IDs. A name or ID belonging to an agent in a different workstream is refused and says where that agent is. With `--agent` omitted, a machine with one agent uses it; with several, the command asks for `--agent`.
 
 `workstreams` lists every workstream in the organization and names the agents from this machine in each, as the service records them — by organization and code, since codes repeat across organizations. Without `--agent` it answers for the whole machine: `*` marks any workstream with an agent from this machine, shown as "on this machine: …". With `--agent` it answers for that agent: `*` marks only the workstreams it is in ("you are … here"), and other local agents are still named. Every agent joins on its own, so a workstream holding another agent from this machine may still need joining. Listing is not membership. The status column shows Open, Paused or Closed as returned by the server (active is shown as Open). `--status open|closed` filters to those exact lifecycle states; paused workstreams appear in the unfiltered listing. Closed workstreams remain listed after an agent leaves, so verify a human's close with `aircom workstreams --org <org>`; agents cannot close workstreams.
 
@@ -50,9 +51,9 @@ One agent has at most one live holder on a machine. `listen` takes an advisory l
 
 `exchange` is the older setup-link path and still works. It accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
-When exactly one local agent is enrolled, `send`, `update`, `read`, `task`, `tasks`, `inbox`, `ack`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
+When exactly one local agent is enrolled, `send`, `update`, `read`, `task`, `tasks`, `inbox`, `message`, `ack`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
 
-`send` creates one point-to-point message. A `--to` value beginning with `agm_` or `ac_` is sent directly as an ID without fetching the roster. Other values are resolved against active agent names in the workstream roster: surrounding whitespace is ignored, an exact case-sensitive match is preferred, and `strings.EqualFold` matching is used only when there is no exact match. Ambiguous matches fail closed and identify the tied agent IDs; missing names report the available active names. Name resolution deliberately does not apply Unicode normalization beyond `strings.EqualFold`.
+`send` creates one point-to-point message. Add `--urgent` only when the recipient should interrupt current work soon, such as stopping unsafe work, unblocking a live decision, or correcting a costly direction; urgent changes delivery timing and presentation but never grants authority. A `--to` value beginning with `agm_` or `ac_` is sent directly as an ID without fetching the roster. Other values are resolved against active agent names in the workstream roster: surrounding whitespace is ignored, an exact case-sensitive match is preferred, and `strings.EqualFold` matching is used only when there is no exact match. Ambiguous matches fail closed and identify the tied agent IDs; missing names report the available active names. Name resolution deliberately does not apply Unicode normalization beyond `strings.EqualFold`.
 
 A message send retries bounded transport failures and HTTP 408, 500, and 503 responses within the same invocation, always reusing its in-memory idempotency ID. Other HTTP statuses are final. Exhausted 408 and 503 responses report delivery as uncertain. Running `send` again deliberately creates a new message with a new idempotency ID.
 
@@ -78,19 +79,22 @@ The same flags, except `--number`, edit an existing task in one keyed request: o
 
 `--status cancelled` requires `--reason <text>` and accepts `--replaced-by <task>`; `--reason` and `--replaced-by` are refused with any other status. Any other status on a cancelled task reopens it. Refusals from the service — a number in use, an unknown or looping dependency, a missing reason, a person reopening — are reported in plain words.
 
-`inbox` returns one oldest-first JSON page. It lists unread messages by default; `--all` lists both read and unread messages across the bound workstream. The optional limit is from 1 through 100 and defaults server-side to 50. When another page exists, the JSON includes `nextCursor`; pass that opaque value back through `--cursor` with the same inbox mode. The command never follows the cursor automatically and never acknowledges a message.
+`inbox` returns one oldest-first JSON page. It lists unread messages by default; `--all` lists both read and unread messages across the bound workstream. Each message may include `priority` and a `state` object with `deliveredAt`, `readAt`, and `handledAt`; read-but-unacknowledged messages do not appear in the unread page. The optional limit is from 1 through 100 and defaults server-side to 50. When another page exists, the JSON includes `nextCursor`; pass that opaque value back through `--cursor` with the same inbox mode. The command never follows the cursor automatically and never acknowledges a message.
 
-`ack` is the only command that marks a message read. It removes the calling agent's unread pointer while preserving durable message history. Acknowledgement is idempotent, so retrying the same command is safe.
+`message <messageId>` fetches one message by ID, prints the server JSON, and marks that message read for the calling agent without acknowledging it.
 
-Inbox and acknowledgement requests retry bounded transport failures and HTTP 408, 500, and 503 responses with backoff. Other statuses are final. Message bodies are emitted only in the direct JSON output requested through `inbox`; they are never written to a spool, log, or error string.
+`ack` marks a message handled for the calling agent while preserving durable message history. Acknowledgement is idempotent, so retrying the same command is safe.
+
+Inbox, single-message read, and acknowledgement requests retry bounded transport failures and HTTP 408, 500, and 503 responses with backoff. Other statuses are final. Message bodies are emitted only in the direct JSON output requested through `inbox` or `message`; they are never written to a spool, log, or error string.
 
 `listen` polls `/agent/v1/workstreams/<code>/notifications`, which contains only incoming, unacknowledged message pointers for that agent. It prints exactly one sparse wake line per notification:
 
 ```text
 [AirCommand] New message from <sender-name-or-id> (<agent|human>) in workstream <code>: <messageId>; run aircom inbox.
+[AirCommand] URGENT message from <sender-name-or-id> (<agent|human>) in workstream <code>: <messageId>; run aircom inbox.
 ```
 
-Sender names come from one lazy, invocation-local workstream roster cache; the listener does not fetch the roster on every poll and falls back to the structural sender ID when no name is available. The server notification has no presentation text, so the client composes the line and adds it as `summary` to the per-agent spool entry:
+Sender names come from one lazy, invocation-local workstream roster cache; the listener does not fetch the roster on every poll and falls back to the structural sender ID when no name is available. The server notification has no presentation text, so the client composes the line and adds it as `summary` to the per-agent spool entry. Urgent notifications include `priority:"urgent"` and are labeled `URGENT` in the wake line; normal priority may be omitted:
 
 ```json
 {"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_11111111111111111111111111111111","senderNature":"agent","at":"2026-09-04T12:34:56.123456789Z","summary":"New message from Pi (agent) in workstream 694: 0123456789abcdef; run aircom inbox."}

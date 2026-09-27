@@ -7,19 +7,22 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
 const (
-	inboxUsage = "Usage: aircom inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C]"
-	ackUsage   = "Usage: aircom ack --workstream <code> [--agent <agentId|name>] --message <messageId>"
+	inboxUsage   = "Usage: aircom inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C]"
+	messageUsage = "Usage: aircom message <messageId> --workstream <code> [--agent <agentId|name>]"
+	ackUsage     = "Usage: aircom ack --workstream <code> [--agent <agentId|name>] --message <messageId>"
 )
 
 type messageReadOperation int
 
 const (
 	messageListOperation messageReadOperation = iota
+	messageGetOperation
 	messageAcknowledgeOperation
 )
 
@@ -72,6 +75,52 @@ func (a *App) inbox(arguments []string) error {
 	}
 	if response.status != http.StatusOK {
 		return messageReadStatusError(response.status, response.body, messageListOperation, workstreamCode, "", credential)
+	}
+	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
+}
+
+func (a *App) message(arguments []string) error {
+	flags := flag.NewFlagSet("message", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workstreamCode string
+	var agentID string
+	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
+	var messageID string
+	parseArguments := arguments
+	if len(arguments) > 0 && !strings.HasPrefix(arguments[0], "-") {
+		messageID = arguments[0]
+		parseArguments = arguments[1:]
+	}
+	if err := flags.Parse(parseArguments); err != nil || workstreamCode == "" {
+		return &publicError{message: messageUsage}
+	}
+	if messageID == "" {
+		if flags.NArg() != 1 {
+			return &publicError{message: messageUsage}
+		}
+		messageID = flags.Arg(0)
+	} else if flags.NArg() != 0 {
+		return &publicError{message: messageUsage}
+	}
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+	if !validMessageID(messageID) {
+		return &publicError{message: "Message ID must be exactly 16 lowercase hexadecimal characters."}
+	}
+
+	credential, err := a.credentialFor(workstreamCode, agentID)
+	if err != nil {
+		return err
+	}
+	path := "/agent/v1/workstreams/" + workstreamCode + "/messages/" + messageID
+	response, err := a.messageAPIRequest(http.MethodGet, path, credential.APIToken, nil)
+	if err != nil {
+		return err
+	}
+	if response.status != http.StatusOK {
+		return messageReadStatusError(response.status, response.body, messageGetOperation, workstreamCode, messageID, credential)
 	}
 	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
 }
@@ -156,14 +205,23 @@ func messageReadStatusError(status int, body []byte, operation messageReadOperat
 			if operation == messageAcknowledgeOperation {
 				return &publicError{message: "AirCommand rejected the message acknowledgement request as invalid."}
 			}
+			if operation == messageGetOperation {
+				return &publicError{message: "AirCommand rejected the message request as invalid."}
+			}
 			return &publicError{message: "AirCommand rejected the message listing request as invalid."}
 		}
 	case http.StatusUnauthorized:
 		if operation == messageAcknowledgeOperation {
 			return &publicError{message: "The agent is no longer authorized. Re-enroll it before acknowledging messages."}
 		}
+		if operation == messageGetOperation {
+			return &publicError{message: "The agent is no longer authorized. Re-enroll it before reading messages."}
+		}
 		return &publicError{message: "The agent is no longer authorized. Re-enroll it before listing messages."}
 	case http.StatusNotFound:
+		if operation == messageGetOperation && response.Code == "NotFound" && response.Message == "Invalid Operation or Path" {
+			return &publicError{message: "This AirCommand server does not support reading a single message yet."}
+		}
 		if response.Code == "MessageNotFound" {
 			return &publicError{message: fmt.Sprintf("Message %s was not found or does not belong to this agent.", messageID)}
 		}
@@ -172,10 +230,16 @@ func messageReadStatusError(status int, body []byte, operation messageReadOperat
 		if operation == messageAcknowledgeOperation {
 			return &publicError{message: "Message acknowledgement could not be confirmed after retries. It is safe to repeat the ack command."}
 		}
+		if operation == messageGetOperation {
+			return &publicError{message: "Message read timed out after retries; no message was returned."}
+		}
 		return &publicError{message: "Message listing timed out after retries; no page was returned."}
 	case http.StatusInternalServerError:
 		if operation == messageAcknowledgeOperation {
 			return &publicError{message: "AirCommand could not complete message acknowledgement after retries. It is safe to repeat the ack command."}
+		}
+		if operation == messageGetOperation {
+			return &publicError{message: "AirCommand could not complete message read after retries (HTTP 500)."}
 		}
 		return &publicError{message: "AirCommand could not complete message listing after retries (HTTP 500)."}
 	case http.StatusServiceUnavailable:
@@ -184,8 +248,14 @@ func messageReadStatusError(status int, body []byte, operation messageReadOperat
 			if operation == messageAcknowledgeOperation {
 				return &publicError{message: "AirCommand authentication remained unavailable after retries. It is safe to repeat the ack command."}
 			}
+			if operation == messageGetOperation {
+				return &publicError{message: "AirCommand authentication remained unavailable after retries; no message was returned."}
+			}
 			return &publicError{message: "AirCommand authentication remained unavailable after retries; no message page was returned."}
 		case "MessageReadUnavailable":
+			if operation == messageGetOperation {
+				return &publicError{message: "AirCommand could not complete message read after retries; no message was returned."}
+			}
 			return &publicError{message: "AirCommand could not complete message listing after retries; no page was returned."}
 		case "MessageAcknowledgeUnavailable":
 			return &publicError{message: "Message acknowledgement could not be confirmed after retries. It is safe to repeat the ack command."}
@@ -193,11 +263,17 @@ func messageReadStatusError(status int, body []byte, operation messageReadOperat
 			if operation == messageAcknowledgeOperation {
 				return &publicError{message: "AirCommand could not confirm message acknowledgement after retries (HTTP 503). It is safe to repeat the ack command."}
 			}
+			if operation == messageGetOperation {
+				return &publicError{message: "AirCommand could not complete message read after retries (HTTP 503)."}
+			}
 			return &publicError{message: "AirCommand could not complete message listing after retries (HTTP 503)."}
 		}
 	default:
 		if operation == messageAcknowledgeOperation {
 			return &publicError{message: fmt.Sprintf("AirCommand message acknowledgement failed (HTTP %d).", status)}
+		}
+		if operation == messageGetOperation {
+			return &publicError{message: fmt.Sprintf("AirCommand message read failed (HTTP %d).", status)}
 		}
 		return &publicError{message: fmt.Sprintf("AirCommand message listing failed (HTTP %d).", status)}
 	}

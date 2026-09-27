@@ -141,6 +141,7 @@ type taskCommentRequest struct {
 type messageSendRequest struct {
 	RecipientID   string `json:"recipientId"`
 	Body          string `json:"body"`
+	Priority      string `json:"priority,omitempty"`
 	IdempotencyID string `json:"idempotencyId"`
 }
 
@@ -240,6 +241,7 @@ type messageNotification struct {
 	MessageID    string `json:"messageId"`
 	SenderID     string `json:"senderId"`
 	SenderNature string `json:"senderNature"`
+	Priority     string `json:"priority,omitempty"`
 	At           string `json:"at"`
 	// Kind and TaskID are set for messages the service sends about a task:
 	// assigned to this agent, or taken away from it. They say what the message
@@ -261,6 +263,7 @@ type spooledMessageNotification struct {
 	MessageID    string `json:"messageId"`
 	SenderID     string `json:"senderId"`
 	SenderNature string `json:"senderNature"`
+	Priority     string `json:"priority,omitempty"`
 	At           string `json:"at"`
 	Kind         string `json:"kind,omitempty"`
 	TaskID       string `json:"taskId,omitempty"`
@@ -324,6 +327,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.tasks(arguments[1:])
 		case "inbox":
 			err = a.inbox(arguments[1:])
+		case "message":
+			err = a.message(arguments[1:])
 		case "ack":
 			err = a.ack(arguments[1:])
 		case "listen":
@@ -348,7 +353,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> | update --workstream <code> [--agent <agentId|name>] --body <text> | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] --body <text> | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <text>] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -381,7 +386,7 @@ func requestedHelp(arguments []string) (string, bool) {
 	case "exchange":
 		return "Usage: aircom exchange (supply the ticket on standard input)", true
 	case "send":
-		return "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text>", true
+		return "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]", true
 	case "update":
 		return "Usage: aircom update --workstream <code> [--agent <agentId|name>] --body <text>", true
 	case "read":
@@ -392,6 +397,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return tasksUsage, true
 	case "inbox":
 		return inboxUsage, true
+	case "message":
+		return messageUsage, true
 	case "ack":
 		return ackUsage, true
 	case "listen":
@@ -486,12 +493,14 @@ func (a *App) send(arguments []string) error {
 	var agentID string
 	var recipient string
 	var body string
+	var urgent bool
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "sending agent ID")
 	flags.StringVar(&recipient, "to", "", "recipient agent ID or name")
 	flags.StringVar(&body, "body", "", "message body")
+	flags.BoolVar(&urgent, "urgent", false, "mark the message urgent")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || workstreamCode == "" || strings.TrimSpace(recipient) == "" || body == "" {
-		return &publicError{message: "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text>"}
+		return &publicError{message: "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]"}
 	}
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
@@ -509,9 +518,14 @@ func (a *App) send(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate a message idempotency ID."}
 	}
+	priority := ""
+	if urgent {
+		priority = "urgent"
+	}
 	payload, err := json.Marshal(messageSendRequest{
 		RecipientID:   resolvedRecipient,
 		Body:          body,
+		Priority:      priority,
 		IdempotencyID: idempotencyID,
 	})
 	if err != nil {
@@ -1046,11 +1060,22 @@ func decodeNotificationFeedResponse(body []byte) (notificationFeedResponse, erro
 		if notification.SenderNature != "agent" && notification.SenderNature != "human" {
 			return notificationFeedResponse{}, errors.New("notification response has an invalid sender nature")
 		}
+		if !validNotificationPriority(notification.Priority) {
+			return notificationFeedResponse{}, errors.New("notification response has an invalid priority")
+		}
 		if notification.Kind != "" && !validNotificationTaskID(notification.TaskID) {
 			return notificationFeedResponse{}, errors.New("notification response has a task message without a valid task ID")
 		}
 	}
 	return response, nil
+}
+
+func validNotificationPriority(priority string) bool {
+	return priority == "" || priority == "normal" || priority == "urgent"
+}
+
+func urgentNotification(notification messageNotification) bool {
+	return notification.Priority == "urgent"
 }
 
 // validNotificationTaskID accepts a task ID that is safe to put in a wake line:
@@ -1106,19 +1131,28 @@ func composeNotificationSummary(notification messageNotification, workstreamCode
 	if name := senderNames[senderIdentity{ID: notification.SenderID, Nature: notification.SenderNature}]; name != "" {
 		sender = name
 	}
+	urgency := ""
+	if urgentNotification(notification) {
+		urgency = "URGENT "
+	}
 	switch notification.Kind {
 	case notificationKindTaskAssigned:
-		return fmt.Sprintf("Task %s assigned to you by %s (%s) in workstream %s: %s; run aircom inbox.",
-			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
+		return fmt.Sprintf("%sTask %s assigned to you by %s (%s) in workstream %s: %s; run aircom inbox.",
+			urgency, notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
 	case notificationKindTaskUnassigned:
-		return fmt.Sprintf("Task %s reassigned away from you by %s (%s) in workstream %s: %s; run aircom inbox.",
-			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
+		return fmt.Sprintf("%sTask %s reassigned away from you by %s (%s) in workstream %s: %s; run aircom inbox.",
+			urgency, notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
 	case notificationKindTaskCancelled:
-		return fmt.Sprintf("Task %s cancelled by %s (%s) in workstream %s: %s; run aircom inbox.",
-			notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
+		return fmt.Sprintf("%sTask %s cancelled by %s (%s) in workstream %s: %s; run aircom inbox.",
+			urgency, notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
+	}
+	label := "New message"
+	if urgentNotification(notification) {
+		label = "URGENT message"
 	}
 	return fmt.Sprintf(
-		"New message from %s (%s) in workstream %s: %s; run aircom inbox.",
+		"%s from %s (%s) in workstream %s: %s; run aircom inbox.",
+		label,
 		singleLine(sender),
 		notification.SenderNature,
 		workstreamCode,
@@ -1132,6 +1166,7 @@ func spooledNotification(notification messageNotification, summary string) spool
 		MessageID:    notification.MessageID,
 		SenderID:     notification.SenderID,
 		SenderNature: notification.SenderNature,
+		Priority:     notification.Priority,
 		At:           notification.At,
 		Kind:         notification.Kind,
 		TaskID:       notification.TaskID,
@@ -1490,6 +1525,8 @@ func messageStatusError(status int, body []byte, workstreamCode string, recipien
 			return &publicError{message: "AirCommand rejected the message because its idempotency ID was missing."}
 		case "idempotency key is too long":
 			return &publicError{message: "AirCommand rejected the message because its idempotency ID was too long."}
+		case "priority must be 'normal' or 'urgent'":
+			return &publicError{message: "AirCommand rejected the message because its priority was invalid."}
 		default:
 			return &publicError{message: "AirCommand rejected the message request as invalid."}
 		}

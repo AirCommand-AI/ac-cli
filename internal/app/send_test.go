@@ -49,6 +49,9 @@ func TestSendDirectIDPostsAddressedMessageWithoutRosterFetch(t *testing.T) {
 		if want := []string{"body", "idempotencyId", "recipientId"}; !reflect.DeepEqual(keys, want) {
 			t.Errorf("request fields = %v, want %v", keys, want)
 		}
+		if _, ok := fields["priority"]; ok {
+			t.Error("plain send included a priority field")
+		}
 		var sent messageSendRequest
 		if err := json.Unmarshal(contents, &sent); err != nil {
 			t.Errorf("decode typed request: %v", err)
@@ -82,6 +85,37 @@ func TestSendDirectIDPostsAddressedMessageWithoutRosterFetch(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"recipientId":"agm_recipient"`) {
 		t.Fatalf("send output omitted accepted recipient: %q", stdout.String())
+	}
+}
+
+func TestSendUrgentPostsPriority(t *testing.T) {
+	t.Parallel()
+
+	credential := testCredential()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.RequestURI() != "/agent/v1/workstreams/694/messages" {
+			t.Errorf("request = %s %s, want addressed message POST", request.Method, request.URL.RequestURI())
+		}
+		var sent messageSendRequest
+		if err := json.NewDecoder(request.Body).Decode(&sent); err != nil {
+			t.Errorf("decode send request: %v", err)
+		}
+		if sent.Priority != "urgent" {
+			t.Errorf("priority = %q, want urgent", sent.Priority)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusCreated)
+		_, _ = writer.Write([]byte(`{"workstreamCode":"694","id":"0123456789abcdef","senderId":"agent-7","senderNature":"agent","recipientId":"agm_recipient","recipientNature":"agent","body":"stop","priority":"urgent","createdAt":"2026-09-04T12:34:56.123456789Z"}`))
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", deterministicRandom(0x44))
+	saveTestCredential(t, client, credential)
+	if exitCode := client.Run([]string{"send", "--workstream", "694", "--to", "agm_recipient", "--body", "stop", "--urgent"}); exitCode != 0 {
+		t.Fatalf("send --urgent exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"priority":"urgent"`) {
+		t.Fatalf("urgent response omitted priority: %q", stdout.String())
 	}
 }
 
@@ -394,6 +428,7 @@ func TestMessageStatusErrorMapsEveryDocumentedContractError(t *testing.T) {
 		{name: "body required", status: 400, body: `{"message":"message body is required","code":"BadRequest"}`, want: "body is required"},
 		{name: "idempotency missing", status: 400, body: `{"message":"missing idempotency key","code":"BadRequest"}`, want: "idempotency ID was missing"},
 		{name: "idempotency long", status: 400, body: `{"message":"idempotency key is too long","code":"BadRequest"}`, want: "idempotency ID was too long"},
+		{name: "invalid priority", status: 400, body: `{"message":"priority must be 'normal' or 'urgent'","code":"BadRequest"}`, want: "priority was invalid"},
 		{name: "unauthorized", status: 401, body: `{"error":"Unauthorized","code":"Unauthorized"}`, want: "no longer authorized"},
 		{name: "not found", status: 404, body: `{"message":"Workstream not found","code":"NotFound"}`, want: "not found"},
 		{name: "timeout", status: 408, body: `{"message":"Request timeout","code":"RequestTimeout"}`, want: "delivery is uncertain"},

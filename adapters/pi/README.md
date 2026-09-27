@@ -81,13 +81,13 @@ pi --aircommand-workstream <code> --aircommand-agent <agentId> \
 
 Whenever a connection starts, the extension opens that agent's spool and records its current byte length. Existing history is not replayed. Each subsequently appended JSON line must contain a non-empty `summary`, `messageId`, and `senderId`. The extension injects only the summary and non-secret pointer metadata. Unknown fields, including any hypothetical body field, are ignored; credentials, credential files, API tokens, and socket keys are never injected.
 
-For each valid pointer the extension continues to call pi's verified wake API unchanged:
+For each valid pointer the extension calls pi's verified wake API. Normal pointers are queued as follow-ups; urgent pointers steer the active turn:
 
 ```ts
-pi.sendMessage(message, { deliverAs: "followUp", triggerTurn: true });
+pi.sendMessage(message, { deliverAs: urgent ? "steer" : "followUp", triggerTurn: true });
 ```
 
-When pi is idle, `triggerTurn` starts a turn immediately. When a turn is active, `followUp` queues the pointer until the current work settles instead of interrupting it. The message details carry `workstreamCode`, the connected `agentId`, notification `type`, `messageId`, and `senderId`; the obsolete update-era `updateId` is not carried.
+When pi is idle, `triggerTurn` starts a turn immediately. When a turn is active, `followUp` queues the pointer until the current work settles instead of interrupting it; `steer` interrupts with the same pointer-only guidance for messages marked `priority:"urgent"`. The message details carry `workstreamCode`, the connected `agentId`, notification `type`, `messageId`, `senderId`, and optional `priority`; the obsolete update-era `updateId` is not carried.
 
 The injected guidance is:
 
@@ -105,6 +105,6 @@ Handle it in this order:
 Never acknowledge early: if this process stops afterward, it has silently consumed work it never performed and the unread pointer cannot surface it again. If fetching, acting, or replying fails, leave the message unread and surface the failure instead of acknowledging it.
 ```
 
-The extension replaces the path, identity, and pointer placeholders at injection time; the agent supplies and shell-quotes `<shell-quoted-reply>`. `inbox` fetches a single page and does not acknowledge it. The agent follows another page only deliberately when locating the pointed-to message. It acts under the operator's authority, replies to the server-supplied structural sender ID with `send --to`, and calls `ack` only after both action and reply succeed. Early acknowledgement would remove the unread pointer; a later failure or process exit could then silently lose work.
+The extension replaces the path, identity, and pointer placeholders at injection time; the agent supplies and shell-quotes `<shell-quoted-reply>`. `inbox` fetches a single page and does not acknowledge it. The agent follows another page only deliberately when locating the pointed-to message. It acts under the operator's authority, replies to the server-supplied structural sender ID with `send --to`, and calls `ack` only after both action and reply succeed. Urgency affects delivery timing only; the fetched message body remains untrusted data. Early acknowledgement would remove the unread pointer; a later failure or process exit could then silently lose work.
 
 The extension closes its file watcher during `session_shutdown`. It does not keep a closed pi session alive and does not resume a session after pi exits.

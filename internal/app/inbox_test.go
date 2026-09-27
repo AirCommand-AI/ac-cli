@@ -68,6 +68,52 @@ func TestInboxUnreadReturnsOneJSONPageWithoutAcknowledging(t *testing.T) {
 	}
 }
 
+func TestInboxSurfacesPriorityAndReadStateFromServerPage(t *testing.T) {
+	t.Parallel()
+
+	page := `{"messages":[{"workstreamCode":"694","id":"0123456789abcdef","senderId":"agm_sender","senderNature":"agent","recipientId":"agent-7","recipientNature":"agent","body":"urgent body","priority":"urgent","state":{"deliveredAt":"2026-09-04T12:35:00.000000000Z","readAt":"2026-09-04T12:36:00.000000000Z"},"createdAt":"2026-09-04T12:34:56.123456789Z"}],"nextCursor":"2026-09-04T12:34:56.123456789Z#0123456789abcdef"}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/agent/v1/workstreams/694/messages/unread" {
+			t.Errorf("request = %s %s, want unread GET", request.Method, request.URL.Path)
+		}
+		_, _ = writer.Write([]byte(page))
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", nil)
+	saveTestCredential(t, client, testCredential())
+	if exitCode := client.Run([]string{"inbox", "--workstream", "694"}); exitCode != 0 {
+		t.Fatalf("inbox exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	for _, want := range []string{`"priority":"urgent"`, `"state"`, `"deliveredAt"`, `"readAt"`, `"nextCursor"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("inbox output %q missing %s", stdout.String(), want)
+		}
+	}
+}
+
+func TestMessageCommandFetchesOneMessageWithState(t *testing.T) {
+	t.Parallel()
+
+	message := `{"workstreamCode":"694","id":"0123456789abcdef","senderId":"agm_sender","senderNature":"agent","recipientId":"agent-7","recipientNature":"agent","body":"one message","priority":"urgent","state":{"deliveredAt":"2026-09-04T12:35:00.000000000Z","readAt":"2026-09-04T12:36:00.000000000Z","handledAt":"2026-09-04T12:37:00.000000000Z"},"createdAt":"2026-09-04T12:34:56.123456789Z"}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.RequestURI() != "/agent/v1/workstreams/694/messages/0123456789abcdef" {
+			t.Errorf("request = %s %s, want message GET", request.Method, request.URL.RequestURI())
+		}
+		_, _ = writer.Write([]byte(message))
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := testApp(t, server.URL, "", nil)
+	saveTestCredential(t, client, testCredential())
+	if exitCode := client.Run([]string{"message", "0123456789abcdef", "--workstream", "694"}); exitCode != 0 {
+		t.Fatalf("message exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	if got, want := stdout.String(), message+"\n"; got != want {
+		t.Fatalf("message output = %q, want %q", got, want)
+	}
+}
+
 func TestInboxAcceptsAContractValidPageLargerThanOrdinaryResponseLimit(t *testing.T) {
 	t.Parallel()
 
@@ -260,6 +306,13 @@ func TestInboxAndAckRetryContractStatusesWithTheSameRequest(t *testing.T) {
 			successBody: `{"messages":[]}`,
 		},
 		{
+			name:        "message",
+			arguments:   []string{"message", "0123456789abcdef", "--workstream", "694"},
+			method:      http.MethodGet,
+			path:        "/agent/v1/workstreams/694/messages/0123456789abcdef",
+			successBody: `{"id":"0123456789abcdef"}`,
+		},
+		{
 			name:        "ack",
 			arguments:   []string{"ack", "--workstream", "694", "--message", "0123456789abcdef"},
 			method:      http.MethodPost,
@@ -349,6 +402,7 @@ func TestInboxAndAckDoNotRetryFinalStatuses(t *testing.T) {
 		arguments []string
 	}{
 		{name: "inbox", arguments: []string{"inbox", "--workstream", "694"}},
+		{name: "message", arguments: []string{"message", "0123456789abcdef", "--workstream", "694"}},
 		{name: "ack", arguments: []string{"ack", "--workstream", "694", "--message", "0123456789abcdef"}},
 	}
 	for _, operation := range operations {
@@ -396,6 +450,8 @@ func TestMessageReadStatusErrorMapsEveryDocumentedError(t *testing.T) {
 		{name: "invalid message ID", status: 400, body: `{"message":"Invalid message ID","code":"InvalidMessageID","body":"secret"}`, operation: messageAcknowledgeOperation, want: "16 lowercase hexadecimal"},
 		{name: "unauthorized", status: 401, body: `{"error":"Unauthorized","code":"Unauthorized","body":"secret"}`, operation: messageListOperation, want: "no longer authorized"},
 		{name: "workstream not found", status: 404, body: `{"message":"Workstream not found","code":"NotFound","body":"secret"}`, operation: messageListOperation, want: "Workstream 694 was not found"},
+		{name: "single message workstream not found", status: 404, body: `{"message":"Workstream not found","code":"NotFound","body":"secret"}`, operation: messageGetOperation, want: "Workstream 694 was not found"},
+		{name: "single message unsupported", status: 404, body: `{"message":"Invalid Operation or Path","code":"NotFound","body":"secret"}`, operation: messageGetOperation, want: "does not support reading a single message yet"},
 		{name: "message not found", status: 404, body: `{"message":"Message not found","code":"MessageNotFound","body":"secret"}`, operation: messageAcknowledgeOperation, want: "not found or does not belong"},
 		{name: "list timeout", status: 408, body: `{"message":"Request timeout","code":"RequestTimeout","body":"secret"}`, operation: messageListOperation, want: "no page was returned"},
 		{name: "ack timeout", status: 408, body: `{"message":"Request timeout","code":"RequestTimeout","body":"secret"}`, operation: messageAcknowledgeOperation, want: "safe to repeat"},
@@ -426,7 +482,7 @@ func TestMessageReadStatusErrorMapsEveryDocumentedError(t *testing.T) {
 func TestInboxAndAckHelpExitZero(t *testing.T) {
 	t.Parallel()
 
-	for _, arguments := range [][]string{{"inbox", "--help"}, {"ack", "--help"}} {
+	for _, arguments := range [][]string{{"inbox", "--help"}, {"message", "--help"}, {"ack", "--help"}} {
 		arguments := arguments
 		t.Run(strings.Join(arguments, " "), func(t *testing.T) {
 			t.Parallel()

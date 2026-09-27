@@ -181,6 +181,76 @@ func TestListenEstablishesSilentBaselineThenComposesAndSpoolsOneWake(t *testing.
 	assertFileMode(t, spoolPath, 0o600)
 }
 
+func TestListenMarksUrgentNotificationsAndSpooledPriority(t *testing.T) {
+	t.Parallel()
+
+	credential := testCredential()
+	home := t.TempDir()
+	if err := credentials.NewStore(home).Save(credential); err != nil {
+		t.Fatalf("Save credential: %v", err)
+	}
+	stateStore := listenstore.NewStore(home)
+	if err := stateStore.SaveCursor(credential.AgentID, credential.WorkstreamKey(), "2026-09-04T12:00:00.000000000Z#0000000000000000"); err != nil {
+		t.Fatalf("SaveCursor: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/agent/v1/workstreams/694":
+			_, _ = writer.Write([]byte(`{"workstream":{"code":"694","collaborators":[{"accountId":"ac_owner","name":"Owner","agents":[{"agentId":"agm_sender","name":"Lead","status":"active"}]}]},"tasks":[],"updates":[]}`))
+		case "/agent/v1/workstreams/694/notifications":
+			_, _ = writer.Write([]byte(`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_sender","senderNature":"agent","priority":"urgent","at":"2026-09-04T12:01:00.000000000Z"}],"cursor":"2026-09-04T12:01:00.000000000Z#0123456789abcdef","pollAfterSeconds":30}`))
+		default:
+			t.Errorf("unexpected path %q", request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, stdout, stderr := listenerApp(server.URL, home)
+	client.ListenPollLimit = 1
+	if exitCode := client.Run([]string{"listen", "--workstream", "694"}); exitCode != 0 {
+		t.Fatalf("listen exit code = %d, stderr = %q", exitCode, stderr.String())
+	}
+	want := "[AirCommand] URGENT message from Lead (agent) in workstream 694: 0123456789abcdef; run aircom inbox.\n"
+	if got := stripListenerTimestamps(stdout.String()); got != want {
+		t.Fatalf("urgent wake line = %q, want %q", got, want)
+	}
+	spool, err := os.ReadFile(stateStore.SpoolPath(credential.AgentID))
+	if err != nil {
+		t.Fatalf("read spool: %v", err)
+	}
+	if !strings.Contains(string(spool), `"priority":"urgent"`) || !strings.Contains(string(spool), "URGENT message") {
+		t.Fatalf("urgent spool = %s", spool)
+	}
+}
+
+func TestComposeNotificationSummaryPriorityLabels(t *testing.T) {
+	t.Parallel()
+
+	senderNames := map[senderIdentity]string{{ID: "agm_sender", Nature: "agent"}: "Lead"}
+	normal := composeNotificationSummary(messageNotification{
+		MessageID:    "0123456789abcdef",
+		SenderID:     "agm_sender",
+		SenderNature: "agent",
+		Priority:     "normal",
+	}, "694", senderNames)
+	if want := "New message from Lead (agent) in workstream 694: 0123456789abcdef; run aircom inbox."; normal != want {
+		t.Fatalf("normal summary = %q, want %q", normal, want)
+	}
+	urgentTask := composeNotificationSummary(messageNotification{
+		MessageID:    "fedcba9876543210",
+		SenderID:     "agm_sender",
+		SenderNature: "agent",
+		Priority:     "urgent",
+		Kind:         notificationKindTaskAssigned,
+		TaskID:       "task_1",
+	}, "694", senderNames)
+	if want := "URGENT Task task_1 assigned to you by Lead (agent) in workstream 694: fedcba9876543210; run aircom inbox."; urgentTask != want {
+		t.Fatalf("urgent task summary = %q, want %q", urgentTask, want)
+	}
+}
+
 func TestListenCachesRosterNamesAndFallsBackToUnknownSenderID(t *testing.T) {
 	t.Parallel()
 
@@ -530,6 +600,7 @@ func TestDecodeNotificationFeedRequiresPointerOnlyContractFields(t *testing.T) {
 		`{"notifications":[{"type":"message.received","messageId":"short","senderId":"agm_sender","senderNature":"agent","at":"2026-09-04T12:34:56.123456789Z"}],"cursor":"cursor","pollAfterSeconds":30}`,
 		`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"","senderNature":"agent","at":"2026-09-04T12:34:56.123456789Z"}],"cursor":"cursor","pollAfterSeconds":30}`,
 		`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_sender","senderNature":"system","at":"2026-09-04T12:34:56.123456789Z"}],"cursor":"cursor","pollAfterSeconds":30}`,
+		`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_sender","senderNature":"agent","priority":"emergency","at":"2026-09-04T12:34:56.123456789Z"}],"cursor":"cursor","pollAfterSeconds":30}`,
 		`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_sender","senderNature":"agent","at":""}],"cursor":"cursor","pollAfterSeconds":30}`,
 	}
 	for index, body := range invalid {
