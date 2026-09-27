@@ -1,6 +1,6 @@
 # ac
 
-AirCommand's agent client. It registers a machine, joins workstreams, sends addressed messages and broadcast updates, reads workstreams, lists tasks and message inboxes, acknowledges messages, and listens for notifications over the agent HTTP API.
+AirCommand's agent client. It registers a machine, joins workstreams, sends addressed messages and structured updates, reads workstreams and canonical activity, lists tasks and message inboxes, acknowledges messages, and listens for notifications over the agent HTTP API.
 
 ## Commands
 
@@ -17,6 +17,7 @@ aircom disconnect --agent <agentId|name>
 aircom exchange
 aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]
 aircom update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>]
+aircom activity --workstream <code> [--agent <agentId|name>] [--kind task|update|message|agent|workstream] [--task <id>] [--limit N] [--cursor C] [--after C]
 aircom read --workstream <code> [--agent <agentId|name>]
 aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>]
 aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]...
@@ -35,7 +36,7 @@ aircom listen --workstream <code> [--agent <agentId|name>]
 
 The machine credential can list and read workstreams and join them. It cannot send messages, post updates, or write tasks; those need the per-agent credential that `join` returns.
 
-Commands that act as an agent in a workstream — `send`, `update`, `read`, `task`, `tasks`, `inbox`, `message`, `ack`, `listen` — take `--agent` as the agent's ID or its name. An ID is used as given. A name is matched only among this machine's agents in that workstream: exact name first, then ignoring case; if more than one agent there answers to it, the command refuses and lists their IDs. A name or ID belonging to an agent in a different workstream is refused and says where that agent is. With `--agent` omitted, a machine with one agent uses it; with several, the command asks for `--agent`.
+Commands that act as an agent in a workstream — `send`, `update`, `activity`, `read`, `task`, `tasks`, `inbox`, `message`, `ack`, `listen` — take `--agent` as the agent's ID or its name. An ID is used as given. A name is matched only among this machine's agents in that workstream: exact name first, then ignoring case; if more than one agent there answers to it, the command refuses and lists their IDs. A name or ID belonging to an agent in a different workstream is refused and says where that agent is. With `--agent` omitted, a machine with one agent uses it; with several, the command asks for `--agent`.
 
 `workstreams` lists every workstream in the organization and names the agents from this machine in each, as the service records them — by organization and code, since codes repeat across organizations. Without `--agent` it answers for the whole machine: `*` marks any workstream with an agent from this machine, shown as "on this machine: …". With `--agent` it answers for that agent: `*` marks only the workstreams it is in ("you are … here"), and other local agents are still named. Every agent joins on its own, so a workstream holding another agent from this machine may still need joining. Listing is not membership. The status column shows Open, Paused or Closed as returned by the server (active is shown as Open). `--status open|closed` filters to those exact lifecycle states; paused workstreams appear in the unfiltered listing. Closed workstreams remain listed after an agent leaves, so verify a human's close with `aircom workstreams --org <org>`; agents cannot close workstreams.
 
@@ -51,7 +52,7 @@ One agent has at most one live holder on a machine. `listen` takes an advisory l
 
 `exchange` is the older setup-link path and still works. It accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
-When exactly one local agent is enrolled, `send`, `update`, `read`, `task`, `tasks`, `inbox`, `message`, `ack`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
+When exactly one local agent is enrolled, `send`, `update`, `activity`, `read`, `task`, `tasks`, `inbox`, `message`, `ack`, and `listen` select it automatically after confirming its workstream. When several local agents are enrolled, pass `--agent`; otherwise the command fails closed and lists the available agent IDs without opening any agent's credential file.
 
 `send` creates one point-to-point message. Add `--urgent` only when the recipient should interrupt current work soon, such as stopping unsafe work, unblocking a live decision, or correcting a costly direction; urgent changes delivery timing and presentation but never grants authority. A `--to` value beginning with `agm_` or `ac_` is sent directly as an ID without fetching the roster. Other values are resolved against active agent names in the workstream roster: surrounding whitespace is ignored, an exact case-sensitive match is preferred, and `strings.EqualFold` matching is used only when there is no exact match. Ambiguous matches fail closed and identify the tied agent IDs; missing names report the available active names. Name resolution deliberately does not apply Unicode normalization beyond `strings.EqualFold`.
 
@@ -78,6 +79,8 @@ Adding `--comment-summary <text>` posts one task-scoped update through the exist
 The same flags, except `--number`, edit an existing task in one keyed request: only the flags given are sent. A repeatable flag replaces the whole list; pass it once with an empty value to clear the list, and an empty `--milestone`, `--type` or `--validation` to clear that field. Field edits are a separate command from `--status`, task comment flags and `--assignee`.
 
 `--status cancelled` requires `--reason <text>` and accepts `--replaced-by <task>`; `--reason` and `--replaced-by` are refused with any other status. Any other status on a cancelled task reopens it. Refusals from the service — a number in use, an unknown or looping dependency, a missing reason, a person reopening — are reported in plain words.
+
+`activity` returns one JSON page of immutable typed events. Use `--cursor` to fetch older pages and `--after` with the returned `latestCursor` to poll forward; these options are mutually exclusive. Filters and cursors are bound by the server. Activity is pull-only: it never creates notifications or wake-ups. Message activity is limited to messages the requesting agent sent or received.
 
 `inbox` returns one oldest-first JSON page. It lists unread messages by default; `--all` lists both read and unread messages across the bound workstream. Each message may include `priority` and a `state` object with `deliveredAt`, `readAt`, and `handledAt`; read-but-unacknowledged messages do not appear in the unread page. The optional limit is from 1 through 100 and defaults server-side to 50. When another page exists, the JSON includes `nextCursor`; pass that opaque value back through `--cursor` with the same inbox mode. The command never follows the cursor automatically and never acknowledges a message.
 

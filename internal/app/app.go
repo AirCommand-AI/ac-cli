@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +33,8 @@ const (
 	maxActivitySummaryRunes     = 120
 	maxActivityDetailBytes      = 32 * 1024
 
-	updateUsage = "Usage: aircom update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>]"
+	updateUsage   = "Usage: aircom update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>]"
+	activityUsage = "Usage: aircom activity --workstream <code> [--agent <agentId|name>] [--kind task|update|message|agent|workstream] [--task <id>] [--limit N] [--cursor C] [--after C]"
 )
 
 var validWorkstreamCode = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -329,6 +331,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.send(arguments[1:])
 		case "update":
 			err = a.update(arguments[1:])
+		case "activity":
+			err = a.activity(arguments[1:])
 		case "read":
 			err = a.read(arguments[1:])
 		case "task":
@@ -363,7 +367,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] --summary <text> [--detail <text>] [--task <id|number>] | activity --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--after C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment-summary <text> [--comment-detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -399,6 +403,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "Usage: aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]", true
 	case "update":
 		return updateUsage, true
+	case "activity":
+		return activityUsage, true
 	case "read":
 		return "Usage: aircom read --workstream <code> [--agent <agentId|name>]", true
 	case "task":
@@ -610,6 +616,74 @@ func (a *App) update(arguments []string) error {
 		return &publicError{message: "The workstream service returned an invalid update response."}
 	}
 	return writeUpdateConfirmation(a.outputWriter(), "Update posted", posted, credential.APIToken, credential.SocketKey)
+}
+
+// activity pulls canonical history on demand. It deliberately does not use the
+// listener or create a notification class: callers page or poll with cursors.
+func (a *App) activity(arguments []string) error {
+	flags := flag.NewFlagSet("activity", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var workstreamCode, agentID, kind, taskID, cursor, after string
+	var limit int
+	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
+	flags.StringVar(&agentID, "agent", "", "agent ID")
+	flags.StringVar(&kind, "kind", "", "event category")
+	flags.StringVar(&taskID, "task", "", "task ID")
+	flags.IntVar(&limit, "limit", 50, "events per page")
+	flags.StringVar(&cursor, "cursor", "", "older-page cursor")
+	flags.StringVar(&after, "after", "", "forward-poll cursor")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || strings.TrimSpace(workstreamCode) == "" {
+		return &publicError{message: activityUsage}
+	}
+	if err := validateWorkstreamCode(workstreamCode); err != nil {
+		return err
+	}
+	kind = strings.TrimSpace(kind)
+	validKinds := map[string]bool{"": true, "task": true, "update": true, "message": true, "agent": true, "workstream": true}
+	if !validKinds[kind] {
+		return &publicError{message: "--kind must be task, update, message, agent, or workstream."}
+	}
+	if limit < 1 || limit > 100 {
+		return &publicError{message: "--limit must be an integer from 1 to 100."}
+	}
+	if strings.TrimSpace(cursor) != "" && strings.TrimSpace(after) != "" {
+		return &publicError{message: "Use either --cursor for older activity or --after for newer activity, not both."}
+	}
+	credential, err := a.credentialFor(workstreamCode, agentID)
+	if err != nil {
+		return err
+	}
+	query := url.Values{}
+	query.Set("limit", strconv.Itoa(limit))
+	if kind != "" {
+		query.Set("kind", kind)
+	}
+	if taskID = strings.TrimSpace(taskID); taskID != "" {
+		query.Set("task", taskID)
+	}
+	if cursor = strings.TrimSpace(cursor); cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	if after = strings.TrimSpace(after); after != "" {
+		query.Set("after", after)
+	}
+	path := "/agent/v1/workstreams/" + workstreamCode + "/events?" + query.Encode()
+	response, err := a.request(http.MethodGet, path, credential.APIToken, nil)
+	if err != nil {
+		return err
+	}
+	if response.status < 200 || response.status >= 300 {
+		return workstreamResponseStatusError(response.status, response.body, workstreamCode, false, credential)
+	}
+	var page struct {
+		Events       []json.RawMessage `json:"events"`
+		NextCursor   string            `json:"nextCursor,omitempty"`
+		LatestCursor string            `json:"latestCursor,omitempty"`
+	}
+	if err := json.Unmarshal(response.body, &page); err != nil || page.Events == nil {
+		return &publicError{message: "The workstream service returned an invalid activity response."}
+	}
+	return writeSafeResponse(a.outputWriter(), response.body, credential.APIToken, credential.SocketKey)
 }
 
 func (a *App) resolveMessageRecipient(workstreamCode string, recipient string, credential credentials.Credential) (string, error) {
