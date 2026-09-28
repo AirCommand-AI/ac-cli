@@ -137,14 +137,14 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		const match = remote.match(/(?:[:/])([^/:\s]+\/[^/\s]+?)(?:\.git)?$/);
 		return { repo: match?.[1] ?? "", branch: commandOutput("git", ["branch", "--show-current"], cwd) };
 	};
-	const reportRuntime = (ctx: ExtensionContext, force = false) => {
+	const reportRuntime = (ctx: ExtensionContext, force = false, selected?: { provider?: string; model?: string; effort?: string }) => {
 		const enrollment = activeConnection?.enrollment;
 		if (!sessionActive || !enrollment) return;
 		const git = gitInfo(ctx.cwd);
 		lastBranch = git.branch;
 		const payload = {
 			harness: "pi", harnessVersion: commandOutput("pi", ["--version"]), cliVersion: commandOutput(cliPath, ["--version"]),
-			provider: ctx.model?.provider ?? "", model: ctx.model?.id ?? "", effort: ctx.thinkingLevel ?? "",
+			provider: selected?.provider ?? ctx.model?.provider ?? "", model: selected?.model ?? ctx.model?.id ?? "", effort: selected?.effort ?? ctx.thinkingLevel ?? "",
 			machine: hostname(), hostname: hostname(), cwd: ctx.cwd, ...git, pid: process.pid, sessionStartedAt,
 		};
 		const encoded = JSON.stringify(payload);
@@ -357,8 +357,8 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("model_select", async (_event, ctx) => { reportRuntime(ctx); });
-	pi.on("thinking_level_select", async (_event, ctx) => { reportRuntime(ctx); });
+	pi.on("model_select", async (event, ctx) => { reportRuntime(ctx, false, { provider: event.model.provider, model: event.model.id }); });
+	pi.on("thinking_level_select", async (event, ctx) => { reportRuntime(ctx, false, { effort: event.level }); });
 	pi.on("turn_start", async (_event, ctx) => {
 		if (activeConnection && gitInfo(ctx.cwd).branch !== lastBranch) reportRuntime(ctx);
 	});
