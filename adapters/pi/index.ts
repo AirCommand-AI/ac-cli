@@ -10,6 +10,7 @@ import {
 	type FSWatcher,
 } from "node:fs";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -120,10 +121,25 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 
 	let activeConnection: ActiveConnection | undefined;
 	let sessionActive = false;
+	let lastState: "working" | "idle" | undefined;
+	let lastStateAt = 0;
+	const reportState = (state: "working" | "idle") => {
+		const enrollment = activeConnection?.enrollment;
+		if (!sessionActive || !enrollment) return;
+		const now = Date.now();
+		if (lastState === state && now - lastStateAt < 60_000) return;
+		lastState = state;
+		lastStateAt = now;
+		execFile(cliPath, ["state", "--workstream", enrollment.workstreamCode, "--agent", enrollment.agentId, "--source", "pi", state], { timeout: 10_000 }, () => {
+			// Presence reporting must never interfere with the agent's turn.
+		});
+	};
 
 	const disconnect = (): Enrollment | undefined => {
 		const connection = activeConnection;
 		activeConnection = undefined;
+		lastState = undefined;
+		lastStateAt = 0;
 		connection?.tail.close();
 		return connection?.enrollment;
 	};
@@ -179,6 +195,8 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 
 		const previous = activeConnection;
 		activeConnection = { enrollment, tail: newTail, token };
+		lastState = undefined;
+		lastStateAt = 0;
 		try {
 			previous?.tail.close();
 		} catch {
@@ -305,6 +323,9 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			notify(ctx, errorMessage(error), "error");
 		}
 	});
+
+	pi.on("turn_start", async () => { reportState("working"); });
+	pi.on("turn_end", async () => { reportState("idle"); });
 
 	pi.on("session_shutdown", async () => {
 		sessionActive = false;

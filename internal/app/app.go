@@ -336,6 +336,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.send(arguments[1:])
 		case "update":
 			err = a.update(arguments[1:])
+		case "state":
+			err = a.state(arguments[1:])
 		case "events", "activity":
 			err = a.events(arguments[1:])
 		case "approval":
