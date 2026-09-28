@@ -24,12 +24,14 @@ import (
 const (
 	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>] [--status open|closed]"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
-	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]..."
+	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] [--title <text>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]..."
 	taskIDFlagUsage  = "Usage: aircom task --id <id|number> --workstream <code> [same flags as above]"
 	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]"
 	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
 	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>]"
 )
+
+const maxTaskTitleBytes = 200 // store.MaxTitle on the service
 
 const (
 	defaultDevicePollInterval = 5 * time.Second
@@ -371,7 +373,7 @@ func (a *App) taskByID(arguments []string) error {
 	}
 	flags := flag.NewFlagSet("task", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var explicitTaskID, workstreamCode, agentID, status, commentSummary, commentDetail, legacyComment, assignee, reason, replacedBy string
+	var explicitTaskID, workstreamCode, agentID, status, commentSummary, commentDetail, legacyComment, assignee, reason, replacedBy, newTitle string
 	var fields taskFieldFlags
 	flags.StringVar(&explicitTaskID, "id", "", "explicit task ID")
 	flags.StringVar(&assignee, "assignee", "", "hand the task to this agent")
@@ -386,6 +388,7 @@ func (a *App) taskByID(arguments []string) error {
 	flags.StringVar(&legacyComment, "comment", "", "legacy combined task comment")
 	flags.StringVar(&reason, "reason", "", "why the task is cancelled")
 	flags.StringVar(&replacedBy, "replaced-by", "", "the task replacing a cancelled one")
+	flags.StringVar(&newTitle, "title", "", "new task title")
 	fields.register(flags)
 	if flags.Parse(flagArguments) != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: taskUsage}
@@ -405,6 +408,11 @@ func (a *App) taskByID(arguments []string) error {
 	commentSummary, commentDetail, legacyComment, err := validateTaskChange(set, workstreamCode, status, commentSummary, commentDetail, legacyComment, assignee, reason)
 	if err != nil {
 		return err
+	}
+	if set["title"] {
+		if newTitle, err = validateTaskTitle(newTitle); err != nil {
+			return err
+		}
 	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
@@ -428,7 +436,11 @@ func (a *App) taskByID(arguments []string) error {
 	case set["assignee"]:
 		return a.setTaskAssignee(workstreamCode, taskID, strings.TrimSpace(assignee), credential)
 	case editSet:
-		return a.editTask(workstreamCode, taskID, fields.editRequest(set), credential)
+		edit := fields.editRequest(set)
+		if set["title"] {
+			edit.Title = &newTitle
+		}
+		return a.editTask(workstreamCode, taskID, edit, credential)
 	}
 	return a.showTask(workstreamCode, taskID, credential)
 }
@@ -478,18 +490,36 @@ func validateTaskChange(set map[string]bool, workstreamCode, status, commentSumm
 	case status == taskStatusCancelled && strings.TrimSpace(reason) == "":
 		return "", "", "", &publicError{message: "--status cancelled requires --reason <text>."}
 	case taskFieldsSet(set) && (commentSet || status != "" || set["assignee"]):
-		return "", "", "", &publicError{message: "--milestone, --type, --acceptance, --validation, --depends-on and --link cannot be combined with --status, task comment flags or --assignee; run them as separate commands."}
+		return "", "", "", &publicError{message: "--title, --milestone, --type, --acceptance, --validation, --depends-on and --link cannot be combined with --status, task comment flags or --assignee; run them as separate commands."}
 	}
 	return commentSummary, commentDetail, legacyComment, nil
 }
 
 func taskFieldsSet(set map[string]bool) bool {
+	if set["title"] {
+		return true
+	}
 	for name := range taskFieldNames {
 		if set[name] {
 			return true
 		}
 	}
 	return false
+}
+
+// validateTaskTitle checks a new title before it is sent: one line, not blank,
+// at most maxTaskTitleBytes, the limits the service enforces.
+func validateTaskTitle(title string) (string, error) {
+	title = strings.TrimSpace(title)
+	switch {
+	case title == "":
+		return "", &publicError{message: "--title must not be blank."}
+	case strings.ContainsAny(title, "\r\n"):
+		return "", &publicError{message: "--title must be one line."}
+	case len(title) > maxTaskTitleBytes:
+		return "", &publicError{message: fmt.Sprintf("--title must be at most %d bytes.", maxTaskTitleBytes)}
+	}
+	return title, nil
 }
 
 // showTask prints one task, named by ID or number, and its comments oldest

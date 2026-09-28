@@ -146,6 +146,10 @@ func TestTaskChangesAddressedByNumber(t *testing.T) {
 			map[string]any{"milestone": "Phase 3", "acceptance": []any{"a", "b"}, "links": []any{"https://x.example/1"}, "dependsOn": []any{}}},
 		{"clearing a label", []string{"--type", ""}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
 			map[string]any{"type": ""}},
+		{"new title", []string{"--title", "  API v2  "}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
+			map[string]any{"title": "API v2"}},
+		{"new title with fields", []string{"--title", "API v2", "--milestone", "Phase 3"}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
+			map[string]any{"title": "API v2", "milestone": "Phase 3"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,6 +198,10 @@ func TestTaskChangeRulesBeforeAnyRequest(t *testing.T) {
 		{"an edit with a status", []string{"--status", "landed", "--milestone", "x"}, "cannot be combined with --status, task comment flags or --assignee"},
 		{"an edit with a comment", []string{"--comment-summary", "hi", "--type", "x"}, "cannot be combined with --status, task comment flags or --assignee"},
 		{"a number cannot be edited", []string{"--number", "3"}, taskByIDUsage},
+		{"a blank title", []string{"--title", "  "}, "--title must not be blank."},
+		{"a multi-line title", []string{"--title", "a\nb"}, "--title must be one line."},
+		{"a title over the limit", []string{"--title", strings.Repeat("x", 201)}, "--title must be at most 200 bytes."},
+		{"a title with a status", []string{"--status", "landed", "--title", "x"}, "cannot be combined with --status, task comment flags or --assignee"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -128,6 +128,7 @@ type taskStatusRequest struct {
 // taskEditRequest changes a task's structured fields. An omitted field is left
 // as it is; an empty one is cleared.
 type taskEditRequest struct {
+	Title         *string   `json:"title,omitempty"`
 	Milestone     *string   `json:"milestone,omitempty"`
 	Type          *string   `json:"type,omitempty"`
 	Acceptance    *[]string `json:"acceptance,omitempty"`
