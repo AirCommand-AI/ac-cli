@@ -350,6 +350,10 @@ func (a *App) Run(arguments []string) int {
 			err = a.milestones(arguments[1:])
 		case "milestone":
 			err = a.milestone(arguments[1:])
+		case "docs":
+			err = a.docs(arguments[1:])
+		case "doc":
+			err = a.doc(arguments[1:])
 		case "inbox":
 			err = a.inbox(arguments[1:])
 		case "message":
@@ -378,7 +382,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | connect --name <agentName> | agents | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | disconnect --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | docs --workstream <code> | doc get|put|diff|archive <name> --workstream <code> | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -428,6 +432,8 @@ func requestedHelp(arguments []string) (string, bool) {
 		return milestonesUsage, true
 	case "milestone":
 		return milestoneUsage, true
+	case "docs", "doc":
+		return docUsage, true
 	case "inbox":
 		return inboxUsage, true
 	case "message":
@@ -670,7 +676,7 @@ func (a *App) events(arguments []string) error {
 		return err
 	}
 	kind = strings.TrimSpace(kind)
-	validKinds := map[string]bool{"": true, "task": true, "update": true, "message": true, "agent": true, "workstream": true}
+	validKinds := map[string]bool{"": true, "task": true, "update": true, "message": true, "agent": true, "workstream": true, "doc": true}
 	if !validKinds[kind] {
 		return &publicError{message: "--kind must be task, update, message, agent, or workstream."}
 	}
