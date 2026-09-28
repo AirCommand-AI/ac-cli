@@ -24,11 +24,11 @@ import (
 const (
 	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>] [--status open|closed]"
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
-	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] [--title <text>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]..."
+	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] [--title <text>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--position <n> | --before <id|number> | --after <id|number>]"
 	taskIDFlagUsage  = "Usage: aircom task --id <id|number> --workstream <code> [same flags as above]"
 	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]"
 	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
-	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>]"
+	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>] [--order work]"
 )
 
 const maxTaskTitleBytes = 200 // store.MaxTitle on the service
@@ -390,6 +390,11 @@ func (a *App) taskByID(arguments []string) error {
 	flags.StringVar(&replacedBy, "replaced-by", "", "the task replacing a cancelled one")
 	flags.StringVar(&newTitle, "title", "", "new task title")
 	fields.register(flags)
+	var position int
+	var before, after string
+	flags.IntVar(&position, "position", 0, "task position within milestone")
+	flags.StringVar(&before, "before", "", "place before task in same milestone")
+	flags.StringVar(&after, "after", "", "place after task in same milestone")
 	if flags.Parse(flagArguments) != nil || flags.NArg() != 0 || workstreamCode == "" {
 		return &publicError{message: taskUsage}
 	}
@@ -415,18 +420,28 @@ func (a *App) taskByID(arguments []string) error {
 		}
 	}
 
+	ordering := set["position"] || set["before"] || set["after"]
+	if ordering && (set["position"] && (set["before"] || set["after"]) || set["before"] && set["after"] || (set["position"] && position <= 0) || (set["before"] && before == "") || (set["after"] && after == "") || status != "" || set["assignee"] || taskFieldsSet(set) || set["summary"] || set["detail"] || set["comment"]) {
+		return &publicError{message: "Position, before or after must be specified alone; position must be positive."}
+	}
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
 	}
 	editSet := taskFieldsSet(set)
 	commentSet := set["comment"] || set["summary"] || set["detail"] || set["comment-summary"] || set["comment-detail"]
-	if commentSet || status != "" || set["assignee"] || editSet {
+	if commentSet || status != "" || set["assignee"] || editSet || ordering {
 		if taskID, err = a.resolveTaskID(workstreamCode, taskID, credential); err != nil {
 			return err
 		}
 	}
 	switch {
+	case ordering:
+		var pos *int
+		if set["position"] {
+			pos = &position
+		}
+		return a.moveTask(workstreamCode, taskID, pos, before, after, credential)
 	case commentSet:
 		return a.addTaskComment(workstreamCode, taskID, commentSummary, commentDetail, legacyComment, credential)
 	case status != "":
@@ -848,7 +863,8 @@ func (a *App) tasks(arguments []string) error {
 	var workstreamCode string
 	var agentID string
 	var mine bool
-	var status, milestone, taskType string
+	var status, milestone, taskType, order string
+	flags.StringVar(&order, "order", "", "sort order: work")
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentID, "agent", "", "agent ID")
 	flags.BoolVar(&mine, "mine", false, "show only tasks assigned to the selected agent")
@@ -863,6 +879,9 @@ func (a *App) tasks(arguments []string) error {
 	}
 	if status != "" && !validTaskListStatus(status) {
 		return &publicError{message: taskStatusChoices}
+	}
+	if order != "" && order != "work" {
+		return &publicError{message: "--order must be work"}
 	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)
@@ -883,7 +902,44 @@ func (a *App) tasks(arguments []string) error {
 
 	protected := []string{credential.APIToken, credential.SocketKey}
 	writer := a.outputWriter()
+	if order == "work" {
+		milestones, err := a.readMilestones(workstreamCode, credential)
+		if err != nil {
+			return err
+		}
+		rank := map[string]int{}
+		for i, m := range milestones {
+			rank[m.Name] = i + 1
+		}
+		sort.SliceStable(tasks, func(i, j int) bool {
+			a, b := tasks[i], tasks[j]
+			ar, br := rank[a.Milestone], rank[b.Milestone]
+			if ar == 0 {
+				ar = len(rank) + 1
+			}
+			if br == 0 {
+				br = len(rank) + 1
+			}
+			if ar != br {
+				return ar < br
+			}
+			if a.Milestone != b.Milestone {
+				return a.Milestone < b.Milestone
+			}
+			if a.Position != b.Position {
+				if a.Position == 0 {
+					return false
+				}
+				if b.Position == 0 {
+					return true
+				}
+				return a.Position < b.Position
+			}
+			return a.Number < b.Number
+		})
+	}
 	matches := 0
+	lastGroup := "\x00"
 	for _, task := range tasks {
 		if mine && task.Assignee != credential.AgentID {
 			continue
@@ -898,6 +954,16 @@ func (a *App) tasks(arguments []string) error {
 			continue
 		}
 		matches++
+		if order == "work" && task.Milestone != lastGroup {
+			lastGroup = task.Milestone
+			title := lastGroup
+			if title == "" {
+				title = "No milestone"
+			}
+			if _, err := fmt.Fprintf(writer, "\n%s\n", safeMetadata(title, protected...)); err != nil {
+				return &publicError{message: "Unable to write task output."}
+			}
+		}
 		orDash := func(value string) string {
 			if value == "" {
 				return "-"

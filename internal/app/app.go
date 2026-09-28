@@ -185,6 +185,7 @@ type taskListItem struct {
 	AssignedAt  string     `json:"assignedAt,omitempty"`
 
 	Number       int        `json:"number,omitempty"`
+	Position     int        `json:"position,omitempty"`
 	Milestone    string     `json:"milestone,omitempty"`
 	Type         string     `json:"type,omitempty"`
 	Acceptance   []string   `json:"acceptance,omitempty"`
@@ -343,6 +344,10 @@ func (a *App) Run(arguments []string) int {
 			err = a.task(arguments[1:])
 		case "tasks":
 			err = a.tasks(arguments[1:])
+		case "milestones":
+			err = a.milestones(arguments[1:])
+		case "milestone":
+			err = a.milestone(arguments[1:])
 		case "inbox":
 			err = a.inbox(arguments[1:])
 		case "message":
@@ -415,6 +420,10 @@ func requestedHelp(arguments []string) (string, bool) {
 		return taskUsage, true
 	case "tasks":
 		return tasksUsage, true
+	case "milestones":
+		return milestonesUsage, true
+	case "milestone":
+		return milestoneUsage, true
 	case "inbox":
 		return inboxUsage, true
 	case "message":
