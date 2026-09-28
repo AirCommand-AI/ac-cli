@@ -9,8 +9,8 @@ import {
 	watch,
 	type FSWatcher,
 } from "node:fs";
-import { homedir } from "node:os";
-import { execFile } from "node:child_process";
+import { homedir, hostname } from "node:os";
+import { execFile, execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -123,6 +123,33 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	let sessionActive = false;
 	let lastState: "working" | "idle" | undefined;
 	let lastStateAt = 0;
+	let sessionStartedAt = new Date().toISOString();
+	let lastBranch = "";
+	let lastRuntime = "";
+	const commandOutput = (command: string, args: string[], cwd?: string): string => {
+		try { return execFileSync(command, args, { cwd, timeout: 1500, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+		catch { return ""; }
+	};
+	const gitInfo = (cwd: string) => {
+		const remote = commandOutput("git", ["remote", "get-url", "origin"], cwd);
+		const match = remote.match(/(?:[:/])([^/:\s]+\/[^/\s]+?)(?:\.git)?$/);
+		return { repo: match?.[1] ?? "", branch: commandOutput("git", ["branch", "--show-current"], cwd) };
+	};
+	const reportRuntime = (ctx: ExtensionContext, force = false) => {
+		const enrollment = activeConnection?.enrollment;
+		if (!sessionActive || !enrollment) return;
+		const git = gitInfo(ctx.cwd);
+		lastBranch = git.branch;
+		const payload = {
+			harness: "pi", harnessVersion: commandOutput("pi", ["--version"]), cliVersion: commandOutput(cliPath, ["--version"]),
+			provider: ctx.model?.provider ?? "", model: ctx.model?.id ?? "", effort: ctx.thinkingLevel ?? "",
+			machine: hostname(), hostname: hostname(), cwd: ctx.cwd, ...git, pid: process.pid, sessionStartedAt,
+		};
+		const encoded = JSON.stringify(payload);
+		if (!force && lastRuntime === encoded) return;
+		lastRuntime = encoded;
+		execFile(cliPath, ["runtime", "--workstream", enrollment.workstreamCode, "--agent", enrollment.agentId, "--json", encoded], { timeout: 10_000 }, () => {});
+	};
 	const reportState = (state: "working" | "idle") => {
 		const enrollment = activeConnection?.enrollment;
 		if (!sessionActive || !enrollment) return;
@@ -140,6 +167,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		activeConnection = undefined;
 		lastState = undefined;
 		lastStateAt = 0;
+		lastRuntime = "";
 		connection?.tail.close();
 		return connection?.enrollment;
 	};
@@ -197,6 +225,8 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		activeConnection = { enrollment, tail: newTail, token };
 		lastState = undefined;
 		lastStateAt = 0;
+		lastRuntime = "";
+		reportRuntime(ctx, true);
 		try {
 			previous?.tail.close();
 		} catch {
@@ -296,6 +326,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		sessionActive = true;
+		sessionStartedAt = new Date().toISOString();
 		try {
 			disconnect();
 		} catch {
@@ -324,6 +355,11 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		}
 	});
 
+	pi.on("model_select", async (_event, ctx) => { reportRuntime(ctx); });
+	pi.on("thinking_level_select", async (_event, ctx) => { reportRuntime(ctx); });
+	pi.on("turn_start", async (_event, ctx) => {
+		if (activeConnection && gitInfo(ctx.cwd).branch !== lastBranch) reportRuntime(ctx);
+	});
 	pi.on("agent_start", async () => { reportState("working"); });
 	pi.on("agent_end", async () => { reportState("idle"); });
 
