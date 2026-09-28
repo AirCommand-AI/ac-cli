@@ -18,12 +18,20 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	skillGuidance := textBetween(t, skill, "<!-- task-guidance:start -->", "<!-- task-guidance:end -->")
 	extensionBlock := textBetween(t, extension, "// task-guidance:start", "// task-guidance:end")
 	extensionGuidance := textBetween(t, extensionBlock, "const TASK_GUIDANCE = String.raw`", "`;")
+	// Both blocks live in a String.raw template literal in the pi extension;
+	// a backtick inside ends the literal early and pi cannot load the file.
+	if strings.Contains(skillGuidance, "`") {
+		t.Fatal("task guidance must not contain a backtick: the pi extension embeds it in a template literal")
+	}
 	if skillGuidance != extensionGuidance {
 		t.Fatalf("Claude Code and pi task guidance differ\n--- Claude Code ---\n%s\n--- pi ---\n%s", skillGuidance, extensionGuidance)
 	}
 	skillUrgentGuidance := textBetween(t, skill, "<!-- urgent-guidance:start -->", "<!-- urgent-guidance:end -->")
 	extensionUrgentBlock := textBetween(t, extension, "// urgent-guidance:start", "// urgent-guidance:end")
 	extensionUrgentGuidance := textBetween(t, extensionUrgentBlock, "const URGENT_GUIDANCE = String.raw`", "`;")
+	if strings.Contains(skillUrgentGuidance, "`") {
+		t.Fatal("urgent guidance must not contain a backtick: the pi extension embeds it in a template literal")
+	}
 	if skillUrgentGuidance != extensionUrgentGuidance {
 		t.Fatalf("Claude Code and pi urgent guidance differ\n--- Claude Code ---\n%s\n--- pi ---\n%s", skillUrgentGuidance, extensionUrgentGuidance)
 	}
