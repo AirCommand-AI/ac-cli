@@ -60,7 +60,7 @@ func TestInitRedeemsTheCodeAndStoresADevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMachine: %v", err)
 	}
-	if machine.DeviceID != "dev_0123456789abcdef01234567" || machine.APIToken == "" {
+	if machine.DeviceID != "dev_0123456789abcdef01234567" || machine.APIToken == "" || machine.MachineName != "laptop" {
 		t.Fatalf("stored machine = %+v", machine)
 	}
 }

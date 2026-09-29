@@ -108,9 +108,10 @@ func (a *App) initMachine(arguments []string) error {
 		return err
 	}
 
+	registeredName := machineName()
 	payload, err := json.Marshal(redeemDeviceCodeRequest{
 		Code:        code,
-		MachineName: machineName(),
+		MachineName: registeredName,
 		Platform:    platformName(),
 	})
 	if err != nil {
@@ -131,10 +132,14 @@ func (a *App) initMachine(arguments []string) error {
 		return &publicError{message: "The registration service returned an invalid response."}
 	}
 
+	if strings.TrimSpace(redeemed.DeviceName) != "" {
+		registeredName = redeemed.DeviceName
+	}
 	if err := a.Store.SaveMachine(credentials.Machine{
-		APIToken:  redeemed.Token,
-		DeviceID:  redeemed.DeviceID,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		APIToken:    redeemed.Token,
+		DeviceID:    redeemed.DeviceID,
+		MachineName: registeredName,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		return &publicError{message: "Unable to store the machine credential."}
 	}

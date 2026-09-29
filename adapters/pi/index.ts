@@ -128,6 +128,14 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	let sessionStartedAt = new Date().toISOString();
 	let lastBranch = "";
 	let lastRuntime = "";
+	let branchCheckSequence = 0;
+	const registeredMachineName = (): string => {
+		try {
+			const registration = JSON.parse(readFileSync(join(homedir(), ".aircommand", "machine.json"), "utf8")) as { machineName?: unknown };
+			if (typeof registration.machineName === "string" && registration.machineName.trim()) return registration.machineName.trim();
+		} catch { /* Legacy registration: its original name was the machine hostname. */ }
+		return hostname();
+	};
 	const commandOutput = (command: string, args: string[], cwd?: string): string => {
 		try { return execFileSync(command, args, { cwd, timeout: 1500, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
 		catch { return ""; }
@@ -142,15 +150,32 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		if (!sessionActive || !enrollment) return;
 		const git = gitInfo(ctx.cwd);
 		lastBranch = git.branch;
+		branchCheckSequence++;
 		const payload = {
 			harness: "pi", harnessVersion: commandOutput("pi", ["--version"]), cliVersion: commandOutput(cliPath, ["--version"]),
 			provider: selected?.provider ?? ctx.model?.provider ?? "", model: selected?.model ?? ctx.model?.id ?? "", effort: selected?.effort ?? ctx.thinkingLevel ?? "",
-			machine: hostname(), hostname: hostname(), cwd: ctx.cwd, ...git, pid: process.pid, sessionStartedAt,
+			machine: registeredMachineName(), hostname: hostname(), cwd: ctx.cwd, ...git, pid: process.pid, sessionStartedAt,
 		};
 		const encoded = JSON.stringify(payload);
 		if (!force && lastRuntime === encoded) return;
 		lastRuntime = encoded;
 		execFile(cliPath, ["runtime", "--workstream", enrollment.workstreamCode, "--agent", enrollment.agentId, "--json", encoded], { timeout: 10_000 }, () => {});
+	};
+	const checkBranch = (ctx: ExtensionContext) => {
+		const connection = activeConnection;
+		if (!sessionActive || !connection || !lastRuntime) return;
+		const sequence = ++branchCheckSequence;
+		execFile("git", ["branch", "--show-current"], { cwd: ctx.cwd, timeout: 1500, encoding: "utf8" }, (error, output) => {
+			if (error || !sessionActive || connection !== activeConnection || sequence !== branchCheckSequence) return;
+			const branch = output.trim();
+			if (branch === lastBranch) return;
+			const previous = JSON.parse(lastRuntime) as Record<string, unknown>;
+			if (previous.cwd !== ctx.cwd) return;
+			lastBranch = branch;
+			const encoded = JSON.stringify({ ...previous, branch });
+			lastRuntime = encoded;
+			execFile(cliPath, ["runtime", "--workstream", connection.enrollment.workstreamCode, "--agent", connection.enrollment.agentId, "--json", encoded], { timeout: 10_000 }, () => {});
+		});
 	};
 	const reportState = (state: "working" | "idle") => {
 		const enrollment = activeConnection?.enrollment;
@@ -170,6 +195,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		lastState = undefined;
 		lastStateAt = 0;
 		lastRuntime = "";
+		branchCheckSequence++;
 		connection?.tail.close();
 		return connection?.enrollment;
 	};
@@ -359,9 +385,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 
 	pi.on("model_select", async (event, ctx) => { reportRuntime(ctx, false, { provider: event.model.provider, model: event.model.id }); });
 	pi.on("thinking_level_select", async (event, ctx) => { reportRuntime(ctx, false, { effort: event.level }); });
-	pi.on("turn_start", async (_event, ctx) => {
-		if (activeConnection && gitInfo(ctx.cwd).branch !== lastBranch) reportRuntime(ctx);
-	});
+	pi.on("turn_start", async (_event, ctx) => { checkBranch(ctx); });
 	pi.on("agent_start", async () => { reportState("working"); });
 	pi.on("agent_end", async () => { reportState("idle"); });
 
