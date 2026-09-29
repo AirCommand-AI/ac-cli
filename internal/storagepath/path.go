@@ -34,6 +34,20 @@ func AgentDirectory(home string, agentID string) string {
 	return filepath.Join(AgentsDirectory(home), FilenameComponent(agentID))
 }
 
+func DaemonDirectory(home string) string { return filepath.Join(Root(home), "daemon") }
+func DaemonSocket(home string) string    { return filepath.Join(DaemonDirectory(home), "daemon.sock") }
+func DaemonLog(home string) string       { return filepath.Join(DaemonDirectory(home), "daemon.log") }
+func DaemonPID(home string) string       { return filepath.Join(DaemonDirectory(home), "daemon.pid") }
+func AgentDaemonState(home, agentID string) string {
+	return filepath.Join(AgentDirectory(home, agentID), "daemon.json")
+}
+func AgentBrief(home, agentID string) string {
+	return filepath.Join(AgentDirectory(home, agentID), "brief.md")
+}
+func AgentDelivered(home, agentID string) string {
+	return filepath.Join(AgentDirectory(home, agentID), "delivered.json")
+}
+
 // FilenameComponent maps an identifier to one non-traversing, collision-free
 // filename component. Ordinary identifiers remain readable; reserved or unsafe
 // values use unpadded URL-safe base64.

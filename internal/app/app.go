@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
@@ -62,7 +63,31 @@ type App struct {
 	// Organization is sent on requests made with the device credential, which
 	// carries no organization of its own. Set per command from --org; empty for
 	// agent credentials, which are already bound to one workstream.
-	Organization string
+	Organization   string
+	DaemonCommands DaemonCommands
+	AgentCommands  AgentCommands
+}
+
+// Command implementations are installed by the daemon and agent packages.
+// Keeping the stubs separate lets those packages land independently.
+type DaemonCommands interface {
+	RunDaemon(arguments []string) error
+}
+type AgentCommands interface {
+	RunAgent(arguments []string) error
+}
+
+func (a *App) daemonCommand(arguments []string) error {
+	if a.DaemonCommands == nil {
+		return &publicError{message: "Daemon commands are not implemented."}
+	}
+	return a.DaemonCommands.RunDaemon(arguments)
+}
+func (a *App) agentCommand(arguments []string) error {
+	if a.AgentCommands == nil {
+		return &publicError{message: "Agent commands are not implemented."}
+	}
+	return a.AgentCommands.RunAgent(arguments)
 }
 
 type publicError struct {
@@ -253,19 +278,7 @@ type exchangeResponse struct {
 	ConsumedAt     string `json:"consumedAt"`
 }
 
-type messageNotification struct {
-	Type         string `json:"type"`
-	MessageID    string `json:"messageId"`
-	SenderID     string `json:"senderId"`
-	SenderNature string `json:"senderNature"`
-	Priority     string `json:"priority,omitempty"`
-	At           string `json:"at"`
-	// Kind and TaskID are set for messages the service sends about a task:
-	// assigned to this agent, or taken away from it. They say what the message
-	// is about, not what to do; the agent still reads the message and the task.
-	Kind   string `json:"kind,omitempty"`
-	TaskID string `json:"taskId,omitempty"`
-}
+type messageNotification = agentapi.Notification
 
 // Kinds of task message the listener words specially. Any other kind is shown
 // as an ordinary message, so a kind added later still wakes the agent.
@@ -275,28 +288,9 @@ const (
 	notificationKindTaskCancelled  = "task.cancelled"
 )
 
-type spooledMessageNotification struct {
-	Type         string `json:"type"`
-	MessageID    string `json:"messageId"`
-	SenderID     string `json:"senderId"`
-	SenderNature string `json:"senderNature"`
-	Priority     string `json:"priority,omitempty"`
-	At           string `json:"at"`
-	Kind         string `json:"kind,omitempty"`
-	TaskID       string `json:"taskId,omitempty"`
-	Summary      string `json:"summary"`
-}
-
-type notificationFeedResponse struct {
-	Notifications    []messageNotification `json:"notifications"`
-	Cursor           *string               `json:"cursor"`
-	PollAfterSeconds *int                  `json:"pollAfterSeconds"`
-}
-
-type senderIdentity struct {
-	ID     string
-	Nature string
-}
+type spooledMessageNotification = agentapi.SpooledNotification
+type notificationFeedResponse = agentapi.Feed
+type senderIdentity = agentapi.SenderIdentity
 
 type httpResult struct {
 	status int
@@ -316,6 +310,10 @@ func (a *App) Run(arguments []string) int {
 		switch arguments[0] {
 		case "init":
 			err = a.initMachine(arguments[1:])
+		case "daemon":
+			err = a.daemonCommand(arguments[1:])
+		case "agent":
+			err = a.agentCommand(arguments[1:])
 		case "workstreams":
 			err = a.workstreams(arguments[1:])
 		case "connect":
@@ -406,6 +404,10 @@ func requestedHelp(arguments []string) (string, bool) {
 	switch arguments[0] {
 	case "init":
 		return "Usage: aircom init", true
+	case "daemon":
+		return "Usage: aircom daemon start|stop|status", true
+	case "agent":
+		return "Usage: aircom agent create|remove|start|stop|list|attach", true
 	case "connect":
 		return connectUsage, true
 	case "agents":
@@ -1152,7 +1154,7 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 		defer func() { _ = lock.Release() }()
 	}
 
-	cursor, hasStoredCursor, err := a.ListenStore.LoadCursor(credential.AgentID, credential.WorkstreamKey())
+	cursor, hasStoredCursor, err := agentapi.LoadCursor(a.ListenStore, credential.AgentID, credential.WorkstreamKey())
 	if err != nil {
 		return storageError(err, "Unable to read the listener cursor state.")
 	}
@@ -1162,11 +1164,7 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 	senderNamesLoaded := false
 	var senderNames map[senderIdentity]string
 	for poll := 1; ; poll++ {
-		path := "/agent/v1/workstreams/" + workstreamCode + "/notifications"
-		if hasStoredCursor {
-			query := url.Values{"since": []string{cursor}}
-			path += "?" + query.Encode()
-		}
+		path := agentapi.NotificationsPath(workstreamCode, cursor, hasStoredCursor)
 		response, requestErr := a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
 		if response.status == http.StatusUnauthorized {
 			// A dashboard Stop may race a successful rejoin which atomically
@@ -1241,8 +1239,8 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 				senderNamesLoaded = true
 			}
 			for _, notification := range feed.Notifications {
-				summary := composeNotificationSummary(notification, workstreamCode, senderNames)
-				spooled := spooledNotification(notification, summary)
+				summary := agentapi.ComposeSummary(notification, workstreamCode, senderNames)
+				spooled := agentapi.Spool(notification, summary)
 				if err := a.ListenStore.AppendNotification(credential.AgentID, spooled); err != nil {
 					return storageError(err, "Unable to append the AirCommand notification spool.")
 				}
@@ -1254,7 +1252,7 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 
 		nextCursor := *feed.Cursor
 		if !hasStoredCursor || nextCursor != cursor {
-			if err := a.ListenStore.SaveCursor(credential.AgentID, credential.WorkstreamKey(), nextCursor); err != nil {
+			if err := agentapi.SaveCursor(a.ListenStore, credential.AgentID, credential.WorkstreamKey(), nextCursor); err != nil {
 				return storageError(err, "Unable to persist the listener cursor.")
 			}
 			cursor = nextCursor
@@ -1268,35 +1266,7 @@ func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lo
 }
 
 func decodeNotificationFeedResponse(body []byte) (notificationFeedResponse, error) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	var response notificationFeedResponse
-	if err := decoder.Decode(&response); err != nil {
-		return notificationFeedResponse{}, err
-	}
-	if err := ensureJSONEnd(decoder); err != nil {
-		return notificationFeedResponse{}, err
-	}
-	if response.Notifications == nil || response.Cursor == nil || response.PollAfterSeconds == nil {
-		return notificationFeedResponse{}, errors.New("notification response is missing a required field")
-	}
-	for _, notification := range response.Notifications {
-		if notification.Type != "message.received" ||
-			!validMessageID(notification.MessageID) ||
-			strings.TrimSpace(notification.SenderID) == "" ||
-			strings.TrimSpace(notification.At) == "" {
-			return notificationFeedResponse{}, errors.New("notification response has an incomplete notification")
-		}
-		if notification.SenderNature != "agent" && notification.SenderNature != "human" {
-			return notificationFeedResponse{}, errors.New("notification response has an invalid sender nature")
-		}
-		if !validNotificationPriority(notification.Priority) {
-			return notificationFeedResponse{}, errors.New("notification response has an invalid priority")
-		}
-		if notification.Kind != "" && !validNotificationTaskID(notification.TaskID) {
-			return notificationFeedResponse{}, errors.New("notification response has a task message without a valid task ID")
-		}
-	}
-	return response, nil
+	return agentapi.DecodeFeed(body)
 }
 
 func validNotificationPriority(priority string) bool {
@@ -1332,80 +1302,27 @@ func (a *App) loadSenderNames(workstreamCode string, credential credentials.Cred
 		return nil
 	}
 
-	names := make(map[senderIdentity]string)
-	ambiguous := make(map[senderIdentity]bool)
-	cacheName := func(identity senderIdentity, name string) {
-		name = strings.TrimSpace(name)
-		if identity.ID == "" || name == "" || ambiguous[identity] {
-			return
-		}
-		if existing, found := names[identity]; found && existing != name {
-			delete(names, identity)
-			ambiguous[identity] = true
-			return
-		}
-		names[identity] = name
-	}
+	var senders []agentapi.Sender
 	for _, collaborator := range roster.Collaborators {
-		cacheName(senderIdentity{ID: collaborator.AccountID, Nature: "human"}, collaborator.Name)
+		senders = append(senders, agentapi.Sender{ID: collaborator.AccountID, Nature: "human", Name: collaborator.Name})
 		for _, agent := range collaborator.Agents {
-			cacheName(senderIdentity{ID: agent.AgentID, Nature: "agent"}, agent.Name)
+			senders = append(senders, agentapi.Sender{ID: agent.AgentID, Nature: "agent", Name: agent.Name})
 		}
 	}
-	return names
+	return agentapi.LoadSenderNames(senders)
 }
 
 func composeNotificationSummary(notification messageNotification, workstreamCode string, senderNames map[senderIdentity]string) string {
-	sender := notification.SenderID
-	if name := senderNames[senderIdentity{ID: notification.SenderID, Nature: notification.SenderNature}]; name != "" {
-		sender = name
-	}
-	urgency := ""
-	if urgentNotification(notification) {
-		urgency = "URGENT "
-	}
-	switch notification.Kind {
-	case notificationKindTaskAssigned:
-		return fmt.Sprintf("%sTask %s assigned to you by %s (%s) in workstream %s: %s; run aircom inbox.",
-			urgency, notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
-	case notificationKindTaskUnassigned:
-		return fmt.Sprintf("%sTask %s reassigned away from you by %s (%s) in workstream %s: %s; run aircom inbox.",
-			urgency, notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
-	case notificationKindTaskCancelled:
-		return fmt.Sprintf("%sTask %s cancelled by %s (%s) in workstream %s: %s; run aircom inbox.",
-			urgency, notification.TaskID, singleLine(sender), notification.SenderNature, workstreamCode, notification.MessageID)
-	}
-	label := "New message"
-	if urgentNotification(notification) {
-		label = "URGENT message"
-	}
-	return fmt.Sprintf(
-		"%s from %s (%s) in workstream %s: %s; run aircom inbox.",
-		label,
-		singleLine(sender),
-		notification.SenderNature,
-		workstreamCode,
-		notification.MessageID,
-	)
+	return agentapi.ComposeSummary(notification, workstreamCode, senderNames)
 }
 
 func spooledNotification(notification messageNotification, summary string) spooledMessageNotification {
-	return spooledMessageNotification{
-		Type:         notification.Type,
-		MessageID:    notification.MessageID,
-		SenderID:     notification.SenderID,
-		SenderNature: notification.SenderNature,
-		Priority:     notification.Priority,
-		At:           notification.At,
-		Kind:         notification.Kind,
-		TaskID:       notification.TaskID,
-		Summary:      summary,
-	}
+	return agentapi.Spool(notification, summary)
 }
 
 func (a *App) notificationTerminalError(status int, body []byte, credential credentials.Credential) error {
-	switch status {
-	case http.StatusUnauthorized:
+	switch {
+	case status == http.StatusUnauthorized && agentapi.TerminalStatus(status, serviceError(body).Code):
 		message := fmt.Sprintf("You were stopped or removed from workstream %s.", credential.WorkstreamCode)
 		if revoked := revokedSessionError(status, body, credential); revoked != nil {
 			message = revoked.Error()
@@ -1414,7 +1331,7 @@ func (a *App) notificationTerminalError(status int, body []byte, credential cred
 			return err
 		}
 		return &silentError{}
-	case http.StatusNotFound:
+	case status == http.StatusNotFound:
 		if err := a.writeActionLine(fmt.Sprintf("Workstream %s no longer exists.", credential.WorkstreamCode)); err != nil {
 			return err
 		}
@@ -1424,20 +1341,10 @@ func (a *App) notificationTerminalError(status int, body []byte, credential cred
 	}
 }
 
-func notificationStatusRetryable(status int) bool {
-	return status == http.StatusRequestTimeout || status == http.StatusInternalServerError || status == http.StatusServiceUnavailable
-}
+func notificationStatusRetryable(status int) bool { return agentapi.Retryable(status) }
 
 func notificationFailureReason(status int, body []byte) string {
-	if status == http.StatusServiceUnavailable {
-		switch serviceError(body).Code {
-		case "ServiceUnavailable":
-			return "AirCommand authentication service unavailable (HTTP 503)"
-		case "NotificationFeedUnavailable":
-			return "AirCommand notification feed unavailable (HTTP 503)"
-		}
-	}
-	return fmt.Sprintf("AirCommand notification request failed (HTTP %d)", status)
+	return agentapi.FailureReason(status, serviceError(body).Code)
 }
 
 func notificationStatusError(status int, body []byte) error {
@@ -1461,19 +1368,7 @@ func (a *App) writeActionLine(message string) error {
 	return nil
 }
 
-func pollDelay(seconds *int) time.Duration {
-	if seconds == nil {
-		return 30 * time.Second
-	}
-	if *seconds < 5 {
-		return 5 * time.Second
-	}
-	maximumSeconds := int64((time.Duration(1<<63 - 1)) / time.Second)
-	if int64(*seconds) > maximumSeconds {
-		return time.Duration(1<<63 - 1)
-	}
-	return time.Duration(*seconds) * time.Second
-}
+func pollDelay(seconds *int) time.Duration { return agentapi.PollDelay(seconds) }
 
 // outageAnnounceAfter is how long polls must keep failing before the listener
 // says so. Every line it prints wakes the agent and costs it a turn, so a few
@@ -2259,17 +2154,7 @@ func writeSafeResponse(output io.Writer, body []byte, protected ...string) error
 }
 
 func redact(value string, protected ...string) string {
-	filtered := make([]string, 0, len(protected))
-	for _, secret := range protected {
-		if secret != "" {
-			filtered = append(filtered, secret)
-		}
-	}
-	sort.Slice(filtered, func(i, j int) bool { return len(filtered[i]) > len(filtered[j]) })
-	for _, secret := range filtered {
-		value = strings.ReplaceAll(value, secret, "[REDACTED]")
-	}
-	return value
+	return agentapi.Redact(value, protected...)
 }
 
 func safeMetadata(value string, protected ...string) string {
