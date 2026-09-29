@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+func TestPiAdapterReportsTurnUsage(t *testing.T) {
+	repositoryRoot := adapterRepositoryRoot(t)
+	extension := readAdapterFile(t, filepath.Join(repositoryRoot, "adapters", "pi", "index.ts"))
+	for _, part := range []string{`pi.on("turn_end"`, `event.message.usage?.input`, `event.message.usage?.output`, `"usage"`, `messageEntryId`} {
+		if !strings.Contains(extension, part) {
+			t.Errorf("missing pi token reporting: %s", part)
+		}
+	}
+}
+
 func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	t.Parallel()
 

@@ -130,18 +130,18 @@ func TestTaskCreatePayloadDefaultsAndOptionalFields(t *testing.T) {
 	}{
 		{
 			name:      "defaults status and assignee",
-			arguments: []string{"--title", "Write tests"},
+			arguments: []string{"--title", "Write tests", "--type", "test"},
 			wantRequest: taskCreateRequest{
-				Title: "Write tests", Status: "todo", IdempotencyID: repeatedHex(0x66),
+				Title: "Write tests", Status: "todo", Type: "test", IdempotencyID: repeatedHex(0x66),
 			},
 			createdID: "task-default",
 		},
 		{
 			name:      "sends optional fields and explicit status",
-			arguments: []string{"--title", "Ship feature", "--description", "Review then merge", "--assignee", "Builder", "--status", "in_flight"},
+			arguments: []string{"--title", "Ship feature", "--description", "Review then merge", "--assignee", "Builder", "--status", "in_flight", "--type", "code"},
 			wantRequest: taskCreateRequest{
 				Title: "Ship feature", Description: "Review then merge", Assignee: "Builder",
-				Status: "in_flight", IdempotencyID: repeatedHex(0x66),
+				Status: "in_flight", Type: "code", IdempotencyID: repeatedHex(0x66),
 			},
 			createdID: "task-explicit",
 		},
@@ -230,6 +230,16 @@ func TestTaskCreateRejectsInvalidStatusBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestTaskCreateRequiresFixedTypeBeforeRequest(t *testing.T) {
+	api := &taskAPI{}
+	for _, args := range [][]string{{"task", "create", "--workstream", "694", "--title", "New"}, {"task", "create", "--workstream", "694", "--title", "New", "--type", "Coding"}} {
+		exit, _, stderr := runTaskCommand(t, api, args...)
+		if exit == 0 || !strings.Contains(stderr, "--type") || len(api.requests) != 0 {
+			t.Fatalf("args %v: exit %d, stderr %q, requests %v", args, exit, stderr, api.requests)
+		}
+	}
+}
+
 func TestTaskCreateRetriesWithOneIdempotencyID(t *testing.T) {
 	t.Parallel()
 
@@ -240,7 +250,7 @@ func TestTaskCreateRetriesWithOneIdempotencyID(t *testing.T) {
 
 			credential := testCredential()
 			wantBody, err := json.Marshal(taskCreateRequest{
-				Title: "Retry task", Status: "todo", IdempotencyID: repeatedHex(0x66),
+				Title: "Retry task", Status: "todo", Type: "other", IdempotencyID: repeatedHex(0x66),
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -271,7 +281,7 @@ func TestTaskCreateRetriesWithOneIdempotencyID(t *testing.T) {
 			client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x66))
 			client.RetryAttempts = 2
 			saveTestCredential(t, client, credential)
-			arguments := []string{"task", "create", "--workstream", "694", "--title", "Retry task"}
+			arguments := []string{"task", "create", "--workstream", "694", "--title", "Retry task", "--type", "other"}
 			if exitCode := client.Run(arguments); exitCode != 0 {
 				t.Fatalf("task create exit code = %d, stderr = %q", exitCode, stderr.String())
 			}

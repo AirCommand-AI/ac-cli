@@ -26,7 +26,7 @@ const (
 	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
 	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] [--title <text>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--position <n> | --before <id|number> | --after <id|number>]"
 	taskIDFlagUsage  = "Usage: aircom task --id <id|number> --workstream <code> [same flags as above]"
-	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]"
+	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] --type <code|review|test|design|docs|investigation|infra|release|deploy|ops|other> [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]"
 	taskUsage        = taskByIDUsage + "\n" + taskIDFlagUsage + "\n" + taskCreateUsage
 	tasksUsage       = "Usage: aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>] [--order work]"
 )
@@ -396,7 +396,13 @@ func (a *App) taskByID(arguments []string) error {
 	flags.StringVar(&newTitle, "title", "", "new task title")
 	fields.register(flags)
 	var position int
-	var before, after string
+	var before, after, commitsRange, repoPath, testsValue, suite string
+	var commits stringList
+	flags.Var(&commits, "commit", "commit SHA from local git (repeatable)")
+	flags.StringVar(&commitsRange, "commits", "", "commit range a..b")
+	flags.StringVar(&repoPath, "repo", ".", "local git repository path")
+	flags.StringVar(&testsValue, "tests", "", "test counts passed/failed[/skipped]")
+	flags.StringVar(&suite, "suite", "", "test suite name")
 	flags.IntVar(&position, "position", 0, "task position within milestone")
 	flags.StringVar(&before, "before", "", "place before task in same milestone")
 	flags.StringVar(&after, "after", "", "place after task in same milestone")
@@ -419,12 +425,19 @@ func (a *App) taskByID(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	if set["type"] && !validTaskType(fields.taskType) {
+		return &publicError{message: "--type must be code, review, test, design, docs, investigation, infra, release, deploy, ops or other."}
+	}
 	if set["title"] {
 		if newTitle, err = validateTaskTitle(newTitle); err != nil {
 			return err
 		}
 	}
 
+	evidence := set["commit"] || set["commits"] || set["tests"]
+	if (set["commit"] && set["commits"]) || (set["repo"] && !set["commit"] && !set["commits"]) || (set["suite"] && !set["tests"]) || (evidence && (status != "" || set["assignee"] || taskFieldsSet(set) || set["summary"] || set["comment"] || set["comment-summary"] || set["detail"] || set["comment-detail"] || set["position"] || set["before"] || set["after"] || set["tests"] && (set["commit"] || set["commits"]))) {
+		return &publicError{message: "Commit and test evidence must be separate from other task changes."}
+	}
 	ordering := set["position"] || set["before"] || set["after"]
 	if ordering && (set["position"] && (set["before"] || set["after"]) || set["before"] && set["after"] || (set["position"] && position <= 0) || (set["before"] && before == "") || (set["after"] && after == "") || status != "" || set["assignee"] || taskFieldsSet(set) || set["summary"] || set["detail"] || set["comment"]) {
 		return &publicError{message: "Position, before or after must be specified alone; position must be positive."}
@@ -435,12 +448,16 @@ func (a *App) taskByID(arguments []string) error {
 	}
 	editSet := taskFieldsSet(set)
 	commentSet := set["comment"] || set["summary"] || set["detail"] || set["comment-summary"] || set["comment-detail"]
-	if commentSet || status != "" || set["assignee"] || editSet || ordering {
+	if commentSet || status != "" || set["assignee"] || editSet || ordering || evidence {
 		if taskID, err = a.resolveTaskID(workstreamCode, taskID, credential); err != nil {
 			return err
 		}
 	}
 	switch {
+	case set["tests"]:
+		return a.reportTaskTests(workstreamCode, taskID, testsValue, suite, credential)
+	case set["commit"] || set["commits"]:
+		return a.addTaskCommits(workstreamCode, taskID, commits.list(), commitsRange, repoPath, credential)
 	case ordering:
 		var pos *int
 		if set["position"] {
@@ -633,6 +650,9 @@ func (a *App) createTask(arguments []string) error {
 	}
 	if set["number"] && (number < 1 || number > maxTaskNumber) {
 		return &publicError{message: fmt.Sprintf("--number must be between 1 and %d.", maxTaskNumber)}
+	}
+	if !set["type"] || !validTaskType(fields.taskType) {
+		return &publicError{message: "task create requires --type: code, review, test, design, docs, investigation, infra, release, deploy, ops or other."}
 	}
 
 	credential, err := a.credentialFor(workstreamCode, agentID)

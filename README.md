@@ -22,8 +22,14 @@ aircom read --workstream <code> [--agent <agentId|name>]
 aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>]
 aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]...
 aircom task --id <id|number> --workstream <code> [same flags]
-aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]
+aircom task create --workstream <code> --title <text> --type <code|review|test|design|docs|investigation|infra|release|deploy|ops|other> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]
 aircom tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] [--milestone <text>] [--type <text>] [--order work]
+aircom review start <task> --workstream <code> --of <task> [--commits <a>..<b>]
+aircom review finding <task> --workstream <code> --severity <critical|major|minor|nit> --category <correctness|security|performance|tests|style|docs|design|other> --summary <text> [--file <path>] [--line <n>]
+aircom review finish <task> --workstream <code> --outcome <approved|sent_back> [--no-findings]
+aircom review finding-status <finding-id> --workstream <code> --status <fixed|wontfix|invalid>
+aircom task <task> --workstream <code> --commit <sha> [--repo <path>] | --commits <a>..<b>
+aircom task <task> --workstream <code> --tests <passed>/<failed>[/<skipped>] [--suite <name>]
 aircom milestones --workstream <code> [--agent <agentId|name>]
 aircom milestone "<name>" --workstream <code> [--position <n> | --before "<name>" | --after "<name>"] [--target YYYY-MM-DD] [--description <text>] [--rename <new-name>]
 aircom task <id|number> --workstream <code> [--position <n> | --before <id|number> | --after <id|number>]

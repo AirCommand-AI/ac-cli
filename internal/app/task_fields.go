@@ -46,6 +46,10 @@ func (l *stringList) list() []string {
 	return l.values
 }
 
+var fixedTaskTypes = map[string]bool{"code": true, "review": true, "test": true, "design": true, "docs": true, "investigation": true, "infra": true, "release": true, "deploy": true, "ops": true, "other": true}
+
+func validTaskType(value string) bool { return fixedTaskTypes[value] }
+
 // taskFieldFlags are the structured fields that create and edit share.
 type taskFieldFlags struct {
 	milestone  string

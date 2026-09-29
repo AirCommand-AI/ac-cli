@@ -144,8 +144,8 @@ func TestTaskChangesAddressedByNumber(t *testing.T) {
 			map[string]any{"status": "cancelled", "cancelReason": "superseded", "replacedBy": "#1"}},
 		{"structured edit", []string{"--milestone", "Phase 3", "--acceptance", "a", "--acceptance", "b", "--link", "https://x.example/1", "--depends-on", ""}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
 			map[string]any{"milestone": "Phase 3", "acceptance": []any{"a", "b"}, "links": []any{"https://x.example/1"}, "dependsOn": []any{}}},
-		{"clearing a label", []string{"--type", ""}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
-			map[string]any{"type": ""}},
+		{"reclassifying type", []string{"--type", "other"}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
+			map[string]any{"type": "other"}},
 		{"new title", []string{"--title", "  API v2  "}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
 			map[string]any{"title": "API v2"}},
 		{"new title with fields", []string{"--title", "API v2", "--milestone", "Phase 3"}, strings.Replace(taskReplyFive, "%s", "in_flight", 1),
@@ -244,7 +244,7 @@ func TestTaskCreateSendsStructuredFields(t *testing.T) {
 	t.Run("every field, no warnings", func(t *testing.T) {
 		api := &taskAPI{status: http.StatusCreated, reply: strings.Replace(created, "%s", `,"acceptance":["a"],"validation":"v"`, 1)}
 		exitCode, stdout, stderr := runTaskCommand(t, api, "task", "create", "--workstream", "694", "--title", "New", "--number", "8",
-			"--milestone", "Phase 2", "--type", "Coding", "--acceptance", "a", "--validation", "v", "--depends-on", "1", "--depends-on", "#5", "--link", "https://x.example/1")
+			"--milestone", "Phase 2", "--type", "code", "--acceptance", "a", "--validation", "v", "--depends-on", "1", "--depends-on", "#5", "--link", "https://x.example/1")
 		if exitCode != 0 {
 			t.Fatalf("exit %d: %s", exitCode, stderr)
 		}
@@ -253,7 +253,7 @@ func TestTaskCreateSendsStructuredFields(t *testing.T) {
 		}
 		body := api.bodies[0]
 		delete(body, "idempotencyId")
-		want := map[string]any{"title": "New", "description": "", "assignee": "", "status": "todo", "number": float64(8), "milestone": "Phase 2", "type": "Coding",
+		want := map[string]any{"title": "New", "description": "", "assignee": "", "status": "todo", "number": float64(8), "milestone": "Phase 2", "type": "code",
 			"acceptance": []any{"a"}, "validation": "v", "dependsOn": []any{"1", "#5"}, "links": []any{"https://x.example/1"}}
 		if mustJSON(t, body) != mustJSON(t, want) {
 			t.Fatalf("create body = %s, want %s", mustJSON(t, body), mustJSON(t, want))
@@ -262,7 +262,7 @@ func TestTaskCreateSendsStructuredFields(t *testing.T) {
 
 	t.Run("missing acceptance and validation warn", func(t *testing.T) {
 		api := &taskAPI{status: http.StatusCreated, reply: strings.Replace(created, "%s", "", 1)}
-		exitCode, stdout, stderr := runTaskCommand(t, api, "task", "create", "--workstream", "694", "--title", "New")
+		exitCode, stdout, stderr := runTaskCommand(t, api, "task", "create", "--workstream", "694", "--title", "New", "--type", "other")
 		if exitCode != 0 {
 			t.Fatalf("exit %d: %s", exitCode, stderr)
 		}
@@ -288,7 +288,7 @@ func TestTaskCreateSendsStructuredFields(t *testing.T) {
 
 	t.Run("a taken number", func(t *testing.T) {
 		api := &taskAPI{status: http.StatusConflict, reply: `{"message":"task number already in use","code":"TaskNumberTaken"}`}
-		exitCode, _, stderr := runTaskCommand(t, api, "task", "create", "--workstream", "694", "--title", "New", "--number", "5")
+		exitCode, _, stderr := runTaskCommand(t, api, "task", "create", "--workstream", "694", "--title", "New", "--number", "5", "--type", "other")
 		if exitCode == 0 || !strings.Contains(stderr, "That task number is already in use in this workstream.") {
 			t.Fatalf("exit %d, stderr %q", exitCode, stderr)
 		}

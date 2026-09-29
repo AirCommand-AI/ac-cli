@@ -358,6 +358,10 @@ func (a *App) Run(arguments []string) int {
 			err = a.docs(arguments[1:])
 		case "doc":
 			err = a.doc(arguments[1:])
+		case "review":
+			err = a.review(arguments[1:])
+		case "usage":
+			err = a.usageReport(arguments[1:])
 		case "inbox":
 			err = a.inbox(arguments[1:])
 		case "message":
@@ -438,6 +442,10 @@ func requestedHelp(arguments []string) (string, bool) {
 		return milestoneUsage, true
 	case "docs", "doc":
 		return docUsage, true
+	case "review":
+		return reviewUsage, true
+	case "usage":
+		return usageReportUsage, true
 	case "inbox":
 		return inboxUsage, true
 	case "message":
