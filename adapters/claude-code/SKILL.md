@@ -11,9 +11,9 @@ Invocation arguments: `$ARGUMENTS`
 ## Registering this machine
 
 A machine is registered once, by a human, and every agent on it shares that registration.
-**You cannot do this yourself.** `aircom init` opens a browser, shows the operator a code,
-and then waits for that code to be typed into the terminal it is running in — so an agent
-running it non-interactively simply hangs.
+**You cannot do this yourself.** aircom init asks for a code shown in the dashboard and
+waits for it to be typed into the terminal it is running in. It is idempotent and starts the
+daemon; an agent running it non-interactively simply hangs.
 
 When a command reports that this machine is not registered, tell the operator to run:
 
@@ -28,7 +28,7 @@ and to follow the prompt in their own terminal. Do not run it, and do not offer 
 A machine being registered is not the same as you existing on it. Register yourself once:
 
 ```text
-~/.local/bin/aircom connect --name <agentName>
+~/.local/bin/aircom agent create <agentName>
 ```
 
 Choose a name your operator will recognise, and keep using it. This joins nothing: you now
@@ -39,7 +39,7 @@ to one name cannot be told apart by the human who has to say which one to move.
 See what is already here:
 
 ```text
-~/.local/bin/aircom agents
+~/.local/bin/aircom agent list
 ```
 
 ## See what is available
@@ -86,17 +86,19 @@ Monitor({
 ```
 
 To remove yourself from this machine entirely — leaving any workstream first and freeing
-your name — run `~/.local/bin/aircom disconnect --agent <agentName>`. Only do this when the
+your name — run `~/.local/bin/aircom agent remove <agentName>`. Only do this when the
 operator asks; an agent that disconnects is gone, not paused.
 
 Joining where you already are is not an error — it hands your identity back, which is how
-you recover after a restart. Joining while you are somewhere else is refused, and says to
+you recover after a restart. If the daemon started your pi session, it has already joined and
+is polling notifications: do not run join --listen or listen, which conflicts with its lock.
+Use aircom agent list or aircom daemon status to check before starting a manual listener. Joining while you are somewhere else is refused, and says to
 leave first. Do not work around that by connecting as a second agent: that strands the first
 with an inbox nobody reads.
 
-**Joining and listening are one step.** Do not run `join` on its own and then start a
-listener separately: an agent that has joined but is not listening is in the workstream and
-can never be woken by a message. Use the `Monitor` form below, which does both.
+**For manually started Claude Code agents only**, join and listen in one step with the
+Monitor form below. Do not start a listener for a daemon-run agent; the daemon already
+owns its lock and writes the notification spool.
 
 ## Resolve the local enrollment
 
@@ -116,9 +118,9 @@ Before starting collaboration, run:
 
 Use the overridden client path when `--ac` was provided. A successful read confirms that this machine has a usable credential for that agent and workstream and returns current workstream detail. Surface stopped, removed, missing, or ambiguous agent errors rather than working around them. If a command reports that this machine is not registered, ask the operator to run `init` as described above; if it reports that this agent is not in the workstream, join it.
 
-## Join and listen in one step
+## Join and listen in one step (manual agents only)
 
-Claude Code must own the listener process to see its output, so never start one in the
+Never run this for an agent started by aircom agent start. Claude Code must own the listener process to see its output, so never start one in the
 background yourself. Call the `Monitor` tool with exactly these inputs, replacing the
 placeholders:
 
