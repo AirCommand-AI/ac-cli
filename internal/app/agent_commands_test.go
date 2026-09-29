@@ -14,7 +14,11 @@ import (
 )
 
 func TestAgentCommandsUseLocalDaemonSocket(t *testing.T) {
-	home := t.TempDir()
+	home, err := os.MkdirTemp("/tmp", "aca-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	path := storagepath.DaemonSocket(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
@@ -72,6 +76,31 @@ func TestRemovedLegacyTopLevelCommands(t *testing.T) {
 	for _, command := range []string{"connect", "agents", "disconnect"} {
 		if code := app.Run([]string{command}); code == 0 {
 			t.Fatalf("accepted removed command %q", command)
+		}
+	}
+}
+
+func TestAgentRemoveWithoutRunningDaemonCleansState(t *testing.T) {
+	_, client, stdout, stderr := leaveFixture(t)
+	home := client.Store.Home()
+	paths := []string{storagepath.AgentDaemonState(home, leadID), storagepath.AgentBrief(home, leadID), storagepath.AgentDelivered(home, leadID)}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, out, errText := run(t, client, stdout, stderr, "agent", "remove", "Lead"); code != 0 {
+		t.Fatalf("remove failed: %q %q", out, errText)
+	}
+	if credentialExists(t, client, leadID) {
+		t.Fatal("agent credential remains")
+	}
+	if !credentialExists(t, client, engineerID) {
+		t.Fatal("removed other agent credential")
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("state file %s remains: %v", path, err)
 		}
 	}
 }

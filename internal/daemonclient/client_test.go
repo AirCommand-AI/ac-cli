@@ -14,7 +14,12 @@ import (
 
 func fakeDaemon(t *testing.T, respond func(map[string]any) any) Client {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "daemon.sock")
+	home, err := os.MkdirTemp("/tmp", "acd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	path := filepath.Join(home, "daemon.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

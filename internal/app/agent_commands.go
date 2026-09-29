@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -32,10 +34,30 @@ func (a *App) runAgent(args []string) error {
 		if len(args) != 2 || !daemonclient.ValidAgentName(args[1]) {
 			return &publicError{message: agentUsage}
 		}
-		if err := client.Remove(ctx, args[1]); err != nil {
-			return &publicError{message: fmt.Sprintf("Unable to stop agent: %v", err)}
+		agent, err := a.resolveAgent(args[1])
+		if err != nil {
+			return err
 		}
-		return a.disconnect([]string{"--agent", args[1]})
+		// A stopped daemon has no socket, but its saved agent state must
+		// still be forgotten before a later daemon restart.
+		offline := false
+		if err := client.Remove(ctx, args[1]); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return &publicError{message: fmt.Sprintf("Unable to stop agent: %v", err)}
+			}
+			offline = true
+		}
+		if err := a.disconnect([]string{"--agent", args[1]}); err != nil {
+			return err
+		}
+		if offline {
+			for _, path := range []string{storagepath.AgentDaemonState(a.Store.Home(), agent.AgentID), storagepath.AgentBrief(a.Store.Home(), agent.AgentID), storagepath.AgentDelivered(a.Store.Home(), agent.AgentID)} {
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return &publicError{message: fmt.Sprintf("Agent removed, but unable to delete %s: %v", path, err)}
+				}
+			}
+		}
+		return nil
 	case "start":
 		return a.startAgent(ctx, client, args[1:])
 	case "stop":
