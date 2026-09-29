@@ -278,6 +278,36 @@ func TestPollingDedupePersistenceAndDashboardStop(t *testing.T) {
 	}
 	_ = other.Shutdown(ctx, false)
 }
+func TestCommandTmuxDeadPane(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	tm := CommandTmux{Path: "/usr/bin/tmux"}
+	name := "supervisor_test_" + strings.ReplaceAll(time.Now().Format("150405.000000000"), ".", "")
+	d := AgentDefinition{Name: name, WorkFolder: t.TempDir()}
+	defer tm.Kill(ctx, name)
+	if err := tm.Start(ctx, d, []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		p, err := tm.Inspect(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Exists && p.Dead {
+			if p.ExitCode != 0 {
+				t.Fatalf("exit code %d", p.ExitCode)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dead pane not retained")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 func TestInvalidNameAndLockedAgent(t *testing.T) {
 	ctx := context.Background()
 	m, _, _, _ := setup(t)

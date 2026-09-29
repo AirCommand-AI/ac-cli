@@ -18,7 +18,7 @@ func (t CommandTmux) Inspect(ctx context.Context, name string) (Pane, error) {
 	if !validName(name) {
 		return Pane{}, fmt.Errorf("invalid agent name")
 	}
-	out, err := t.command(ctx, "list-panes", "-t", "="+name+":0", "-F", "#{pane_dead} #{pane_dead_status} #{pane_pid}").CombinedOutput()
+	out, err := t.command(ctx, "list-panes", "-t", name+":0", "-F", "#{pane_dead} #{pane_dead_status} #{pane_pid}").CombinedOutput()
 	if err != nil {
 		// No tmux server or session is not an error; other failures are.
 		text := string(out)
@@ -50,12 +50,12 @@ func (t CommandTmux) Start(ctx context.Context, def AgentDefinition, args []stri
 	if out, err := t.command(ctx, "new-session", "-d", "-s", def.Name, "-n", "pi", "-c", def.WorkFolder).CombinedOutput(); err != nil {
 		return fmt.Errorf("start tmux: %w: %s", err, out)
 	}
-	if out, err := t.command(ctx, "set-option", "-t", "="+def.Name, "remain-on-exit", "on").CombinedOutput(); err != nil {
+	if out, err := t.command(ctx, "set-option", "-t", def.Name+":0", "remain-on-exit", "on").CombinedOutput(); err != nil {
 		_ = t.Kill(ctx, def.Name)
 		return fmt.Errorf("set tmux remain-on-exit: %w: %s", err, out)
 	}
 	// tmux respawn-pane takes one shell-command string. Quote every argument.
-	if out, err := t.command(ctx, "respawn-pane", "-k", "-t", "="+def.Name+":0.0", "-c", def.WorkFolder, shellJoin(args)).CombinedOutput(); err != nil {
+	if out, err := t.command(ctx, "respawn-pane", "-k", "-t", def.Name+":0.0", "-c", def.WorkFolder, shellJoin(args)).CombinedOutput(); err != nil {
 		_ = t.Kill(ctx, def.Name)
 		return fmt.Errorf("launch pi: %w: %s", err, out)
 	}
