@@ -324,8 +324,8 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("turn_start", async () => { reportState("working"); });
-	pi.on("turn_end", async () => { reportState("idle"); });
+	pi.on("agent_start", async () => { reportState("working"); });
+	pi.on("agent_end", async () => { reportState("idle"); });
 
 	pi.on("session_shutdown", async () => {
 		sessionActive = false;
