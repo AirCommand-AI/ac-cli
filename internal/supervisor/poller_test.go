@@ -6,11 +6,56 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
+
+func TestSupervisorPollSkipsMalformedNotificationAndAdvancesCursor(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, now := setup(t)
+	d := definition(m.Home)
+	store := credentials.NewStore(m.Home)
+	cred := credentials.Credential{AgentID: d.AgentID, WorkstreamCode: d.Workstream, OrganizationID: "org_1", APIToken: "secret", SocketKey: "socket", SocketAddress: "ac:agm_1"}
+	if err := store.Save(cred); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("since") {
+			_, _ = w.Write([]byte(`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"ac_1","senderNature":"human","at":"now","kind":"approval.decided"},{"type":"message.received","messageId":"fedcba9876543210","senderId":"ac_1","senderNature":"human","at":"now","kind":"task.assigned"},{"type":"message.received","messageId":"abcdef0123456789","senderId":"agm_1","senderNature":"agent","at":"now"}],"cursor":"c2","pollAfterSeconds":5}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"notifications":[],"cursor":"c1","pollAfterSeconds":5}`))
+	}))
+	defer server.Close()
+	m.Poll = &HTTPPoller{BaseURL: server.URL, Client: server.Client(), Store: store}
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(5 * time.Second)
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	spool, err := os.ReadFile(listenstore.NewStore(m.Home).SpoolPath(d.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(spool), "messageId") != 2 || !strings.Contains(string(spool), "0123456789abcdef") || strings.Contains(string(spool), "fedcba9876543210") {
+		t.Fatalf("spool = %s", spool)
+	}
+	cursor, has, err := listenstore.NewStore(m.Home).LoadCursor(d.AgentID, cred.WorkstreamKey())
+	if err != nil || !has || cursor != "c2" {
+		t.Fatalf("cursor = %q, %t, %v", cursor, has, err)
+	}
+}
 
 func TestHTTPPollerSharedAgentAPIAndTerminalClassification(t *testing.T) {
 	home := t.TempDir()

@@ -24,6 +24,31 @@ func TestFetchAndCursor(t *testing.T) {
 		}
 	}
 }
+func TestDecodeFeedSkipsBadItemsAndKeepsCursor(t *testing.T) {
+	body := []byte(`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"ac_1","senderNature":"human","at":"now","kind":"approval.decided"},{"type":"message.received","messageId":"fedcba9876543210","senderId":"ac_1","senderNature":"human","at":"now","kind":"task.assigned"},{"type":42},{"type":"message.received","messageId":"abcdef0123456789","senderId":"agm_1","senderNature":"agent","at":"later","kind":"task.cancelled","taskId":"task_1"}],"cursor":"after-all","pollAfterSeconds":30}`)
+	feed, err := DecodeFeed(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feed.Notifications) != 2 || *feed.Cursor != "after-all" {
+		t.Fatalf("feed = %+v", feed)
+	}
+	if got := ComposeSummary(feed.Notifications[0], "626", nil); !strings.HasPrefix(got, "New message from") {
+		t.Fatal(got)
+	}
+	if feed.Notifications[1].TaskID != "task_1" {
+		t.Fatal(feed.Notifications[1])
+	}
+}
+
+func TestDecodeFeedRequiresEnvelope(t *testing.T) {
+	for _, body := range []string{`{"notifications":[],"pollAfterSeconds":30}`, `{"notifications":{},"cursor":"c1","pollAfterSeconds":30}`} {
+		if _, err := DecodeFeed([]byte(body)); err == nil {
+			t.Fatalf("accepted %s", body)
+		}
+	}
+}
+
 func TestWakeAndTerminal(t *testing.T) {
 	n := Notification{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "agm_lead", SenderNature: "agent", Kind: "task.assigned", TaskID: "abc", Priority: "urgent"}
 	names := LoadSenderNames([]Sender{{ID: "agm_lead", Nature: "agent", Name: "Lead\nName"}})

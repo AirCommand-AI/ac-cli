@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,7 +69,11 @@ func Fetch(request func(method, path, token string, payload []byte) (int, []byte
 
 func DecodeFeed(body []byte) (Feed, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	var response Feed
+	var response struct {
+		Notifications    []json.RawMessage `json:"notifications"`
+		Cursor           *string           `json:"cursor"`
+		PollAfterSeconds *int              `json:"pollAfterSeconds"`
+	}
 	if err := decoder.Decode(&response); err != nil {
 		return Feed{}, err
 	}
@@ -79,21 +84,39 @@ func DecodeFeed(body []byte) (Feed, error) {
 	if response.Notifications == nil || response.Cursor == nil || response.PollAfterSeconds == nil {
 		return Feed{}, errors.New("notification response is missing a required field")
 	}
-	for _, n := range response.Notifications {
-		if n.Type != "message.received" || !validMessageID(n.MessageID) || strings.TrimSpace(n.SenderID) == "" || strings.TrimSpace(n.At) == "" {
-			return Feed{}, errors.New("notification response has an incomplete notification")
+	feed := Feed{Notifications: make([]Notification, 0, len(response.Notifications)), Cursor: response.Cursor, PollAfterSeconds: response.PollAfterSeconds}
+	for i, raw := range response.Notifications {
+		var n Notification
+		if err := json.Unmarshal(raw, &n); err != nil {
+			log.Printf("agentapi: skipping malformed notification at index %d: invalid shape", i)
+			continue
 		}
-		if n.SenderNature != "agent" && n.SenderNature != "human" {
-			return Feed{}, errors.New("notification response has an invalid sender nature")
+		if err := validateNotification(n); err != nil {
+			log.Printf("agentapi: skipping malformed notification at index %d: %v", i, err)
+			continue
 		}
-		if n.Priority != "" && n.Priority != "normal" && n.Priority != "urgent" {
-			return Feed{}, errors.New("notification response has an invalid priority")
-		}
-		if n.Kind != "" && !validTaskID(n.TaskID) {
-			return Feed{}, errors.New("notification response has a task message without a valid task ID")
+		feed.Notifications = append(feed.Notifications, n)
+	}
+	return feed, nil
+}
+
+func validateNotification(n Notification) error {
+	if n.Type != "message.received" || !validMessageID(n.MessageID) || strings.TrimSpace(n.SenderID) == "" || strings.TrimSpace(n.At) == "" {
+		return errors.New("incomplete notification")
+	}
+	if n.SenderNature != "agent" && n.SenderNature != "human" {
+		return errors.New("invalid sender nature")
+	}
+	if n.Priority != "" && n.Priority != "normal" && n.Priority != "urgent" {
+		return errors.New("invalid priority")
+	}
+	switch n.Kind {
+	case "task.assigned", "task.unassigned", "task.cancelled":
+		if !validTaskID(n.TaskID) {
+			return errors.New("task message without a valid task ID")
 		}
 	}
-	return response, nil
+	return nil
 }
 
 func validMessageID(id string) bool {

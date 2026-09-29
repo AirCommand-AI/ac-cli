@@ -16,7 +16,7 @@ import (
 
 const taskNoticeFeed = `{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_lead","senderNature":"agent","at":"2026-09-25T12:00:00.000000000Z"%s}],"cursor":"c1","pollAfterSeconds":30}`
 
-func TestDecodeAcceptsTaskNoticesAndRefusesBadTaskIDs(t *testing.T) {
+func TestDecodeAcceptsTaskNoticesAndSkipsBadTaskIDs(t *testing.T) {
 	cases := []struct {
 		name   string
 		fields string
@@ -33,9 +33,9 @@ func TestDecodeAcceptsTaskNoticesAndRefusesBadTaskIDs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := decodeNotificationFeedResponse([]byte(fmt.Sprintf(taskNoticeFeed, tc.fields)))
-			if (err == nil) != tc.ok {
-				t.Fatalf("err = %v, want ok=%v", err, tc.ok)
+			feed, err := decodeNotificationFeedResponse([]byte(fmt.Sprintf(taskNoticeFeed, tc.fields)))
+			if err != nil || (len(feed.Notifications) == 1) != tc.ok || *feed.Cursor != "c1" {
+				t.Fatalf("feed = %+v, err = %v, want notification=%v", feed, err, tc.ok)
 			}
 		})
 	}

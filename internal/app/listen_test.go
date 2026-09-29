@@ -604,8 +604,13 @@ func TestDecodeNotificationFeedRequiresPointerOnlyContractFields(t *testing.T) {
 		`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"agm_sender","senderNature":"agent","at":""}],"cursor":"cursor","pollAfterSeconds":30}`,
 	}
 	for index, body := range invalid {
-		if _, err := decodeNotificationFeedResponse([]byte(body)); err == nil {
-			t.Errorf("invalid notification response %d was accepted", index)
+		feed, err := decodeNotificationFeedResponse([]byte(body))
+		if index < 4 {
+			if err == nil {
+				t.Errorf("invalid envelope %d was accepted", index)
+			}
+		} else if err != nil || len(feed.Notifications) != 0 || feed.Cursor == nil || *feed.Cursor != "cursor" {
+			t.Errorf("malformed notification %d blocked feed: %+v, %v", index, feed, err)
 		}
 	}
 }
