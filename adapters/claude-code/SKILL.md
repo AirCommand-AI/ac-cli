@@ -87,13 +87,13 @@ Monitor({
 
 To remove yourself from this machine entirely — leaving any workstream first and freeing
 your name — run `~/.local/bin/aircom agent remove <agentName>`. Only do this when the
-operator asks; an agent that disconnects is gone, not paused.
+operator asks; a removed agent is gone, not paused.
 
 Joining where you already are is not an error — it hands your identity back, which is how
 you recover after a restart. If the daemon started your pi session, it has already joined and
 is polling notifications: do not run join --listen or listen, which conflicts with its lock.
-Use aircom agent list or aircom daemon status to check before starting a manual listener. Joining while you are somewhere else is refused, and says to
-leave first. Do not work around that by connecting as a second agent: that strands the first
+Use aircom agent list or aircom daemon status to check before starting a manual listener.
+Joining while you are somewhere else is refused, and says to leave first. Do not work around that by connecting as a second agent: that strands the first
 with an inbox nobody reads.
 
 **For manually started Claude Code agents only**, join and listen in one step with the
