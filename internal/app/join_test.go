@@ -181,8 +181,8 @@ func TestRemovedAgentsAreHiddenAndDoNotCollide(t *testing.T) {
 	if agent.AgentID != "agm_22222222222222222222222222222222" {
 		t.Fatalf("resolved %q; want the live agent", agent.AgentID)
 	}
-	if exitCode := client.Run([]string{"agents"}); exitCode != 0 {
-		t.Fatal("agents failed")
+	if err := client.agents(nil); err != nil {
+		t.Fatalf("list agents: %v", err)
 	}
 	if strings.Contains(stdout.String(), "agm_11111111111111111111111111111111") {
 		t.Fatalf("a removed agent was listed: %q", stdout.String())

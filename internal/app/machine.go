@@ -96,13 +96,24 @@ func (a *App) initMachine(arguments []string) error {
 		return storageError(err, "Credential storage is unavailable.")
 	}
 
-	codeURL := strings.TrimRight(a.BaseURL, "/") + "/device"
-	fmt.Fprintf(a.outputWriter(), "Opening %s to get a code.\n", codeURL)
-	// Failing to open a browser is not fatal: the human can open the page.
-	if err := a.openBrowser(codeURL); err != nil {
-		fmt.Fprintf(a.outputWriter(), "Could not open a browser. Open this page yourself:\n\n    %s\n", codeURL)
+	// A live machine registration must not enter the device flow again.
+	if machine, err := a.Store.LoadMachine(); err == nil {
+		response, requestErr := a.request(http.MethodGet, "/v1/agents", machine.APIToken, nil)
+		if requestErr != nil {
+			return requestErr
+		}
+		if response.status >= 200 && response.status < 300 {
+			name := machine.MachineName
+			if name == "" {
+				name = machine.DeviceID
+			}
+			return a.startRegisteredMachine(name)
+		}
+		if response.status != http.StatusUnauthorized && response.status != http.StatusForbidden {
+			return &publicError{message: "Unable to verify this machine's registration."}
+		}
 	}
-
+	fmt.Fprintln(a.outputWriter(), "Approve this machine at https://dashboard.aircommand.ai and enter the code shown there.")
 	code, err := a.promptForCode()
 	if err != nil {
 		return err
@@ -144,13 +155,20 @@ func (a *App) initMachine(arguments []string) error {
 		return &publicError{message: "Unable to store the machine credential."}
 	}
 
-	fmt.Fprintf(a.outputWriter(), "\nThis machine is registered as %s.\n\nAgents you run here can now connect to AirCommand.\n", redeemed.DeviceID)
+	return a.startRegisteredMachine(registeredName)
+}
+
+func (a *App) startRegisteredMachine(name string) error {
+	if err := a.daemonCommand([]string{"start"}); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.outputWriter(), "Machine registered: %s\nDaemon running\n", name)
 	return nil
 }
 
 // promptForCode reads the code the dashboard is showing.
 func (a *App) promptForCode() (string, error) {
-	fmt.Fprint(a.outputWriter(), "\nEnter the code shown in your browser: ")
+	fmt.Fprint(a.outputWriter(), "Code: ")
 	reader := bufio.NewReader(a.inputReader())
 	line, err := reader.ReadString('\n')
 	if err != nil && strings.TrimSpace(line) == "" {

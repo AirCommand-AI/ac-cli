@@ -253,10 +253,10 @@ func TestRejoinAfterLeaveStoresTheNewWorkstream(t *testing.T) {
 }
 
 func TestDisconnectForgetsTheCredential(t *testing.T) {
-	_, client, stdout, stderr := leaveFixture(t)
+	_, client, _, _ := leaveFixture(t)
 
-	if code, _, errText := run(t, client, stdout, stderr, "disconnect", "--agent", "Lead"); code != 0 {
-		t.Fatalf("disconnect exit code = %d, stderr = %q", code, errText)
+	if err := client.disconnect([]string{"--agent", "Lead"}); err != nil {
+		t.Fatalf("disconnect cleanup: %v", err)
 	}
 	if credentialExists(t, client, leadID) {
 		t.Fatal("a disconnected agent's credential is still stored")
