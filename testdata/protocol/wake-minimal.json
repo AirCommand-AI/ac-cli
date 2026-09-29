@@ -1,0 +1,12 @@
+{
+  "type": "wake",
+  "agentId": "agm_recipient",
+  "notification": {
+    "type": "message.received",
+    "messageId": "msg_124",
+    "senderId": "agm_sender",
+    "senderNature": "agent",
+    "priority": "urgent",
+    "at": "2026-09-29T17:00:01.000000000Z"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "type": "hello",
+  "machineId": "device_123",
+  "generation": 7,
+  "node": "node-1"
+}

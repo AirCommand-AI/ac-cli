@@ -1,0 +1,16 @@
+{
+  "event_id": "event_123",
+  "outbox_sort_key": "2026-09-29T17:00:00.000000000Z#event_123",
+  "machine_id": "device_123",
+  "agent_id": "agm_recipient",
+  "notification": {
+    "type": "message.received",
+    "messageId": "msg_123",
+    "senderId": "agm_sender",
+    "senderNature": "agent",
+    "priority": "normal",
+    "at": "2026-09-29T17:00:00.000000000Z",
+    "kind": "task.assigned",
+    "taskId": "task_123"
+  }
+}
