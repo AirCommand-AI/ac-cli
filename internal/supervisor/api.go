@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"time"
 )
 
@@ -48,16 +49,7 @@ type AgentStatus struct {
 }
 
 // Notification contains pointers only, never the message body.
-type Notification struct {
-	Type         string `json:"type"`
-	MessageID    string `json:"messageId"`
-	SenderID     string `json:"senderId"`
-	SenderNature string `json:"senderNature"`
-	Priority     string `json:"priority,omitempty"`
-	At           string `json:"at"`
-	Kind         string `json:"kind,omitempty"`
-	TaskID       string `json:"taskId,omitempty"`
-}
+type Notification = agentapi.Notification
 type Feed struct {
 	Notifications []Notification
 	Cursor        string
