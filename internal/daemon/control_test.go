@@ -129,7 +129,7 @@ func TestInvalidJSON(t *testing.T) {
 	f := &fakeSupervisor{}
 	a, b := net.Pipe()
 	defer b.Close()
-	go serveConnection(context.Background(), a, f, time.Now(), "log", 1, func() {}, &atomic.Bool{})
+	go serveConnection(context.Background(), a, f, time.Now(), "log", 1, func() {}, &atomic.Bool{}, nil)
 	_, _ = b.Write([]byte("{invalid}\n"))
 	var response Response
 	if err := json.NewDecoder(b).Decode(&response); err != nil || response.Error.Code != "invalid" {

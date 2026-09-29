@@ -32,6 +32,7 @@ type Manager struct {
 	Now           func() time.Time
 	mu            sync.Mutex
 	agents        map[string]*managed
+	booted        chan struct{}
 }
 type managed struct {
 	def                 AgentDefinition
@@ -44,7 +45,7 @@ type managed struct {
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
-	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, agents: make(map[string]*managed)}
+	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, agents: make(map[string]*managed), booted: make(chan struct{})}
 }
 func (m *Manager) now() time.Time {
 	if m.Now != nil {
@@ -296,6 +297,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	close(m.booted)
 	defer m.Shutdown(context.Background(), false)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"time"
@@ -40,6 +41,15 @@ func main() {
 	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
 		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		return supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll), nil
+	}
+	commands.NewSocket = func(ctx context.Context, manager daemon.Supervisor) (*daemon.SocketClient, error) {
+		machine, err := store.LoadMachine()
+		if err != nil {
+			return nil, nil
+		} // offline polling still runs without a machine socket
+		return &daemon.SocketClient{URL: "wss://ac.aircommand.ai/machine", MachineID: machine.DeviceID, Sink: manager.(daemon.WakeSink), SecretLoader: func(ctx context.Context) (string, error) {
+			return daemon.MachineSecret(ctx, store, httpClient, dashboardURL)
+		}}, nil
 	}
 	client := &app.App{
 		BaseURL:        dashboardURL,

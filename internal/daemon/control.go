@@ -44,7 +44,7 @@ type Response struct {
 	Error *APIError `json:"error,omitempty"`
 }
 
-func dispatch(ctx context.Context, supervisor Supervisor, request Request, started time.Time, logPath string, pid int) Response {
+func dispatch(ctx context.Context, supervisor Supervisor, request Request, started time.Time, logPath string, pid int, socket *SocketClient) Response {
 	fail := func(err error) Response {
 		code := "internal"
 		switch {
@@ -77,7 +77,11 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		if request.Op == "agent.list" {
 			return Response{OK: true, Data: map[string]any{"agents": agents}}
 		}
-		return Response{OK: true, Data: map[string]any{"version": 1, "startedAt": started.UTC().Format(time.RFC3339Nano), "logPath": logPath, "pid": pid, "agents": agents}}
+		data := map[string]any{"version": 1, "startedAt": started.UTC().Format(time.RFC3339Nano), "logPath": logPath, "pid": pid, "agents": agents}
+		if socket != nil {
+			data["connection"] = socket.State()
+		}
+		return Response{OK: true, Data: data}
 	case "agent.start":
 		if request.Name == "" || request.AgentID == "" || request.Organization == "" || request.Workstream == "" || request.WorkFolder == "" {
 			return fail(ErrInvalid)
@@ -127,7 +131,7 @@ func socketPath(home string) (string, error) {
 
 // Serve holds the pid lock until all connections close. The socket and pid
 // file are owner-only; the lock, not the file's existence, fences stale pids.
-func Serve(ctx context.Context, home string, supervisor Supervisor) error {
+func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*SocketClient) error {
 	socket, err := socketPath(home)
 	if err != nil {
 		return err
@@ -182,6 +186,19 @@ func Serve(ctx context.Context, home string, supervisor Supervisor) error {
 	running, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
+	var ws *SocketClient
+	if len(sockets) > 0 {
+		ws = sockets[0]
+	}
+	if ws != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ws.Run(running); err != nil && running.Err() == nil {
+				_, _ = fmt.Fprintln(logFile, err)
+			}
+		}()
+	}
 	var stoppedAgents atomic.Bool
 	wg.Add(1)
 	go func() {
@@ -205,7 +222,7 @@ func Serve(ctx context.Context, home string, supervisor Supervisor) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serveConnection(running, conn, supervisor, started, storagepath.DaemonLog(home), os.Getpid(), cancel, &stoppedAgents)
+			serveConnection(running, conn, supervisor, started, storagepath.DaemonLog(home), os.Getpid(), cancel, &stoppedAgents, ws)
 		}()
 	}
 	wg.Wait()
@@ -214,7 +231,7 @@ func Serve(ctx context.Context, home string, supervisor Supervisor) error {
 	}
 	return nil
 }
-func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, started time.Time, logPath string, pid int, cancel context.CancelFunc, stoppedAgents *atomic.Bool) {
+func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, started time.Time, logPath string, pid int, cancel context.CancelFunc, stoppedAgents *atomic.Bool, socket *SocketClient) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	var req Request
@@ -224,7 +241,7 @@ func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, 
 		_ = encoder.Encode(Response{Error: &APIError{Code: "invalid", Message: "invalid JSON request"}})
 		return
 	}
-	response := dispatch(ctx, supervisor, req, started, logPath, pid)
+	response := dispatch(ctx, supervisor, req, started, logPath, pid, socket)
 	_ = encoder.Encode(response)
 	if req.Op == "shutdown" && response.OK {
 		if req.StopAgents {
