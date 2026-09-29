@@ -326,6 +326,14 @@ func (m *Manager) watch(ctx context.Context, a *managed) error {
 		return m.save(a)
 	}
 	if pane.Exists && pane.Dead {
+		// A restart during backoff must not count the same dead pane twice.
+		// The last exit timestamp is the durable restart timer.
+		if a.def.State == "starting" && a.def.LastExit != nil {
+			if at, parseErr := time.Parse(time.RFC3339Nano, a.def.LastExit.At); parseErr == nil {
+				a.nextStart = at.Add(backoff(len(a.def.Crashes)))
+				return nil
+			}
+		}
 		a.def.LastExit = &Exit{At: now.Format(time.RFC3339Nano), Code: pane.ExitCode}
 		a.def.Crashes = append(a.def.Crashes, now)
 		cutoff := now.Add(-10 * time.Minute)

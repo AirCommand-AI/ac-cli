@@ -175,6 +175,40 @@ func TestBootReadoptAndShutdown(t *testing.T) {
 	}
 	_ = third.Shutdown(ctx, false)
 }
+func TestBootPreservesCrashBackoff(t *testing.T) {
+	ctx := context.Background()
+	m, tm, _, now := setup(t)
+	d := definition(m.Home)
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	tm.panes[d.Name] = Pane{Exists: true, Dead: true, ExitCode: 7}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Shutdown(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	other := New(m.Home, "/bin/pi", "/bin/aircom", tm, nil)
+	other.Now = m.Now
+	other.mu.Lock()
+	err := other.boot(ctx)
+	other.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other.agents[d.Name].def.Crashes) != 1 || len(tm.launches) != 1 {
+		t.Fatal("boot recounted crash or restarted early")
+	}
+	*now = now.Add(5 * time.Second)
+	if err := other.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(tm.launches) != 2 || !contains(tm.launches[1], "--continue") {
+		t.Fatal("boot did not resume after backoff")
+	}
+	_ = other.Shutdown(ctx, false)
+}
 func TestPollingDedupePersistenceAndDashboardStop(t *testing.T) {
 	ctx := context.Background()
 	m, tm, p, now := setup(t)
