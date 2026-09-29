@@ -7,7 +7,9 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/app"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/daemon"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
+	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
 const dashboardURL = "https://dashboard.aircommand.ai"
@@ -27,16 +29,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	cliPath, err := os.Executable()
+	if err != nil {
+		_, _ = os.Stderr.WriteString("Unable to locate the aircom executable.\n")
+		os.Exit(1)
+	}
+	store := credentials.NewStore(home)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	commands := daemon.Commands{Home: home, Output: os.Stdout}
+	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
+		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}
+		return supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll), nil
+	}
 	client := &app.App{
-		BaseURL: dashboardURL,
-		HTTPClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		Store:       credentials.NewStore(home),
-		ListenStore: listenstore.NewStore(home),
-		Stdin:       os.Stdin,
-		Stdout:      os.Stdout,
-		Stderr:      os.Stderr,
+		BaseURL:        dashboardURL,
+		HTTPClient:     httpClient,
+		Store:          store,
+		ListenStore:    listenstore.NewStore(home),
+		Stdin:          os.Stdin,
+		Stdout:         os.Stdout,
+		Stderr:         os.Stderr,
+		DaemonCommands: commands,
 	}
 	os.Exit(client.Run(os.Args[1:]))
 }

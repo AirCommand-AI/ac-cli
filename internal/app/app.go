@@ -81,7 +81,10 @@ func (a *App) daemonCommand(arguments []string) error {
 	if a.DaemonCommands == nil {
 		return &publicError{message: "Daemon commands are not implemented."}
 	}
-	return a.DaemonCommands.RunDaemon(arguments)
+	if err := a.DaemonCommands.RunDaemon(arguments); err != nil {
+		return &publicError{message: err.Error()}
+	}
+	return nil
 }
 func (a *App) agentCommand(arguments []string) error {
 	if a.AgentCommands == nil {

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>ai.aircommand.daemon</string>
+<key>ProgramArguments</key><array>
+<string>/opt/aircom</string>
+<string>daemon</string>
+<string>run</string>
+<string>--tmux</string>
+<string>/usr/bin/tmux</string>
+<string>--pi</string>
+<string>/opt/pi</string>
+</array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/opt</string></dict>
+<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+<key>StandardOutPath</key><string>/home/a/.aircommand/daemon/daemon.log</string>
+<key>StandardErrorPath</key><string>/home/a/.aircommand/daemon/daemon.log</string>
+</dict></plist>
