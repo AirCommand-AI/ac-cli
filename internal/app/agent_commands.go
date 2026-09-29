@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/AirCommand-AI/ac-cli/internal/daemonclient"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
@@ -42,7 +43,7 @@ func (a *App) runAgent(args []string) error {
 		// still be forgotten before a later daemon restart.
 		offline := false
 		if err := client.Remove(ctx, args[1]); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
+			if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED) {
 				return &publicError{message: fmt.Sprintf("Unable to stop agent: %v", err)}
 			}
 			offline = true

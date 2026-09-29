@@ -14,11 +14,7 @@ import (
 )
 
 func TestAgentCommandsUseLocalDaemonSocket(t *testing.T) {
-	home, err := os.MkdirTemp("/tmp", "aca-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	home := shortAgentTestHome(t)
 	path := storagepath.DaemonSocket(home)
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		t.Fatal(err)
@@ -71,6 +67,16 @@ func TestAgentCommandsUseLocalDaemonSocket(t *testing.T) {
 	}
 }
 
+func shortAgentTestHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "aca-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	return home
+}
+
 func TestRemovedLegacyTopLevelCommands(t *testing.T) {
 	app := &App{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
 	for _, command := range []string{"connect", "agents", "disconnect"} {
@@ -81,8 +87,34 @@ func TestRemovedLegacyTopLevelCommands(t *testing.T) {
 }
 
 func TestAgentRemoveWithoutRunningDaemonCleansState(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		name := "missing socket"
+		if stale {
+			name = "stale socket"
+		}
+		t.Run(name, func(t *testing.T) { testOfflineRemoval(t, stale) })
+	}
+}
+
+func testOfflineRemoval(t *testing.T, stale bool) {
 	_, client, stdout, stderr := leaveFixture(t)
-	home := client.Store.Home()
+	home := shortAgentTestHome(t)
+	client.Store = credentials.NewStore(home)
+	storedAgent(t, client, leadID, "583", "Lead")
+	storedAgent(t, client, engineerID, "583", "Engineer")
+	if stale {
+		if err := os.MkdirAll(storagepath.DaemonDirectory(home), 0700); err != nil {
+			t.Fatal(err)
+		}
+		listener, err := net.Listen("unix", storagepath.DaemonSocket(home))
+		if err != nil {
+			t.Fatal(err)
+		}
+		listener.(*net.UnixListener).SetUnlinkOnClose(false)
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	paths := []string{storagepath.AgentDaemonState(home, leadID), storagepath.AgentBrief(home, leadID), storagepath.AgentDelivered(home, leadID)}
 	for _, path := range paths {
 		if err := os.WriteFile(path, []byte("test"), 0600); err != nil {
