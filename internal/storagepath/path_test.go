@@ -9,6 +9,28 @@ import (
 	"testing"
 )
 
+func TestDaemonPaths(t *testing.T) {
+	home := "/tmp/example"
+	if got := DaemonSocket(home); got != filepath.Join(home, ".aircommand", "daemon", "daemon.sock") {
+		t.Fatal(got)
+	}
+	if got := DaemonLog(home); got != filepath.Join(home, ".aircommand", "daemon", "daemon.log") {
+		t.Fatal(got)
+	}
+	if got := DaemonPID(home); got != filepath.Join(home, ".aircommand", "daemon", "daemon.pid") {
+		t.Fatal(got)
+	}
+	if got := AgentDaemonState(home, "agm_test"); got != filepath.Join(AgentDirectory(home, "agm_test"), "daemon.json") {
+		t.Fatal(got)
+	}
+	if got := AgentBrief(home, "agm_test"); got != filepath.Join(AgentDirectory(home, "agm_test"), "brief.md") {
+		t.Fatal(got)
+	}
+	if got := AgentDelivered(home, "agm_test"); got != filepath.Join(AgentDirectory(home, "agm_test"), "delivered.json") {
+		t.Fatal(got)
+	}
+}
+
 func TestFilenameComponentKeepsOrdinaryIDsAndContainsCraftedIDs(t *testing.T) {
 	t.Parallel()
 
