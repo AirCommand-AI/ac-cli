@@ -22,6 +22,7 @@ type Commands struct {
 	Output        io.Writer
 	Service       Service
 	NewSupervisor func(tmux, pi string) (Supervisor, error)
+	NewSocket     func(context.Context, Supervisor) (*SocketClient, error)
 }
 
 func (c Commands) RunDaemon(arguments []string) error {
@@ -71,7 +72,14 @@ func (c Commands) RunDaemon(arguments []string) error {
 		}
 		runCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		return Serve(runCtx, c.Home, supervisor)
+		var socket *SocketClient
+		if c.NewSocket != nil {
+			socket, err = c.NewSocket(runCtx, supervisor)
+			if err != nil {
+				return err
+			}
+		}
+		return Serve(runCtx, c.Home, supervisor, socket)
 	default:
 		return fmt.Errorf("unknown daemon command %q", strings.TrimSpace(arguments[0]))
 	}

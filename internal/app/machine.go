@@ -45,9 +45,10 @@ type redeemDeviceCodeRequest struct {
 }
 
 type redeemDeviceCodeResponse struct {
-	Token      string `json:"token"`
-	DeviceID   string `json:"deviceId"`
-	DeviceName string `json:"deviceName"`
+	Token               string `json:"token"`
+	DeviceID            string `json:"deviceId"`
+	DeviceName          string `json:"deviceName"`
+	MachineSocketSecret string `json:"machineSocketSecret"`
 }
 
 type workstreamSummary struct {
@@ -147,10 +148,11 @@ func (a *App) initMachine(arguments []string) error {
 		registeredName = redeemed.DeviceName
 	}
 	if err := a.Store.SaveMachine(credentials.Machine{
-		APIToken:    redeemed.Token,
-		DeviceID:    redeemed.DeviceID,
-		MachineName: registeredName,
-		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		APIToken:            redeemed.Token,
+		DeviceID:            redeemed.DeviceID,
+		MachineSocketSecret: redeemed.MachineSocketSecret,
+		MachineName:         registeredName,
+		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		return &publicError{message: "Unable to store the machine credential."}
 	}

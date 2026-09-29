@@ -24,11 +24,12 @@ var ErrNoMachineLogin = errors.New("this machine is not logged in to AirCommand"
 // It is not an agent credential: it can list and read workstreams and join
 // them, but it cannot send messages, post updates, or write tasks.
 type Machine struct {
-	Version     int    `json:"version"`
-	APIToken    string `json:"apiToken"`
-	DeviceID    string `json:"deviceId"`
-	MachineName string `json:"machineName,omitempty"`
-	CreatedAt   string `json:"createdAt"`
+	Version             int    `json:"version"`
+	APIToken            string `json:"apiToken"`
+	DeviceID            string `json:"deviceId"`
+	MachineName         string `json:"machineName,omitempty"`
+	MachineSocketSecret string `json:"machineSocketSecret,omitempty"`
+	CreatedAt           string `json:"createdAt"`
 }
 
 // MachinePath is the single machine credential location for this home.
