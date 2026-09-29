@@ -105,8 +105,8 @@ func (a *App) initMachine(arguments []string) error {
 		}
 		if response.status >= 200 && response.status < 300 {
 			name := machine.MachineName
-			if name == "" {
-				name = machine.DeviceID
+			if strings.TrimSpace(name) == "" {
+				name = machineName() // Legacy credentials predate the saved registration name.
 			}
 			return a.startRegisteredMachine(name)
 		}

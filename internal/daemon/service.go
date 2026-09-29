@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
@@ -121,15 +122,24 @@ func (s Service) Start(ctx context.Context) error {
 		return err
 	case "darwin":
 		file := filepath.Join(s.Home, "Library/LaunchAgents/ai.aircommand.daemon.plist")
-		if err := writeService(file, LaunchdPlist(aircom, tmux, pi, s.envPath(), storagepath.DaemonLog(s.Home))); err != nil {
+		content := LaunchdPlist(aircom, tmux, pi, s.envPath(), storagepath.DaemonLog(s.Home))
+		previous, readErr := os.ReadFile(file)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return readErr
+		}
+		statusCtx, cancel := context.WithTimeout(ctx, time.Second)
+		_, statusErr := Call(statusCtx, s.Home, Request{Op: "status"})
+		cancel()
+		if statusErr == nil && bytes.Equal(previous, []byte(content)) {
+			return nil // The running daemon already has this exact service definition.
+		}
+		if err := writeService(file, content); err != nil {
 			return err
 		}
 		domain := fmt.Sprintf("gui/%d", os.Getuid())
 		_, _ = run(ctx, "launchctl", "bootout", domain, file)
-		if _, err := run(ctx, "launchctl", "bootstrap", domain, file); err != nil {
-			return err
-		}
-		_, err = run(ctx, "launchctl", "kickstart", "-k", domain+"/ai.aircommand.daemon")
+		// RunAtLoad starts the daemon on bootstrap; -k would kill a healthy daemon.
+		_, err = run(ctx, "launchctl", "bootstrap", domain, file)
 		return err
 	default:
 		return fmt.Errorf("daemon service is unsupported on %s", s.platform())

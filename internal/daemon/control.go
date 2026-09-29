@@ -274,7 +274,11 @@ func Call(ctx context.Context, home string, req Request) (json.RawMessage, error
 		return nil, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	deadline := time.Now().Add(30 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	_ = conn.SetDeadline(deadline)
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return nil, err
 	}

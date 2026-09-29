@@ -68,6 +68,28 @@ func TestInitRegistersThenReusesValidDevice(t *testing.T) {
 	}
 }
 
+func TestInitLegacyMachinePrintsNameInsteadOfDeviceID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/agents" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Write([]byte(`{"agents":[]}`))
+	}))
+	defer server.Close()
+	store := credentials.NewStore(t.TempDir())
+	if err := store.SaveMachine(credentials.Machine{APIToken: "legacy-token", DeviceID: "dev_legacy"}); err != nil {
+		t.Fatal(err)
+	}
+	stdout := &bytes.Buffer{}
+	client := &App{BaseURL: server.URL, Store: store, Stdout: stdout, DaemonCommands: fakeDaemonStarter{}}
+	if err := client.initMachine(nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "Machine registered: "+machineName()+"\nDaemon running\n" {
+		t.Fatalf("legacy machine output %q", got)
+	}
+}
+
 func TestInitRenewsRevokedDevice(t *testing.T) {
 	gets := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
