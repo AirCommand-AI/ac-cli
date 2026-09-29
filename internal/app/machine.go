@@ -938,6 +938,16 @@ func (a *App) tasks(arguments []string) error {
 			return a.Number < b.Number
 		})
 	}
+	// Warnings use the complete unfiltered work order, so a dependency hidden
+	// by --mine or --status still explains why an earlier task cannot run.
+	orderIndex := map[string]int{}
+	byID := map[string]taskListItem{}
+	if order == "work" {
+		for i, task := range tasks {
+			orderIndex[task.ID] = i
+			byID[task.ID] = task
+		}
+	}
 	matches := 0
 	lastGroup := "\x00"
 	for _, task := range tasks {
@@ -974,6 +984,23 @@ func (a *App) tasks(arguments []string) error {
 		if task.Number > 0 {
 			number = "#" + strconv.Itoa(task.Number)
 		}
+		title := task.Title
+		if order == "work" && task.Status != "landed" && task.Status != "cancelled" {
+			var waits []string
+			for _, depID := range task.DependsOn {
+				dep, found := byID[depID]
+				if found && dep.Status != "landed" && orderIndex[depID] > orderIndex[task.ID] {
+					label := dep.ID
+					if dep.Number > 0 {
+						label = "#" + strconv.Itoa(dep.Number)
+					}
+					waits = append(waits, label)
+				}
+			}
+			if len(waits) > 0 {
+				title += " · waits on " + strings.Join(waits, ", ")
+			}
+		}
 		if _, err := fmt.Fprintf(
 			writer,
 			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -983,7 +1010,7 @@ func (a *App) tasks(arguments []string) error {
 			safeMetadata(orDash(task.Assignee), protected...),
 			safeMetadata(orDash(task.Milestone), protected...),
 			safeMetadata(displayTaskType(task.Type), protected...),
-			safeMetadata(task.Title, protected...),
+			safeMetadata(title, protected...),
 		); err != nil {
 			return &publicError{message: "Unable to write task output."}
 		}

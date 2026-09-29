@@ -8,6 +8,26 @@ import (
 	"testing"
 )
 
+func TestWorkOrderWarnsWhenUnfinishedDependencyFollowsTask(t *testing.T) {
+	const detail = `{"workstream":{"code":"694"},"tasks":[{"id":"aaaaaaaaaaaaaaa1","number":1,"title":"First","status":"todo","position":10,"milestone":"A","dependsOn":["aaaaaaaaaaaaaaa2"]},{"id":"aaaaaaaaaaaaaaa2","number":2,"title":"Dependency","status":"todo","position":20,"milestone":"A"}],"updates":[]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/milestones") {
+			_, _ = w.Write([]byte(`[{"name":"A","position":10}]`))
+		} else {
+			_, _ = w.Write([]byte(detail))
+		}
+	}))
+	defer server.Close()
+	client, out, errOut := testApp(t, server.URL, "", deterministicRandom(0x5a))
+	saveTestCredential(t, client, testCredential())
+	if client.Run([]string{"tasks", "--workstream", "694", "--order", "work"}) != 0 {
+		t.Fatal(errOut.String())
+	}
+	if !strings.Contains(out.String(), "First · waits on #2") {
+		t.Fatalf("missing dependency warning: %s", out.String())
+	}
+}
+
 func TestMilestoneCommandsAndTaskPosition(t *testing.T) {
 	var paths []string
 	var bodies []string
