@@ -18,7 +18,7 @@ func (t CommandTmux) Inspect(ctx context.Context, name string) (Pane, error) {
 	if !validName(name) {
 		return Pane{}, fmt.Errorf("invalid agent name")
 	}
-	out, err := t.command(ctx, "list-panes", "-t", name+":0", "-F", "#{pane_dead}:#{pane_dead_status}:#{pane_pid}").CombinedOutput()
+	out, err := t.command(ctx, "list-panes", "-t", name+":0", "-F", "#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}:#{pane_pid}").CombinedOutput()
 	if err != nil {
 		// No tmux server or session is not an error; other failures are.
 		text := string(out)
@@ -32,23 +32,33 @@ func (t CommandTmux) Inspect(ctx context.Context, name string) (Pane, error) {
 
 func parsePaneOutput(output string) (Pane, error) {
 	fields := strings.Split(strings.TrimSpace(output), ":")
-	if len(fields) != 3 || fields[0] != "0" && fields[0] != "1" {
+	if len(fields) != 4 || fields[0] != "0" && fields[0] != "1" {
 		return Pane{}, fmt.Errorf("invalid tmux pane output")
 	}
 	dead := fields[0] == "1"
 	code := 0
+	signal := ""
 	if dead {
-		var err error
-		code, err = strconv.Atoi(fields[1])
-		if err != nil {
-			return Pane{}, fmt.Errorf("invalid tmux pane exit status: %w", err)
+		signal = fields[2]
+		if fields[1] == "" {
+			code = -1
+			// Older tmux versions leave pane_dead_signal empty even after SIGTERM.
+			if signal == "" {
+				signal = "unknown"
+			}
+		} else {
+			var err error
+			code, err = strconv.Atoi(fields[1])
+			if err != nil {
+				return Pane{}, fmt.Errorf("invalid tmux pane exit status: %w", err)
+			}
 		}
 	}
-	pid, err := strconv.Atoi(fields[2])
+	pid, err := strconv.Atoi(fields[3])
 	if err != nil || pid <= 0 {
 		return Pane{}, fmt.Errorf("invalid tmux pane PID")
 	}
-	return Pane{Exists: true, Dead: dead, ExitCode: code, PID: pid}, nil
+	return Pane{Exists: true, Dead: dead, ExitCode: code, Signal: signal, PID: pid}, nil
 }
 func (t CommandTmux) Start(ctx context.Context, def AgentDefinition, args []string) error {
 	if !validName(def.Name) {

@@ -34,8 +34,9 @@ type AgentDefinition struct {
 	SessionStartedAt string      `json:"sessionStartedAt,omitempty"`
 }
 type Exit struct {
-	At   string `json:"at"`
-	Code int    `json:"code"`
+	At     string `json:"at"`
+	Code   int    `json:"code"`
+	Signal string `json:"signal,omitempty"`
 }
 type AgentStatus struct {
 	Name       string `json:"name"`
@@ -82,5 +83,6 @@ type Pane struct {
 	Exists   bool
 	Dead     bool
 	ExitCode int
+	Signal   string
 	PID      int
 }

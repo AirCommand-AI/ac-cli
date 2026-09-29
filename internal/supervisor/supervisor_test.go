@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -340,17 +341,18 @@ func TestPollingDedupePersistenceAndDashboardStop(t *testing.T) {
 }
 func TestParseTmuxLiveAndDeadPane(t *testing.T) {
 	for _, tc := range []struct {
-		line string
-		dead bool
-		code int
-		pid  int
-	}{{"0::1234\n", false, 0, 1234}, {"1:17:1234\n", true, 17, 1234}} {
+		line   string
+		dead   bool
+		code   int
+		pid    int
+		signal string
+	}{{"0:::1234\n", false, 0, 1234, ""}, {"1:17::1234\n", true, 17, 1234, ""}, {"1::15:1234\n", true, -1, 1234, "15"}, {"1:::1234\n", true, -1, 1234, "unknown"}} {
 		p, err := parsePaneOutput(tc.line)
-		if err != nil || !p.Exists || p.Dead != tc.dead || p.ExitCode != tc.code || p.PID != tc.pid {
+		if err != nil || !p.Exists || p.Dead != tc.dead || p.ExitCode != tc.code || p.PID != tc.pid || p.Signal != tc.signal {
 			t.Fatalf("parse %q: %+v %v", tc.line, p, err)
 		}
 	}
-	for _, line := range []string{"", "0:broken:0", "1::1234", "0::not-a-pid"} {
+	for _, line := range []string{"", "0:broken:0", "1::1234", "0:::not-a-pid", "1:broken:15:1234"} {
 		if _, err := parsePaneOutput(line); err == nil {
 			t.Fatalf("accepted %q", line)
 		}
@@ -409,6 +411,76 @@ func TestCommandTmuxLivePane(t *testing.T) {
 	p, err := tm.Inspect(ctx, name)
 	if err != nil || !p.Exists || p.Dead || p.PID <= 0 {
 		t.Fatalf("live pane %+v %v", p, err)
+	}
+}
+
+type recordingCommandTmux struct {
+	CommandTmux
+	launches [][]string
+}
+
+func (t *recordingCommandTmux) Start(ctx context.Context, d AgentDefinition, args []string) error {
+	t.launches = append(t.launches, append([]string(nil), args...))
+	return t.CommandTmux.Start(ctx, d, args)
+}
+func TestSignalKilledPaneRestartsWithContinue(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	home := t.TempDir()
+	tm := &recordingCommandTmux{CommandTmux: CommandTmux{Path: "/usr/bin/tmux"}}
+	script := filepath.Join(home, "pi-test")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec /bin/sleep 1000\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	m := New(home, script, "/bin/true", tm, nil)
+	now := time.Now()
+	m.Now = func() time.Time { return now }
+	d := definition(home)
+	d.Name = "supervisor_signal_" + strings.ReplaceAll(time.Now().Format("150405.000000000"), ".", "")
+	defer tm.Kill(ctx, d.Name)
+	defer m.Shutdown(ctx, false)
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	pane, err := tm.Inspect(ctx, d.Name)
+	if err != nil || !pane.Exists || pane.Dead {
+		t.Fatalf("initial pane %+v %v", pane, err)
+	}
+	if err := syscall.Kill(pane.PID, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		pane, err = tm.Inspect(ctx, d.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pane.Dead {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("signaled pane did not die")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pane.ExitCode != -1 || pane.Signal == "" {
+		t.Fatalf("signaled pane %+v", pane)
+	}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	last := m.agents[d.Name].def.LastExit
+	if last == nil || last.Code != -1 || last.Signal != pane.Signal {
+		t.Fatalf("last exit %+v, pane %+v", last, pane)
+	}
+	now = now.Add(5 * time.Second)
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(tm.launches) != 2 || !contains(tm.launches[1], "--continue") {
+		t.Fatalf("restart args: %v", tm.launches)
 	}
 }
 func TestCommandTmuxDeadPane(t *testing.T) {

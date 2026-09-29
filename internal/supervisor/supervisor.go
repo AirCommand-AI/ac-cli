@@ -136,7 +136,7 @@ func (m *Manager) boot(ctx context.Context) error {
 		if err := m.bootAgent(ctx, path); err != nil {
 			// One damaged definition must not prevent unrelated agents from
 			// starting. Do not rewrite or mark the rejected definition.
-			log.Printf("supervisor: skipping %s: %v", path, err)
+			log.Printf("supervisor: agent %s: skipping %s: %v", filepath.Base(filepath.Dir(path)), path, err)
 		}
 	}
 	return nil
@@ -346,7 +346,7 @@ func (m *Manager) watch(ctx context.Context, a *managed) error {
 				return nil
 			}
 		}
-		a.def.LastExit = &Exit{At: now.Format(time.RFC3339Nano), Code: pane.ExitCode}
+		a.def.LastExit = &Exit{At: now.Format(time.RFC3339Nano), Code: pane.ExitCode, Signal: pane.Signal}
 		a.def.Crashes = append(a.def.Crashes, now)
 		cutoff := now.Add(-10 * time.Minute)
 		kept := a.def.Crashes[:0]
