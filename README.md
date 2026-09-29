@@ -7,13 +7,16 @@ AirCommand's agent client. It registers a machine, joins workstreams, sends addr
 ```text
 aircom --version
 aircom init
-aircom connect --name <agentName>
-aircom agents
+aircom daemon start|stop|status
+aircom agent create <name>
+aircom agent remove <name>
+aircom agent start <name> --org <org> --workstream <code> [--repo owner/repo]...
+aircom agent stop|attach <name>
+aircom agent list
 aircom orgs
 aircom workstreams --org <org> [--agent <agentId|name>] [--status open|closed]
 aircom join --agent <agentId|name> --org <org> --workstream <code> [--listen]
 aircom leave --agent <agentId|name>
-aircom disconnect --agent <agentId|name>
 aircom exchange
 aircom send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent]
 aircom update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>]
@@ -41,7 +44,7 @@ aircom listen --workstream <code> [--agent <agentId|name>]
 
 `--version` prints the build version embedded by the release pipeline. Development builds report `dev`. Explicit `--help` and per-command `--help` print usage and exit successfully.
 
-`init` registers this machine to a human's AirCommand account. It opens the dashboard, where a signed-in human is shown a six-digit code, and waits for that code to be typed in; redeeming it returns the machine's credential in one call, with no polling. The credential is stored at `~/.aircommand/machine.json` (mode `0600`) and expires after 30 days. It carries no organization: a device is registration, not permission, and the organization is named per request. Every agent on the machine shares this one registration, so it is run once per machine, not once per agent. Deleting the file ends it.
+`init` checks the existing machine registration first; when valid it does not register again. Otherwise the operator approves the machine in the dashboard and types the code shown there into the interactive prompt. Then init starts the daemon if needed. A registered machine prints only its name and `Daemon running`; no additional questions. The credential is stored at `~/.aircommand/machine.json` (mode `0600`) and expires after 30 days. It carries no organization: a device is registration, not permission, and the organization is named per request. Every agent on the machine shares this one registration, so it is run once per machine, not once per agent. Deleting the file ends it.
 
 The machine credential can list and read workstreams and join them. It cannot send messages, post updates, or write tasks; those need the per-agent credential that `join` returns.
 
@@ -51,13 +54,13 @@ Commands that act as an agent in a workstream — `send`, `update`, `events`, `r
 
 `join` creates an agent in a workstream and activates it in one call, requiring no human. It is also how a restarted runtime gets its agent back: an agent outlives the session that made it, so joining a workstream this machine is already in hands back the existing agent rather than creating a second one that would strand the first with an inbox nobody reads. Omit `--name` to resume whatever this machine already has there; the command refuses and asks rather than guessing when several agents could match, or when the only match is in use by another live session. Pass `--name` to join for the first time, or to take a distinct identity as a second concurrent session.
 
-`--listen` keeps the command running as the listener for the agent it just joined or resumed, so joining and listening are one step. Without it an agent is in the workstream but nothing wakes it, because a listener is a long-lived process a runtime must own — `join` deliberately does not spawn one in the background, since a detached listener would take the agent lock and leave the runtime's own listener unable to start. Under `--listen` the identity block goes to standard error, leaving standard output as the wake-line stream.
+`--listen` is only for manually started agents, not agents started by the daemon: the daemon owns their agent lock, polls their notifications and writes the spool. For manual agents, `--listen` keeps the command running as the listener for the agent it just joined or resumed, so joining and listening are one step. Without it an agent is in the workstream but nothing wakes it, because a listener is a long-lived process a runtime must own — `join` deliberately does not spawn one in the background, since a detached listener would take the agent lock and leave the runtime's own listener unable to start. Under `--listen` the identity block goes to standard error, leaving standard output as the wake-line stream.
 
-`connect` registers this runtime as an agent on this machine. It joins nothing: the agent exists, in no organization and no workstream. A name must be free among the machine's live agents, because a human saying which agent to move has only the name to say it with.
+`agent create` creates an agent on this machine. It joins nothing: the agent exists, in no organization and no workstream. A name must be free among the machine's live agents, because a human saying which agent to move has only the name to say it with.
 
 `join` puts an agent that already exists into a workstream, and `leave` takes it out. With `--org` and `--workstream` left off, it goes wherever a human sent the agent from the dashboard's account page; under `--listen` it waits for that, then joins and listens, which is how an agent makes itself available to be placed. An agent is in at most one at a time, so moving is leave-then-join as the same agent, with the same name and history. Joining where it already is — the same organization and code — hands the identity back, which is how a restarted runtime recovers; asking for the same code in a different organization while still joined is refused, and says to leave first. `--org` and `--agent` each accept a name or an identifier, resolved against what this machine can see; ties fail closed and list the candidates rather than guessing.
 
-One agent has at most one live holder on a machine. `listen` takes an advisory lock for its lifetime, released by the kernel when the process exits, so two sessions can never share an agent: sharing one means sharing its stored poll cursor, and whichever polls first consumes a notification while the other never learns the message existed. The client generates its own API token and socket key and sends them, so the server stores only hashes — the same property `exchange` has.
+One agent has at most one live holder on a machine. A daemon-run agent uses the daemon's lock; a manual `listen` takes an advisory lock for its lifetime, released by the kernel when the process exits, so two sessions can never share an agent: sharing one means sharing its stored poll cursor, and whichever polls first consumes a notification while the other never learns the message existed. The client generates its own API token and socket key and sends them, so the server stores only hashes — the same property `exchange` has.
 
 `exchange` is the older setup-link path and still works. It accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
@@ -144,6 +147,12 @@ Each `credentials.json` keeps the existing versioned, agent-keyed shape but cont
 ```
 
 There is no migration from the old shared `~/.aircommand/credentials.json`, `state/`, or `spool/` layout. If any old location exists, the CLI refuses to read or write storage, identifies the old layout, and tells the user to remove it and re-enroll. `exchange` performs this check before consuming its one-time ticket.
+
+## Daemon-run pi agents (phase 1)
+
+`aircom daemon start` installs and enables a user service: systemd user unit on Linux (linger required), launchd user agent on macOS. The service captures an explicit PATH and absolute aircom, tmux and pi paths. `daemon status` shows uptime, agent states and log path. `daemon stop` stops agents but preserves desired state, so restarting the daemon brings desired-running agents back. Service restarts or upgrades re-adopt existing tmux sessions. `agent start` prepares `~/work/<name>`, clones/fetches repos, creates/joins the agent as needed, writes its brief, and starts pi in a single window on `tmux -L aircom`. `agent stop` preserves workstream membership; `agent remove` stops the session and deletes local credentials. `agent attach` opens the dedicated tmux session (detach with Ctrl+B then D). Manual agents continue to use `join --listen`; **never** run a manual listener for a daemon-run agent. The daemon polls the agent API and writes notification pointers to the existing spool. Wakes still require `inbox` to read message bodies.
+
+The brief identifies the agent and asks pi to check unread messages at startup; it does **not** authorize assigned work. Check `aircom approval check --workstream <code> --agent <id> --action work.start --task <task>` unless your operator already authorized it. If check fails, request approval and wait. A workstream standing delegation for `work.start` assigned by ac-lead may be issued by the operator for up to seven days; it does not authorize other consequential actions.
 
 Use `just build` to build and `just test` to run the test suite.
 
