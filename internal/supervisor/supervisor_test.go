@@ -1,9 +1,11 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +176,54 @@ func TestBootReadoptAndShutdown(t *testing.T) {
 		t.Fatal("boot did not restart desired running")
 	}
 	_ = third.Shutdown(ctx, false)
+}
+func TestBootSkipsInvalidAndDuplicateDefinitions(t *testing.T) {
+	ctx := context.Background()
+	m, tm, _, _ := setup(t)
+	good := definition(m.Home)
+	good.Name = "original"
+	good.Desired = "running"
+	if err := atomicJSON(m.definitionPath(good.AgentID), good); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := good
+	duplicate.AgentID = "agm_2"
+	if err := atomicJSON(m.definitionPath(duplicate.AgentID), duplicate); err != nil {
+		t.Fatal(err)
+	}
+	invalid := filepath.Join(m.Home, ".aircommand", "agents", "agm_3", "daemon.json")
+	if err := os.MkdirAll(filepath.Dir(invalid), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(invalid, []byte("not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	following := good
+	following.Name = "following"
+	following.AgentID = "agm_4"
+	if err := atomicJSON(m.definitionPath(following.AgentID), following); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(previous)
+	m.mu.Lock()
+	err := m.boot(ctx)
+	m.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.agents) != 2 || len(tm.launches) != 2 {
+		t.Fatalf("boot failed to continue: %v, %v", m.agents, tm.launches)
+	}
+	if _, err := os.Stat(invalid); err != nil {
+		t.Fatal("invalid definition was modified", err)
+	}
+	if !strings.Contains(logs.String(), "duplicate agent name") || !strings.Contains(logs.String(), "agm_3") {
+		t.Fatal("missing skip diagnostics", logs.String())
+	}
+	_ = m.Shutdown(ctx, false)
 }
 func TestBootPreservesCrashBackoff(t *testing.T) {
 	ctx := context.Background()

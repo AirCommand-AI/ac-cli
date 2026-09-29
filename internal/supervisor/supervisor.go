@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -131,37 +132,46 @@ func (m *Manager) boot(ctx context.Context) error {
 		return err
 	}
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		var def AgentDefinition
-		if err = json.Unmarshal(data, &def); err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-		if err = validate(def); err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-		if path != m.definitionPath(def.AgentID) {
-			return fmt.Errorf("definition ID does not match path: %s", path)
-		}
-		if _, exists := m.agents[def.Name]; exists {
-			return fmt.Errorf("duplicate agent name: %s", def.Name)
-		}
-		a := &managed{def: def}
-		if err = m.loadDelivered(a); err != nil {
-			return err
-		}
-		m.agents[def.Name] = a
-		if def.Desired == "running" && def.State != "stopped-by-dashboard" && def.State != "crashed" {
-			if err = m.acquire(a); err != nil {
-				return err
-			}
-			if err = m.watch(ctx, a); err != nil {
-				return err
-			}
+		if err := m.bootAgent(ctx, path); err != nil {
+			// One damaged definition must not prevent unrelated agents from
+			// starting. Do not rewrite or mark the rejected definition.
+			log.Printf("supervisor: skipping %s: %v", path, err)
 		}
 	}
+	return nil
+}
+func (m *Manager) bootAgent(ctx context.Context, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var def AgentDefinition
+	if err = json.Unmarshal(data, &def); err != nil {
+		return err
+	}
+	if err = validate(def); err != nil {
+		return err
+	}
+	if path != m.definitionPath(def.AgentID) {
+		return fmt.Errorf("definition ID does not match path")
+	}
+	if _, exists := m.agents[def.Name]; exists {
+		return fmt.Errorf("duplicate agent name %s", def.Name)
+	}
+	a := &managed{def: def}
+	if err = m.loadDelivered(a); err != nil {
+		return err
+	}
+	if def.Desired == "running" && def.State != "stopped-by-dashboard" && def.State != "crashed" {
+		if err = m.acquire(a); err != nil {
+			return err
+		}
+		if err = m.watch(ctx, a); err != nil {
+			m.release(a)
+			return err
+		}
+	}
+	m.agents[def.Name] = a
 	return nil
 }
 func validate(d AgentDefinition) error {
