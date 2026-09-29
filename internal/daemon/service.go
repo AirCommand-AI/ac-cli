@@ -35,7 +35,7 @@ func LaunchdPlist(aircom, tmux, pi, path, log string) string {
 	for _, arg := range []string{aircom, "daemon", "run", "--tmux", tmux, "--pi", pi} {
 		fmt.Fprintf(&b, "<string>%s</string>\n", esc(arg))
 	}
-	fmt.Fprintf(&b, "</array>\n<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string></dict>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>StandardOutPath</key><string>%s</string>\n<key>StandardErrorPath</key><string>%s</string>\n</dict></plist>\n", esc(path), esc(log), esc(log))
+	fmt.Fprintf(&b, "</array>\n<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string></dict>\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>StandardOutPath</key><string>%s</string>\n<key>StandardErrorPath</key><string>%s</string>\n</dict></plist>\n", esc(path), esc(log), esc(log))
 	return b.String()
 }
 

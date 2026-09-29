@@ -115,9 +115,23 @@ var (
 	ErrAlreadyRunning = errors.New("agent already running")
 )
 
+// socketPath checks the macOS sockaddr_un limit (104 bytes including the
+// terminating NUL) before either bind or dial; Linux permits slightly more.
+func socketPath(home string) (string, error) {
+	path := storagepath.DaemonSocket(home)
+	if len(path) > 103 {
+		return "", fmt.Errorf("AirCommand daemon socket path is too long (%d bytes; maximum 103): %s", len(path), path)
+	}
+	return path, nil
+}
+
 // Serve holds the pid lock until all connections close. The socket and pid
 // file are owner-only; the lock, not the file's existence, fences stale pids.
 func Serve(ctx context.Context, home string, supervisor Supervisor) error {
+	socket, err := socketPath(home)
+	if err != nil {
+		return err
+	}
 	directory := storagepath.DaemonDirectory(home)
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
@@ -151,7 +165,6 @@ func Serve(ctx context.Context, home string, supervisor Supervisor) error {
 		return err
 	}
 	defer logFile.Close()
-	socket := storagepath.DaemonSocket(home)
 	// Only remove a stale socket while holding the pid lock.
 	if err := os.Remove(socket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -223,7 +236,11 @@ func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, 
 
 func Call(ctx context.Context, home string, req Request) (json.RawMessage, error) {
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "unix", filepath.Clean(storagepath.DaemonSocket(home)))
+	socket, err := socketPath(home)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := dialer.DialContext(ctx, "unix", filepath.Clean(socket))
 	if err != nil {
 		return nil, err
 	}

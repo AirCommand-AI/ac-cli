@@ -34,6 +34,14 @@ func TestServiceWritesAndEnablesUnit(t *testing.T) {
 		t.Fatal(calls)
 	}
 }
+func TestLaunchdEscapesPathStrings(t *testing.T) {
+	plist := LaunchdPlist("/opt/a&b", "/opt/t<mux", "/opt/pi", "/opt/a&b", "/tmp/l<g")
+	for _, want := range []string{"/opt/a&amp;b", "/opt/t&lt;mux", "/tmp/l&lt;g", "<key>RunAtLoad</key><true/>"} {
+		if !strings.Contains(plist, want) {
+			t.Fatalf("plist missing %q: %s", want, plist)
+		}
+	}
+}
 func TestServiceRequiresLinger(t *testing.T) {
 	s := Service{Home: t.TempDir(), OS: "linux", Aircom: "/opt/aircom", Tmux: "/usr/bin/tmux", Pi: "/opt/pi", Run: func(context.Context, string, ...string) ([]byte, error) { return []byte("no"), nil }}
 	if err := s.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "linger") {
@@ -41,7 +49,7 @@ func TestServiceRequiresLinger(t *testing.T) {
 	}
 }
 func TestServiceStopSendsShutdownFirst(t *testing.T) {
-	home := t.TempDir()
+	home := shortHome(t)
 	f := &fakeSupervisor{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,7 +83,7 @@ func TestServiceStopSendsShutdownFirst(t *testing.T) {
 }
 func TestServiceStopWithoutDaemon(t *testing.T) {
 	var called bool
-	s := Service{Home: t.TempDir(), OS: "linux", Run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }}
+	s := Service{Home: shortHome(t), OS: "linux", Run: func(context.Context, string, ...string) ([]byte, error) { called = true; return nil, nil }}
 	if err := s.Stop(context.Background()); err != nil || !called {
 		t.Fatalf("stop: %v, called=%v", err, called)
 	}

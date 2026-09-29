@@ -51,8 +51,21 @@ func (f *fakeSupervisor) Shutdown(_ context.Context, stop bool) error {
 	return nil
 }
 func (f *fakeSupervisor) Run(ctx context.Context) error { <-ctx.Done(); return nil }
+
+// macOS test temp directories under /var/folders can exceed sockaddr_un's
+// 103-byte pathname limit once the daemon's storage suffix is appended.
+func shortHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "acd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	return home
+}
+
 func TestControlAndLock(t *testing.T) {
-	home := t.TempDir()
+	home := shortHome(t)
 	f := &fakeSupervisor{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -102,6 +115,14 @@ func TestControlAndLock(t *testing.T) {
 	}
 	if _, err := os.Stat(storagepath.DaemonLog(home)); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestLongSocketPathRejectedBeforeBindOrDial(t *testing.T) {
+	home := filepath.Join(shortHome(t), strings.Repeat("a", 100))
+	for _, err := range []error{Serve(context.Background(), home, &fakeSupervisor{}), func() error { _, err := Call(context.Background(), home, Request{Op: "status"}); return err }()} {
+		if err == nil || !strings.Contains(err.Error(), "socket path is too long") {
+			t.Fatalf("socket path error = %v", err)
+		}
 	}
 }
 func TestInvalidJSON(t *testing.T) {

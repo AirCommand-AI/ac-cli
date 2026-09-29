@@ -12,6 +12,7 @@
 <string>/opt/pi</string>
 </array>
 <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/opt</string></dict>
+<key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 <key>StandardOutPath</key><string>/home/a/.aircommand/daemon/daemon.log</string>
 <key>StandardErrorPath</key><string>/home/a/.aircommand/daemon/daemon.log</string>
