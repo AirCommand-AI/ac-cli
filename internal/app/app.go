@@ -87,10 +87,10 @@ func (a *App) daemonCommand(arguments []string) error {
 	return nil
 }
 func (a *App) agentCommand(arguments []string) error {
-	if a.AgentCommands == nil {
-		return &publicError{message: "Agent commands are not implemented."}
+	if a.AgentCommands != nil {
+		return a.AgentCommands.RunAgent(arguments)
 	}
-	return a.AgentCommands.RunAgent(arguments)
+	return a.runAgent(arguments)
 }
 
 type publicError struct {
