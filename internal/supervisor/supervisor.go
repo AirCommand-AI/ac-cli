@@ -35,13 +35,13 @@ type Manager struct {
 	booted        chan struct{}
 }
 type managed struct {
-	def                 AgentDefinition
-	lock                *agentlock.Lock
-	nextStart, nextPoll time.Time
-	failures            int
-	lastPoll            string
-	pid                 int
-	delivered           []string
+	def                            AgentDefinition
+	lock                           *agentlock.Lock
+	nextStart, nextPoll, nextRetry time.Time
+	failures, inspectFailures      int
+	lastPoll                       string
+	pid                            int
+	delivered                      []string
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
@@ -392,45 +392,48 @@ func (m *Manager) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.agents {
-		if a.def.Desired != "running" || a.def.State == "crashed" || a.def.State == "stopped-by-dashboard" {
+		if a.def.Desired != "running" || a.def.State == "crashed" || a.def.State == "stopped-by-dashboard" || m.now().Before(a.nextRetry) {
 			continue
 		}
-		if a.lock == nil {
-			if err := m.acquire(a); err != nil {
-				return err
+		if err := m.tickAgent(ctx, a); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
+			a.inspectFailures++
+			a.nextRetry = m.now().Add(backoff(a.inspectFailures))
+			log.Printf("supervisor: agent %s: %v (retry in %s)", a.def.Name, err, backoff(a.inspectFailures))
+			continue
 		}
-		pane, err := m.Tmux.Inspect(ctx, a.def.Name)
-		if err != nil {
+		a.inspectFailures = 0
+		a.nextRetry = time.Time{}
+	}
+	return nil
+}
+func (m *Manager) tickAgent(ctx context.Context, a *managed) error {
+	if a.lock == nil {
+		if err := m.acquire(a); err != nil {
 			return err
 		}
-		if pane.Exists && pane.Dead && a.nextStart.IsZero() {
-			if err := m.watch(ctx, a); err != nil {
-				return err
-			}
-			continue
+	}
+	pane, err := m.Tmux.Inspect(ctx, a.def.Name)
+	if err != nil {
+		return err
+	}
+	if pane.Exists && pane.Dead && a.nextStart.IsZero() {
+		return m.watch(ctx, a)
+	}
+	if !a.nextStart.IsZero() {
+		if m.now().Before(a.nextStart) {
+			return nil
 		}
-		if !a.nextStart.IsZero() {
-			if m.now().Before(a.nextStart) {
-				continue
-			}
-			if err := m.launch(ctx, a, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if !pane.Exists {
-			if err := m.watch(ctx, a); err != nil {
-				return err
-			}
-			continue
-		}
-		a.pid = pane.PID
-		if m.Poll != nil && !m.now().Before(a.nextPoll) {
-			if err := m.poll(ctx, a); err != nil {
-				return err
-			}
-		}
+		return m.launch(ctx, a, true)
+	}
+	if !pane.Exists {
+		return m.watch(ctx, a)
+	}
+	a.pid = pane.PID
+	if m.Poll != nil && !m.now().Before(a.nextPoll) {
+		return m.poll(ctx, a)
 	}
 	return nil
 }

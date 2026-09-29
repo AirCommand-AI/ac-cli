@@ -200,13 +200,20 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 		}()
 	}
 	var stoppedAgents atomic.Bool
+	runErrors := make(chan error, 1)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := supervisor.Run(running); err != nil && running.Err() == nil {
-			_, _ = fmt.Fprintln(logFile, err)
-			cancel()
+		err := supervisor.Run(running)
+		if running.Err() != nil {
+			return
 		}
+		if err == nil {
+			err = errors.New("daemon supervisor exited unexpectedly")
+		}
+		_, _ = fmt.Fprintln(logFile, err)
+		runErrors <- err
+		cancel()
 	}()
 	go func() { <-running.Done(); _ = listener.Close() }()
 	for {
@@ -226,6 +233,11 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 		}()
 	}
 	wg.Wait()
+	select {
+	case err := <-runErrors:
+		return err
+	default:
+	}
 	if !stoppedAgents.Load() {
 		return supervisor.Shutdown(context.Background(), false)
 	}

@@ -17,9 +17,11 @@ import (
 )
 
 type fakeSupervisor struct {
-	mu    sync.Mutex
-	calls []string
-	ready chan struct{}
+	mu        sync.Mutex
+	calls     []string
+	ready     chan struct{}
+	runErr    error
+	exitEarly bool
 }
 
 func (f *fakeSupervisor) record(s string) {
@@ -50,7 +52,13 @@ func (f *fakeSupervisor) Shutdown(_ context.Context, stop bool) error {
 	}
 	return nil
 }
-func (f *fakeSupervisor) Run(ctx context.Context) error { <-ctx.Done(); return nil }
+func (f *fakeSupervisor) Run(ctx context.Context) error {
+	if f.exitEarly {
+		return f.runErr
+	}
+	<-ctx.Done()
+	return nil
+}
 
 // macOS test temp directories under /var/folders can exceed sockaddr_un's
 // 103-byte pathname limit once the daemon's storage suffix is appended.
@@ -123,6 +131,19 @@ func TestLongSocketPathRejectedBeforeBindOrDial(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "socket path is too long") {
 			t.Fatalf("socket path error = %v", err)
 		}
+	}
+}
+func TestUnexpectedSupervisorExitFailsDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{{"returned_error", errors.New("boom")}, {"returned_nil", nil}} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Serve(context.Background(), shortHome(t), &fakeSupervisor{exitEarly: true, runErr: tc.err})
+			if err == nil {
+				t.Fatal("daemon exited successfully when supervisor failed")
+			}
+		})
 	}
 }
 func TestInvalidJSON(t *testing.T) {

@@ -17,12 +17,22 @@ import (
 )
 
 type fakeTmux struct {
-	panes    map[string]Pane
-	launches [][]string
-	kills    int
+	panes      map[string]Pane
+	launches   [][]string
+	kills      int
+	inspectErr map[string]error
+	inspected  map[string]int
 }
 
-func (f *fakeTmux) Inspect(_ context.Context, n string) (Pane, error) { return f.panes[n], nil }
+func (f *fakeTmux) Inspect(_ context.Context, n string) (Pane, error) {
+	if f.inspected != nil {
+		f.inspected[n]++
+	}
+	if err := f.inspectErr[n]; err != nil {
+		return Pane{}, err
+	}
+	return f.panes[n], nil
+}
 func (f *fakeTmux) Start(_ context.Context, d AgentDefinition, args []string) error {
 	f.panes[d.Name] = Pane{Exists: true, PID: 123}
 	f.launches = append(f.launches, args)
@@ -327,6 +337,79 @@ func TestPollingDedupePersistenceAndDashboardStop(t *testing.T) {
 		t.Fatal("dashboard-stopped agent restarted")
 	}
 	_ = other.Shutdown(ctx, false)
+}
+func TestParseTmuxLiveAndDeadPane(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		dead bool
+		code int
+		pid  int
+	}{{"0::1234\n", false, 0, 1234}, {"1:17:1234\n", true, 17, 1234}} {
+		p, err := parsePaneOutput(tc.line)
+		if err != nil || !p.Exists || p.Dead != tc.dead || p.ExitCode != tc.code || p.PID != tc.pid {
+			t.Fatalf("parse %q: %+v %v", tc.line, p, err)
+		}
+	}
+	for _, line := range []string{"", "0:broken:0", "1::1234", "0::not-a-pid"} {
+		if _, err := parsePaneOutput(line); err == nil {
+			t.Fatalf("accepted %q", line)
+		}
+	}
+}
+func TestTickRetriesOneAgentWithoutStoppingOthers(t *testing.T) {
+	ctx := context.Background()
+	m, tm, _, now := setup(t)
+	m.Poll = nil
+	a := definition(m.Home)
+	b := a
+	b.Name = "eng-2"
+	b.AgentID = "agm_2"
+	for _, d := range []AgentDefinition{a, b} {
+		if err := m.Start(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tm.inspectErr = map[string]error{a.Name: errors.New("temporary tmux failure")}
+	tm.inspected = map[string]int{}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tm.inspected[b.Name] != 1 {
+		t.Fatal("healthy agent not inspected")
+	}
+	if tm.inspected[a.Name] != 1 {
+		t.Fatal("failing agent not inspected")
+	}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tm.inspected[a.Name] != 1 {
+		t.Fatal("failing agent retried without backoff")
+	}
+	delete(tm.inspectErr, a.Name)
+	*now = now.Add(5 * time.Second)
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tm.inspected[a.Name] != 2 {
+		t.Fatal("failing agent not retried")
+	}
+}
+func TestCommandTmuxLivePane(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	ctx := context.Background()
+	tm := CommandTmux{Path: "/usr/bin/tmux"}
+	name := "supervisor_live_" + strings.ReplaceAll(time.Now().Format("150405.000000000"), ".", "")
+	defer tm.Kill(ctx, name)
+	if err := tm.Start(ctx, AgentDefinition{Name: name, WorkFolder: t.TempDir()}, []string{"/bin/sleep", "10"}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := tm.Inspect(ctx, name)
+	if err != nil || !p.Exists || p.Dead || p.PID <= 0 {
+		t.Fatalf("live pane %+v %v", p, err)
+	}
 }
 func TestCommandTmuxDeadPane(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/tmux"); err != nil {
