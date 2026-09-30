@@ -60,6 +60,13 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	if !strings.Contains(extension, "use messages and operator-authorized tasks") {
 		t.Fatal("pi tool prompt snippet does not advertise task support")
 	}
+	// A work.start grant must be enough to push a feature branch; agents
+	// stalled asking for a non-existent push approval (ac-cli#14).
+	for name, guidance := range map[string]string{"skill": skill, "extension": extension} {
+		if !strings.Contains(guidance, "committing and pushing feature branches; no other approval is needed") {
+			t.Fatalf("%s guidance does not say work.start covers feature-branch pushes", name)
+		}
+	}
 
 	if !strings.Contains(skill, "aircom update --workstream <code> --agent <agentId> --summary <one-line-text> [--detail <text>] [--task <id|number>]") {
 		t.Fatal("Claude Code skill does not document canonical update flags")
