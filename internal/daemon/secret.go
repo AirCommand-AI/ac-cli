@@ -42,7 +42,8 @@ func MachineSecret(ctx context.Context, store *credentials.Store, client *http.C
 		return "", err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	// The dashboard answers 201 Created for a newly issued secret; accept any 2xx.
+	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return "", fmt.Errorf("machine socket secret request failed (HTTP %d)", response.StatusCode)
 	}
 	var result struct {

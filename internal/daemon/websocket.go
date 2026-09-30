@@ -30,6 +30,8 @@ type SocketClient struct {
 	SecretLoader           func(context.Context) (string, error)
 	Sink                   WakeSink
 	Dialer                 *websocket.Dialer
+	// Log receives one line per failed connect attempt; nil disables it.
+	Log func(string)
 	Backoff                func(context.Context, time.Duration) bool
 	PingInterval           time.Duration
 	mu                     sync.RWMutex
@@ -78,6 +80,9 @@ func (c *SocketClient) Run(ctx context.Context) error {
 		}
 		if errors.Is(err, ErrSocketRevoked) || errors.Is(err, ErrSocketSuperseded) {
 			return err
+		}
+		if err != nil && c.Log != nil {
+			c.Log(fmt.Sprintf("machine socket: %v (retrying)", err))
 		}
 		delay := time.Second << min(attempt, 6)
 		if !wait(ctx, delay) {

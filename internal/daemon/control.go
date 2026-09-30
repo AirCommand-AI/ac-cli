@@ -195,6 +195,9 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 	var ws *SocketClient
 	if len(sockets) > 0 {
 		ws = sockets[0]
+		if ws != nil && ws.Log == nil {
+			ws.Log = func(line string) { _, _ = fmt.Fprintln(logFile, line) }
+		}
 	}
 	if ws != nil {
 		wg.Add(1)

@@ -22,6 +22,8 @@ func TestMachineSecretFetchAndStore(t *testing.T) {
 		if r.URL.Path != "/v1/machine/socket-secret" || r.Method != "POST" || r.Header.Get("Authorization") != "Bearer machine-token" {
 			t.Errorf("request %s %s", r.Method, r.URL.Path)
 		}
+		// The dashboard answers 201 Created (ac-dashboard api/machine_socket.go).
+		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"machineSocketSecret":"` + secret + `"}`))
 	}))
 	defer server.Close()
