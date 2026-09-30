@@ -38,13 +38,18 @@ type APIError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// AircomVersion is the release this daemon binary was built as; the CLI sets it
+// at startup so status can tell a running daemon from a newer installed one.
+var AircomVersion = "dev"
+
 type Response struct {
 	OK    bool      `json:"ok"`
 	Data  any       `json:"data,omitempty"`
 	Error *APIError `json:"error,omitempty"`
 }
 
-func dispatch(ctx context.Context, supervisor Supervisor, request Request, started time.Time, logPath string, pid int, socket *SocketClient) Response {
+func dispatch(ctx context.Context, supervisor Supervisor, request Request, started time.Time, version, logPath string, pid int, socket *SocketClient) Response {
 	fail := func(err error) Response {
 		code := "internal"
 		switch {
@@ -77,7 +82,7 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		if request.Op == "agent.list" {
 			return Response{OK: true, Data: map[string]any{"agents": agents}}
 		}
-		data := map[string]any{"version": 1, "startedAt": started.UTC().Format(time.RFC3339Nano), "logPath": logPath, "pid": pid, "agents": agents}
+		data := map[string]any{"version": 1, "aircomVersion": version, "startedAt": started.UTC().Format(time.RFC3339Nano), "logPath": logPath, "pid": pid, "agents": agents}
 		if socket != nil {
 			data["connection"] = socket.State()
 		}
@@ -183,6 +188,7 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 		return err
 	}
 	started := time.Now()
+	version := AircomVersion // fixed at startup: status reports the running release
 	running, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -229,7 +235,7 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serveConnection(running, conn, supervisor, started, storagepath.DaemonLog(home), os.Getpid(), cancel, &stoppedAgents, ws)
+			serveConnection(running, conn, supervisor, started, version, storagepath.DaemonLog(home), os.Getpid(), cancel, &stoppedAgents, ws)
 		}()
 	}
 	wg.Wait()
@@ -243,7 +249,7 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 	}
 	return nil
 }
-func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, started time.Time, logPath string, pid int, cancel context.CancelFunc, stoppedAgents *atomic.Bool, socket *SocketClient) {
+func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, started time.Time, version, logPath string, pid int, cancel context.CancelFunc, stoppedAgents *atomic.Bool, socket *SocketClient) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	var req Request
@@ -253,7 +259,7 @@ func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, 
 		_ = encoder.Encode(Response{Error: &APIError{Code: "invalid", Message: "invalid JSON request"}})
 		return
 	}
-	response := dispatch(ctx, supervisor, req, started, logPath, pid, socket)
+	response := dispatch(ctx, supervisor, req, started, version, logPath, pid, socket)
 	_ = encoder.Encode(response)
 	if req.Op == "shutdown" && response.OK {
 		if req.StopAgents {

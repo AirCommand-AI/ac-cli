@@ -37,6 +37,7 @@ func main() {
 	}
 	store := credentials.NewStore(home)
 	httpClient := &http.Client{Timeout: 30 * time.Second}
+	daemon.AircomVersion = version
 	commands := daemon.Commands{Home: home, Output: os.Stdout}
 	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
 		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}

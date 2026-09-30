@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -118,7 +119,14 @@ func (s Service) Start(ctx context.Context) error {
 		if _, err := run(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
 			return err
 		}
-		_, err = run(ctx, "systemctl", "--user", "enable", "--now", "aircom-daemon.service")
+		if _, err = run(ctx, "systemctl", "--user", "enable", "--now", "aircom-daemon.service"); err != nil {
+			return err
+		}
+		if running, ok := s.runningVersion(ctx); ok && running != AircomVersion {
+			// KillMode=process: restarting replaces only the daemon; agents keep
+			// running and are re-adopted by the new version.
+			_, err = run(ctx, "systemctl", "--user", "restart", "aircom-daemon.service")
+		}
 		return err
 	case "darwin":
 		file := filepath.Join(s.Home, "Library/LaunchAgents/ai.aircommand.daemon.plist")
@@ -127,11 +135,15 @@ func (s Service) Start(ctx context.Context) error {
 		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 			return readErr
 		}
-		statusCtx, cancel := context.WithTimeout(ctx, time.Second)
-		_, statusErr := Call(statusCtx, s.Home, Request{Op: "status"})
-		cancel()
-		if statusErr == nil && bytes.Equal(previous, []byte(content)) {
-			return nil // The running daemon already has this exact service definition.
+		running, ok := s.runningVersion(ctx)
+		if ok && bytes.Equal(previous, []byte(content)) {
+			if running == AircomVersion {
+				return nil // The running daemon already has this exact service definition.
+			}
+			// Same definition, older binary: SIGTERM leaves agents running and the
+			// restarted daemon re-adopts them.
+			_, err = run(ctx, "launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d", os.Getuid())+"/ai.aircommand.daemon")
+			return err
 		}
 		if err := writeService(file, content); err != nil {
 			return err
@@ -167,4 +179,22 @@ func writeService(file, content string) error {
 		return err
 	}
 	return os.WriteFile(file, []byte(content), 0600)
+}
+
+// runningVersion asks a running daemon for the aircom release it was built as.
+// ok is false when no daemon answers.
+func (s Service) runningVersion(ctx context.Context) (string, bool) {
+	statusCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	data, err := Call(statusCtx, s.Home, Request{Op: "status"})
+	if err != nil {
+		return "", false
+	}
+	var status struct {
+		AircomVersion string `json:"aircomVersion"`
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		return "", true
+	}
+	return status.AircomVersion, true
 }

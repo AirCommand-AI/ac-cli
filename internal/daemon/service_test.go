@@ -135,3 +135,91 @@ func TestServiceStopWithoutDaemon(t *testing.T) {
 		t.Fatalf("stop: %v, called=%v", err, called)
 	}
 }
+
+// After an upgrade the plist is unchanged (same binary path) but the running
+// daemon is the old release: start must restart it (agents survive SIGTERM).
+func TestMacServiceStartRestartsOlderDaemon(t *testing.T) {
+	home := shortHome(t)
+	previous := AircomVersion
+	defer func() { AircomVersion = previous }()
+	AircomVersion = "v1.0.0"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, home, &fakeSupervisor{}) }()
+	for i := 0; i < 200; i++ {
+		if _, err := os.Stat(storagepath.DaemonSocket(home)); err == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	file := filepath.Join(home, "Library/LaunchAgents/ai.aircommand.daemon.plist")
+	if err := writeService(file, LaunchdPlist("/opt/aircom", "/opt/tmux", "/opt/pi", "/opt/bin", storagepath.DaemonLog(home))); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	s := Service{Home: home, OS: "darwin", Aircom: "/opt/aircom", Tmux: "/opt/tmux", Pi: "/opt/pi", Path: "/opt/bin", Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}}
+	// Same version: nothing to do.
+	if err := s.Start(context.Background()); err != nil || len(calls) != 0 {
+		t.Fatalf("same version start: %v, calls=%v", err, calls)
+	}
+	// The CLI is now newer than the running daemon.
+	AircomVersion = "v1.0.1"
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || !strings.Contains(calls[0], "launchctl kickstart -k") {
+		t.Fatalf("upgrade start: %v", calls)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not exit")
+	}
+}
+
+func TestLinuxServiceStartRestartsOlderDaemon(t *testing.T) {
+	home := shortHome(t)
+	previous := AircomVersion
+	defer func() { AircomVersion = previous }()
+	AircomVersion = "v1.0.0"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, home, &fakeSupervisor{}) }()
+	for i := 0; i < 200; i++ {
+		if _, err := os.Stat(storagepath.DaemonSocket(home)); err == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	var calls []string
+	s := Service{Home: home, OS: "linux", Aircom: "/opt/aircom", Tmux: "/usr/bin/tmux", Pi: "/opt/pi", Path: "/usr/bin:/opt", Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "loginctl" {
+			return []byte("yes\n"), nil
+		}
+		return nil, nil
+	}}
+	if err := s.Start(context.Background()); err != nil || len(calls) != 3 {
+		t.Fatalf("same version start: %v, calls=%v", err, calls)
+	}
+	AircomVersion = "v1.0.1"
+	calls = nil
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 4 || !strings.Contains(calls[3], "systemctl --user restart aircom-daemon.service") {
+		t.Fatalf("upgrade start: %v", calls)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not exit")
+	}
+}
