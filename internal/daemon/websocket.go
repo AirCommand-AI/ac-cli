@@ -31,11 +31,11 @@ type SocketClient struct {
 	Sink                   WakeSink
 	Dialer                 *websocket.Dialer
 	// Log receives one line per failed connect attempt; nil disables it.
-	Log func(string)
-	Backoff                func(context.Context, time.Duration) bool
-	PingInterval           time.Duration
-	mu                     sync.RWMutex
-	state                  SocketState
+	Log          func(string)
+	Backoff      func(context.Context, time.Duration) bool
+	PingInterval time.Duration
+	mu           sync.RWMutex
+	state        SocketState
 }
 
 func (c *SocketClient) State() SocketState         { c.mu.RLock(); defer c.mu.RUnlock(); return c.state }
