@@ -54,6 +54,7 @@ type AgentDefinition struct {
 	LastExit         *Exit            `json:"lastExit,omitempty"`
 	Pi               *PiProcess       `json:"pi,omitempty"`
 	Takeover         *TakeoverProcess `json:"takeover,omitempty"`
+	TakeoverSince    string           `json:"takeoverSince,omitempty"`
 	SessionMigrated  bool             `json:"sessionMigrated,omitempty"`
 	Nudge            *NudgeState      `json:"nudge,omitempty"`
 	SessionStartedAt string           `json:"sessionStartedAt,omitempty"`

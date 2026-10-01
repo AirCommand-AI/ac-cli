@@ -30,6 +30,7 @@ func TestTakeoverKeepsForegroundWhenControlFenceLost(t *testing.T) {
 		_ = encoder.Encode(map[string]any{"ok": true, "data": map[string]any{"piPath": path, "workDir": ".", "sessionId": "test", "args": []string{}}})
 		var pid map[string]any
 		_ = decoder.Decode(&pid)
+		_ = encoder.Encode(map[string]any{"type": "error", "text": "cannot record takeover pid"})
 	}()
 	done := make(chan error, 1)
 	stderr := new(bytes.Buffer)
@@ -50,4 +51,7 @@ func TestTakeoverKeepsForegroundWhenControlFenceLost(t *testing.T) {
 		t.Fatal("foreground pi hung")
 	}
 	// A dropped daemon connection must not kill the foreground process.
+	if !bytes.Contains(stderr.Bytes(), []byte("cannot record takeover pid")) {
+		t.Fatalf("daemon error frame not shown: %s", stderr)
+	}
 }

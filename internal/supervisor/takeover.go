@@ -7,6 +7,23 @@ import (
 	"time"
 )
 
+func takeoverGraceActive(since string, now time.Time) bool {
+	at, err := time.Parse(time.RFC3339Nano, since)
+	return err == nil && now.Sub(at) < 30*time.Second
+}
+
+// Called with m.mu held. A slow ps lookup must never hold the supervisor lock.
+func (m *Manager) takeoverAliveOutsideLock(a *managed) bool {
+	p := a.def.Takeover
+	m.mu.Unlock()
+	alive := takeoverAlive(p)
+	m.mu.Lock()
+	if a.def.Takeover != p {
+		return true
+	} // changed fence: refuse to relaunch
+	return alive
+}
+
 // Takeover fences the headless process before the CLI may open the same
 // session in the foreground. The agent lock remains owned by the daemon.
 func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, error) {
@@ -42,10 +59,13 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 		a.def.Pi = nil
 	}
 	a.def.State = "taken-over"
+	a.def.TakeoverSince = m.now().Format(time.RFC3339Nano)
 	a.nextPoll = m.now()
 	if err := m.save(a); err != nil {
 		a.takenOver = false
 		a.takeoverConnected = false
+		a.def.State = "starting"
+		a.def.TakeoverSince = ""
 		return TakeoverSpec{}, err
 	}
 	args := []string{"--aircommand-workstream", def.Workstream, "--aircommand-agent", def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(def.AgentID), "--session-id", def.AgentID}
@@ -76,10 +96,11 @@ func (m *Manager) ResumeTakeover(name string) error {
 		return nil
 	}
 	a.takeoverConnected = false
-	if takeoverAlive(a.def.Takeover) {
+	if m.takeoverAliveOutsideLock(a) {
 		return fmt.Errorf("foreground pi is still running")
 	}
 	a.def.Takeover = nil
+	a.def.TakeoverSince = ""
 	a.takenOver = false
 	if a.def.Desired == "running" && a.def.State == "taken-over" {
 		a.def.State = "starting"

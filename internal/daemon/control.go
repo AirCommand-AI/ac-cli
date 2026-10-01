@@ -408,8 +408,9 @@ func serveTakeover(ctx context.Context, conn net.Conn, reader *bufio.Reader, m S
 		return
 	}
 	pidReported = true
-	if err := m.RecordTakeover(req.Name, child.PID); err != nil {
-		_ = encoder.Encode(map[string]any{"type": "error", "text": err.Error()})
+	recordErr := m.RecordTakeover(req.Name, child.PID)
+	if recordErr != nil {
+		_ = encoder.Encode(map[string]any{"type": "error", "text": recordErr.Error()})
 	}
 	// Hold the lock/session fence while the CLI owns the foreground process.
 	for {
@@ -420,6 +421,18 @@ func serveTakeover(ctx context.Context, conn net.Conn, reader *bufio.Reader, m S
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		// If the start-time lookup or persistence failed, never reopen the
+		// session while that unfenced foreground PID still exists.
+		if recordErr != nil {
+			if err := syscall.Kill(child.PID, 0); err == nil || !errors.Is(err, syscall.ESRCH) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					continue
+				}
+			}
+		}
 		if err := m.ResumeTakeover(req.Name); err == nil {
 			return
 		}

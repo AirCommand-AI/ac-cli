@@ -76,7 +76,22 @@ func (c Client) Takeover(ctx context.Context, name string, input io.Reader, outp
 	// pi. The persisted takeover fences the restarted daemon; never kill pi.
 	lost := make(chan struct{})
 	waitResult := make(chan error, 1)
-	go func() { _, _ = io.Copy(io.Discard, conn); close(lost) }()
+	go func() {
+		defer close(lost)
+		decoder := json.NewDecoder(conn)
+		for {
+			var frame struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if decoder.Decode(&frame) != nil {
+				return
+			}
+			if frame.Type == "error" {
+				fmt.Fprintf(safeStderr, "takeover daemon error: %s\n", frame.Text)
+			}
+		}
+	}()
 	go func() { waitResult <- command.Wait() }()
 	select {
 	case err = <-waitResult:

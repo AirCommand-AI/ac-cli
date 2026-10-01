@@ -5,10 +5,63 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type failingRecordSupervisor struct {
+	*fakeSupervisor
+	resumeCalls atomic.Int32
+}
+
+func (f *failingRecordSupervisor) RecordTakeover(string, int) error {
+	return errors.New("cannot record pid")
+}
+func (f *failingRecordSupervisor) ResumeTakeover(string) error { f.resumeCalls.Add(1); return nil }
+func TestRecordFailureKeepsTakeoverUntilUnfencedPIDExits(t *testing.T) {
+	server, client := net.Pipe()
+	f := &failingRecordSupervisor{fakeSupervisor: &fakeSupervisor{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveConnection(ctx, server, f, time.Now(), "dev", "", 0, func() {}, new(atomic.Bool), nil)
+	}()
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	enc := json.NewEncoder(client)
+	dec := json.NewDecoder(client)
+	_ = enc.Encode(Request{Op: "agent.takeover", Name: "eng-1"})
+	var ready Response
+	if err := dec.Decode(&ready); err != nil || !ready.OK {
+		t.Fatalf("ready %+v %v", ready, err)
+	}
+	_ = enc.Encode(map[string]any{"type": "pid", "pid": os.Getpid()})
+	var frame struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := dec.Decode(&frame); err != nil || frame.Type != "error" {
+		t.Fatalf("missing error frame %+v %v", frame, err)
+	}
+	_ = client.Close()
+	select {
+	case <-done:
+		t.Fatal("resumed while unfenced foreground pid alive")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if got := f.resumeCalls.Load(); got != 0 {
+		t.Fatalf("resumed %d times", got)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown blocked")
+	}
+}
 
 type waitingTakeoverSupervisor struct {
 	*fakeSupervisor

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 )
 
 func takeoverStartTime(pid int) string {
@@ -16,5 +17,5 @@ func takeoverStartTime(pid int) string {
 	return strings.TrimSpace(string(out))
 }
 func takeoverAlive(p *TakeoverProcess) bool {
-	return p != nil && p.PID > 0 && p.StartTime != "" && takeoverStartTime(p.PID) == p.StartTime
+	return p != nil && p.PID > 0 && p.StartTime != "" && syscall.Kill(p.PID, 0) == nil && takeoverStartTime(p.PID) == p.StartTime
 }

@@ -239,11 +239,16 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 	}
 	a := &managed{def: def, legacySession: !def.SessionMigrated}
 	if def.State == "taken-over" || def.Takeover != nil {
-		if takeoverAlive(def.Takeover) {
+		// Process inspection (ps on macOS) is external I/O, never hold m.mu.
+		m.mu.Unlock()
+		alive := takeoverAlive(def.Takeover)
+		m.mu.Lock()
+		if alive || def.Takeover == nil && takeoverGraceActive(def.TakeoverSince, m.now()) {
 			a.takenOver = true
 			a.nextPoll = m.now()
 		} else {
 			a.def.Takeover = nil
+			a.def.TakeoverSince = ""
 			a.def.State = "starting"
 		}
 	}
@@ -597,7 +602,11 @@ func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 func (m *Manager) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	agents := make([]*managed, 0, len(m.agents))
 	for _, a := range m.agents {
+		agents = append(agents, a)
+	}
+	for _, a := range agents {
 		if a.def.Desired != "running" || a.def.State == "crashed" || a.def.State == "stopped-by-dashboard" || m.now().Before(a.nextRetry) {
 			continue
 		}
@@ -623,9 +632,10 @@ func (m *Manager) tickAgent(ctx context.Context, a *managed) error {
 	}
 	if a.def.Mode == "headless" {
 		if a.takenOver {
-			if !a.takeoverConnected && a.def.Takeover != nil && !takeoverAlive(a.def.Takeover) {
+			if !a.takeoverConnected && (a.def.Takeover != nil && !m.takeoverAliveOutsideLock(a) || a.def.Takeover == nil && !takeoverGraceActive(a.def.TakeoverSince, m.now())) {
 				a.takenOver = false
 				a.def.Takeover = nil
+				a.def.TakeoverSince = ""
 				a.def.State = "starting"
 				if err := m.save(a); err != nil {
 					return err

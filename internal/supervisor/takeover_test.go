@@ -40,6 +40,41 @@ func TestTakeoverPersistsPIDAndRefusesMutations(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestBootGracesTakeoverWithoutRecordedPID(t *testing.T) {
+	ctx := context.Background()
+	m, tm, poll, now := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	m.NewDriver = func(io.Writer) pidriver.Driver { return pidriver.NewFake() }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Takeover(ctx, d.Name); err != nil {
+		t.Fatal(err)
+	}
+	m.release(m.agents[d.Name])
+	next := New(m.Home, m.Pi, m.CLI, tm, poll)
+	next.Now = func() time.Time { return *now }
+	next.NewDriver = m.NewDriver
+	next.mu.Lock()
+	err := next.bootAgent(ctx, m.definitionPath(d.AgentID))
+	next.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := next.agents[d.Name]
+	if !a.takenOver || a.driver != nil {
+		t.Fatal("restarted daemon ignored no-pid grace")
+	}
+	a.nextPoll = now.Add(time.Hour)
+	if err := next.Tick(ctx); err != nil || !a.takenOver {
+		t.Fatalf("grace lost early: %v", err)
+	}
+	*now = now.Add(31 * time.Second)
+	if err := next.Tick(ctx); err != nil || a.takenOver {
+		t.Fatalf("stale no-pid takeover not released: %v", err)
+	}
+}
 func TestTakeoverSurvivesDaemonRestart(t *testing.T) {
 	ctx := context.Background()
 	m, tm, poll, _ := setup(t)
