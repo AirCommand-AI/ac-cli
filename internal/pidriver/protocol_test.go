@@ -132,6 +132,29 @@ func TestProcSnapshot(t *testing.T) {
 		t.Fatal("missing /proc cmdline")
 	}
 }
+func TestResponseIDDoesNotMatchDialogID(t *testing.T) {
+	d, b := protocolDriver()
+	d.dispatch(Outgoing{Text: "work"})
+	_ = record(t, b)
+	d.handle([]byte(`{"type":"extension_ui_request","id":"1","method":"editor"}`))
+	_ = record(t, b)
+	if len(d.pending) != 1 {
+		t.Fatal("dialog consumed prompt response id")
+	}
+}
+func TestInterruptPromptCompactionRetry(t *testing.T) {
+	d, b := protocolDriver()
+	d.dispatch(Outgoing{Kind: Interrupt, Text: "now"})
+	_ = record(t, b)
+	d.handle([]byte(`{"type":"response","id":"1","command":"clear_queue","success":true,"data":{}}`))
+	_ = record(t, b)
+	d.handle([]byte(`{"type":"response","id":"2","command":"abort","success":true}`))
+	_ = record(t, b)
+	d.handle([]byte(`{"type":"response","id":"3","command":"prompt","success":false,"error":"compaction in progress"}`))
+	if !d.compacting || len(d.outgoing) != 1 || d.outgoing[0].Kind != Interrupt {
+		t.Fatalf("lost interrupt retry: %+v", d.outgoing)
+	}
+}
 func TestGuidance(t *testing.T) {
 	s := FormatMessageGuidance("/bin/air'com", "980", "agent", "wake", "mid", "sender")
 	if !strings.Contains(s, `'/bin/air'"'"'com' inbox`) || !strings.Contains(s, "Pointer only, no body.") || !strings.Contains(s, "ack") {

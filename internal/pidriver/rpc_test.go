@@ -39,6 +39,9 @@ func TestFakePi(t *testing.T) {
 		}
 		typ := m["type"]
 		id := m["id"]
+		if os.Getenv("PIDRIVER_TRACE_COMMANDS") == "1" {
+			_ = enc.Encode(map[string]any{"type": "fake_command", "command": typ, "message": m["message"], "streamingBehavior": m["streamingBehavior"]})
+		}
 		switch typ {
 		case "get_state":
 			_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "get_state", "success": true, "data": map[string]any{}})
@@ -49,9 +52,29 @@ func TestFakePi(t *testing.T) {
 				}
 			}
 		case "prompt":
-			_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "prompt", "success": true, "data": map[string]any{"disposition": "started"}})
+			if os.Getenv("PIDRIVER_FAKE_NO_DISPOSITION") == "1" {
+				_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "prompt", "success": true})
+			} else {
+				_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "prompt", "success": true, "data": map[string]any{"disposition": "started"}})
+			}
 			_ = enc.Encode(map[string]any{"type": "agent_start"})
-			_ = enc.Encode(map[string]any{"type": "agent_settled"})
+			if os.Getenv("PIDRIVER_FAKE_BURST") == "1" {
+				for i := 0; i < 2000; i++ {
+					_ = enc.Encode(map[string]any{"type": "message_update", "i": i})
+				}
+			}
+			if os.Getenv("PIDRIVER_FAKE_ABORT_HANG") == "1" {
+				_ = enc.Encode(map[string]any{"type": "tool_execution_start", "toolCallId": "t", "toolName": "bash"})
+			} else {
+				_ = enc.Encode(map[string]any{"type": "agent_settled"})
+			}
+		case "abort":
+			_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "abort", "success": true})
+			_ = enc.Encode(map[string]any{"type": "tool_execution_end", "toolCallId": "t"})
+		case "burst":
+			for i := 0; i < 2000; i++ {
+				_ = enc.Encode(map[string]any{"type": "message_update", "i": i})
+			}
 		default:
 			_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": typ, "success": true})
 		}

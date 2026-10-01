@@ -5,6 +5,7 @@ package pidriver
 import (
 	"context"
 	"flag"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,6 +25,11 @@ func TestRealPiRPC(t *testing.T) {
 		if err := d.Stop(stopCtx); err != nil {
 			t.Error(err)
 		}
+		select {
+		case <-d.Exited():
+		case <-time.After(time.Second):
+			t.Error("Exited not reported after Stop")
+		}
 	}()
 	select {
 	case <-d.Ready():
@@ -34,10 +40,32 @@ func TestRealPiRPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	deadline := time.After(90 * time.Second)
+	sawResponse, sawUser := false, false
+	var userRecord map[string]any
 	for {
 		select {
 		case ev := <-d.Events():
+			if ev.Kind == "response" && ev.Data["command"] == "prompt" && ev.Data["success"] == true {
+				sawResponse = true
+			}
+			if ev.Kind == "message_start" {
+				if msg, ok := ev.Data["message"].(map[string]any); ok && msg["role"] == "user" {
+					userRecord = msg
+					if blocks, ok := msg["content"].([]any); ok {
+						for _, block := range blocks {
+							if part, ok := block.(map[string]any); ok {
+								if text, ok := part["text"].(string); ok && strings.HasPrefix(text, "[AirCommand] ") {
+									sawUser = true
+								}
+							}
+						}
+					}
+				}
+			}
 			if ev.Kind == "agent_settled" {
+				if !sawResponse || !sawUser {
+					t.Fatalf("missing prompt acceptance or prefixed user message: response=%v user=%v record=%v", sawResponse, sawUser, userRecord)
+				}
 				return
 			}
 		case <-deadline:
