@@ -197,6 +197,13 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 		t.Fatal("missing first startup prompt")
 	}
 	drivers[0].MarkReady()
+	statuses, err := m.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 || statuses[0].Mode != "headless" || statuses[0].PiState != "idle" {
+		t.Fatalf("ready pi list status: %+v", statuses)
+	}
 	viewer, cancelViewer, ok := m.Subscribe(d.Name)
 	if !ok {
 		t.Fatal("headless event subscription unavailable")
@@ -253,6 +260,44 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	}
 	if len(drivers) != 2 || drivers[1].Launches[0].SessionID != d.AgentID {
 		t.Fatal("headless crash did not resume the same session")
+	}
+}
+
+type blockingDriver struct {
+	*pidriver.Fake
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *blockingDriver) Start(spec pidriver.LaunchSpec) error {
+	close(d.entered)
+	<-d.release
+	return d.Fake.Start(spec)
+}
+
+func TestHeadlessWakeDuringStartupFollowsBackstop(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, _ := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	f := &blockingDriver{Fake: pidriver.NewFake(), entered: make(chan struct{}), release: make(chan struct{})}
+	m.NewDriver = func(io.Writer) pidriver.Driver { return f }
+	done := make(chan error, 1)
+	go func() { done <- m.Start(ctx, d) }()
+	<-f.entered
+	n := Notification{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "agm_lead", SenderNature: "agent", Priority: "urgent"}
+	if err := m.Wake(ctx, d.AgentID, n); err != nil {
+		t.Fatal(err)
+	}
+	close(f.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Sent) != 2 || f.Sent[0].Source != "startup" || f.Sent[1].Source != n.MessageID || f.Sent[1].Kind != pidriver.Urgent {
+		t.Fatalf("wake before startup prompt: %+v", f.Sent)
+	}
+	if err := m.Stop(ctx, d.Name); err != nil {
+		t.Fatal(err)
 	}
 }
 
