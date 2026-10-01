@@ -160,7 +160,7 @@ func (d *RPC) read(r io.Reader) {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 && line[len(line)-1] == '\n' {
 			d.mu.Lock()
-			d.lines = append(d.lines, bytes.TrimSuffix(line, []byte{'\n'}))
+			d.lines = append(d.lines, bytes.TrimSuffix(bytes.TrimSuffix(line, []byte{'\n'}), []byte{'\r'}))
 			d.mu.Unlock()
 			d.wake()
 		}
@@ -314,10 +314,13 @@ func (d *RPC) handle(line []byte) {
 		delete(d.pending, id)
 		d.mu.Unlock()
 		if found && v["success"] == false {
-			d.mu.Lock()
-			d.outgoing = append([]Outgoing{msg}, d.outgoing...)
-			d.compacting = true
-			d.mu.Unlock()
+			reason, _ := v["error"].(string)
+			if strings.Contains(strings.ToLower(reason), "compact") {
+				d.mu.Lock()
+				d.outgoing = append([]Outgoing{msg}, d.outgoing...)
+				d.compacting = true
+				d.mu.Unlock()
+			}
 		}
 		if typ == "response" && v["command"] == "get_state" && v["success"] == true {
 			d.mu.Lock()
