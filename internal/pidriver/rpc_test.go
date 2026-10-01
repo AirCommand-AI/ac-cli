@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -20,11 +22,19 @@ func TestFakePi(t *testing.T) {
 		fmt.Println("pi 0.99.1")
 		return
 	}
+	if os.Getenv("PIDRIVER_HANG_ON_EOF") == "1" {
+		signal.Ignore(syscall.SIGTERM)
+	}
 	dec := json.NewDecoder(os.Stdin)
 	enc := json.NewEncoder(os.Stdout)
 	for {
 		var m map[string]any
 		if dec.Decode(&m) != nil {
+			if os.Getenv("PIDRIVER_HANG_ON_EOF") == "1" {
+				for {
+					time.Sleep(time.Hour)
+				}
+			}
 			return
 		}
 		typ := m["type"]
@@ -79,6 +89,36 @@ func TestRPCFakeProcess(t *testing.T) {
 	defer cancel()
 	if err := d.Stop(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestStopWithoutDeadline(t *testing.T) {
+	t.Setenv("PIDRIVER_FAKE_PI", "1")
+	t.Setenv("PIDRIVER_HANG_ON_EOF", "1")
+	path := filepath.Join(t.TempDir(), "pi")
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'pi 0.99.1'; else exec %q -test.run=^TestFakePi$; fi\n", os.Args[0])
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	d := New(Options{})
+	if err := d.Start(LaunchSpec{PiPath: path, WorkDir: ".", SessionID: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-d.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("not ready")
+	}
+	begin := time.Now()
+	if err := d.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(begin); elapsed < 5*time.Second || elapsed > 10*time.Second {
+		t.Fatalf("stop took %v, expected grace then group termination", elapsed)
+	}
+	select {
+	case <-d.Exited():
+	default:
+		t.Fatal("Stop consumed Exited")
 	}
 }
 func TestVersion(t *testing.T) {

@@ -405,26 +405,30 @@ func (d *RPC) Stop(ctx context.Context) error {
 		return nil
 	}
 	_ = stdin.Close()
-	select {
-	case <-d.done:
+	wait := func(grace time.Duration) bool {
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-d.done:
+			return true
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+			return false
+		}
+	}
+	if wait(5 * time.Second) {
 		return nil
-	case <-ctx.Done():
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	timer := time.NewTimer(2 * time.Second)
-	defer timer.Stop()
-	select {
-	case <-d.done:
+	if wait(3 * time.Second) {
 		return nil
-	case <-timer.C:
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	select {
-	case <-d.done:
+	if wait(2 * time.Second) {
 		return nil
-	case <-time.After(2 * time.Second):
-		return errors.New("pi group did not exit")
 	}
+	return errors.New("pi group did not exit after SIGKILL")
 }
 
 var _ Driver = (*RPC)(nil)
