@@ -48,7 +48,7 @@ func TestRPCFakeProcess(t *testing.T) {
 	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
-	d := New()
+	d := New(Options{})
 	if err := d.Send(Outgoing{Text: "/not-a-command", Kind: Urgent}); err != nil {
 		t.Fatal(err)
 	}

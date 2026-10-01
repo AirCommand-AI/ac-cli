@@ -4,6 +4,7 @@ package pidriver
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -16,6 +17,12 @@ type Driver interface {
 	Events() <-chan Event
 	State() Snapshot
 	Stop(ctx context.Context) error
+}
+
+// Options configures a production driver; zero values use stderr and time.Now.
+type Options struct {
+	Log   io.Writer
+	Clock func() time.Time
 }
 
 type LaunchSpec struct {
@@ -55,4 +62,5 @@ type Snapshot struct {
 	LastEvent                 time.Time
 	PID, PGID                 int
 	StartTime                 string
+	Cmdline                   []string
 }

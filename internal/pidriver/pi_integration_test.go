@@ -12,7 +12,7 @@ import (
 var piPath = flag.String("pi-path", "pi", "pi executable for integration tests")
 
 func TestRealPiRPC(t *testing.T) {
-	d := New()
+	d := New(Options{})
 	if err := d.Start(LaunchSpec{PiPath: *piPath, WorkDir: t.TempDir(), SessionID: "pidriver-integration-" + time.Now().Format("20060102150405")}); err != nil {
 		t.Fatal(err)
 	}

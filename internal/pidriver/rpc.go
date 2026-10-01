@@ -22,6 +22,7 @@ import (
 // in run; the stdout reader appends to an unbounded queue and never waits for
 // event consumers or command processing.
 type RPC struct {
+	opts           Options
 	mu             sync.Mutex
 	cmd            *exec.Cmd
 	stdin          io.WriteCloser
@@ -44,8 +45,8 @@ type RPC struct {
 	restore        []string
 }
 
-func New() *RPC {
-	return &RPC{ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
+func New(opts Options) Driver {
+	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
 }
 func (d *RPC) Ready() <-chan struct{} { return d.ready }
 func (d *RPC) Exited() <-chan Exit    { return d.exited }
@@ -106,7 +107,10 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	if err != nil {
 		return err
 	}
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = d.opts.Log
+	if cmd.Stderr == nil {
+		cmd.Stderr = os.Stderr
+	}
 	if err = cmd.Start(); err != nil {
 		return err
 	}
@@ -116,6 +120,7 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	d.state.PID = cmd.Process.Pid
 	d.state.PGID = cmd.Process.Pid
 	d.state.StartTime = processStartTime(cmd.Process.Pid)
+	d.state.Cmdline = append([]string{spec.PiPath}, args...)
 	d.mu.Unlock()
 	go d.read(stdout)
 	go d.run()
@@ -352,7 +357,11 @@ func (d *RPC) handle(line []byte) {
 		}
 	}
 	d.mu.Lock()
-	d.state.LastEvent = time.Now()
+	now := time.Now
+	if d.opts.Clock != nil {
+		now = d.opts.Clock
+	}
+	d.state.LastEvent = now()
 	switch typ {
 	case "agent_start":
 		d.state.Streaming = true

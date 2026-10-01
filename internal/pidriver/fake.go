@@ -29,6 +29,7 @@ func (f *Fake) Start(s LaunchSpec) error {
 		return errors.New("already started")
 	}
 	f.Launches = append(f.Launches, s)
+	f.Snapshot.Cmdline = append([]string{s.PiPath, "--mode", "rpc", "--session-id", s.SessionID}, s.Args...)
 	return nil
 }
 func (f *Fake) Ready() <-chan struct{} { return f.ReadyCh }
