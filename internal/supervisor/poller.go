@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
 // HTTPPoller uses the shared agent API wire contract. BaseURL is the same
@@ -191,6 +193,15 @@ func (p *HTTPPoller) InFlight(ctx context.Context, d AgentDefinition) (InFlightT
 func (p *HTTPPoller) StateReason(ctx context.Context, d AgentDefinition, state, reason string) error {
 	payload := map[string]string{"state": state, "reason": reason, "source": "daemon", "at": time.Now().UTC().Format(time.RFC3339Nano)}
 	_, err := p.apiCall(ctx, d, http.MethodPut, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/agents/me/state", payload)
+	return err
+}
+func (p *HTTPPoller) NudgeUpdate(ctx context.Context, d AgentDefinition, task InFlightTask) error {
+	id, err := secrets.IdempotencyID(rand.Reader)
+	if err != nil {
+		return err
+	}
+	payload := map[string]string{"summary": fmt.Sprintf("Auto-nudged after 15m without progress on %s", taskLabel(task)), "taskId": task.ID, "idempotencyId": id}
+	_, err = p.apiCall(ctx, d, http.MethodPost, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/updates", payload)
 	return err
 }
 func (p *HTTPPoller) MessageBody(ctx context.Context, d AgentDefinition, id string) (string, error) {

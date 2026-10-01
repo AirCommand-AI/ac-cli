@@ -131,5 +131,16 @@ func (m *Manager) checkStall(ctx context.Context, a *managed) {
 			log.Printf("supervisor: agent %s: reset failed nudge: %v", def.Name, saveErr)
 		}
 		log.Printf("supervisor: agent %s: auto-nudge: %v", def.Name, err)
+		return
+	}
+	if updates, ok := m.Poll.(interface {
+		NudgeUpdate(context.Context, AgentDefinition, InFlightTask) error
+	}); ok {
+		m.mu.Unlock()
+		updateErr := updates.NudgeUpdate(ctx, def, task)
+		m.mu.Lock()
+		if updateErr != nil {
+			log.Printf("supervisor: agent %s: nudge update: %v", def.Name, updateErr)
+		}
 	}
 }
