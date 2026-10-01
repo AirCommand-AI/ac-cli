@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
@@ -34,6 +35,7 @@ type Request struct {
 	WorkFolder   string   `json:"workFolder,omitempty"`
 	Mode         string   `json:"mode,omitempty"`
 	StopAgents   bool     `json:"stopAgents,omitempty"`
+	Text         string   `json:"text,omitempty"`
 }
 type APIError struct {
 	Code    string `json:"code"`
@@ -262,14 +264,22 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 }
 func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, started time.Time, version, logPath string, pid int, cancel context.CancelFunc, stoppedAgents *atomic.Bool, socket *SocketClient) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	var req Request
 	encoder := json.NewEncoder(conn)
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	// One reader for the lifetime of the stream preserves buffered client input.
+	reader := bufio.NewReader(conn)
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	line, err := reader.ReadBytes('\n')
 	if err != nil || len(line) > 1024*1024 || json.Unmarshal(line, &req) != nil {
 		_ = encoder.Encode(Response{Error: &APIError{Code: "invalid", Message: "invalid JSON request"}})
 		return
 	}
+	if req.Op == "agent.attach" {
+		_ = conn.SetDeadline(time.Time{})
+		serveAttach(ctx, conn, reader, supervisor, req)
+		return
+	}
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	response := dispatch(ctx, supervisor, req, started, version, logPath, pid, socket)
 	_ = encoder.Encode(response)
 	if req.Op == "shutdown" && response.OK {
@@ -277,6 +287,79 @@ func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, 
 			stoppedAgents.Store(true)
 		}
 		cancel()
+	}
+}
+
+// serveAttach owns one viewer only; the supervisor's event consumer is never
+// blocked by the viewer. The control socket's 0600 permissions restrict access.
+func serveAttach(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Supervisor, req Request) {
+	encoder := json.NewEncoder(conn)
+	events, cancel, ok := m.Subscribe(req.Name)
+	if !ok {
+		_ = encoder.Encode(Response{Error: &APIError{Code: "not_found", Message: "headless agent not running"}})
+		return
+	}
+	defer cancel()
+	_ = encoder.Encode(Response{OK: true, Data: map[string]any{"mode": "headless"}})
+	incoming := make(chan Request, 1)
+	go func() {
+		defer close(incoming)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var item Request
+			if json.Unmarshal(line, &item) != nil {
+				return
+			}
+			select {
+			case incoming <- item:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	// Shutdown must close the socket to unblock writes to an unresponsive viewer.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, open := <-events:
+			if !open {
+				return
+			}
+			if err := encoder.Encode(map[string]any{"type": "event", "event": ev}); err != nil {
+				return
+			}
+		case item, open := <-incoming:
+			if !open || item.Op == "detach" {
+				return
+			}
+			if item.Op == "interrupt" {
+				_ = encoder.Encode(map[string]any{"type": "banner", "text": "Interrupt is not available until the audited machine route is connected"})
+				continue
+			}
+			if item.Op == "say" && strings.TrimSpace(item.Text) != "" {
+				driver, ok := m.Driver(req.Name)
+				if !ok {
+					return
+				}
+				if err := driver.Send(pidriver.Outgoing{Text: item.Text, Kind: pidriver.Urgent, Source: "attach"}); err != nil {
+					_ = encoder.Encode(map[string]any{"type": "banner", "text": err.Error()})
+					return
+				}
+			}
+		}
 	}
 }
 

@@ -127,6 +127,15 @@ func (a *App) runAgent(args []string) error {
 		if len(args) != 2 || !daemonclient.ValidAgentName(args[1]) {
 			return &publicError{message: agentUsage}
 		}
+		agents, err := client.List(ctx)
+		if err != nil {
+			return err
+		}
+		for _, agent := range agents {
+			if agent.Name == args[1] && agent.Mode == "headless" {
+				return client.Attach(ctx, args[1], a.inputReader(), a.outputWriter())
+			}
+		}
 		command := exec.Command("tmux", "-L", "aircom", "attach", "-t", args[1])
 		command.Stdin = a.inputReader()
 		command.Stdout = a.outputWriter()
