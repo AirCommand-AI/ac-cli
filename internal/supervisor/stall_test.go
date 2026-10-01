@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ type fakeStallPoll struct {
 	reports        []string
 	checks         int
 	body           string
+	failBodyOnce   bool
 }
 
 func (p *fakeStallPoll) InFlight(context.Context, AgentDefinition) (InFlightTask, bool, bool, error) {
@@ -24,11 +26,41 @@ func (p *fakeStallPoll) InFlight(context.Context, AgentDefinition) (InFlightTask
 	return p.task, p.found, p.pending, nil
 }
 func (p *fakeStallPoll) MessageBody(_ context.Context, _ AgentDefinition, _ string) (string, error) {
+	if p.failBodyOnce {
+		p.failBodyOnce = false
+		return "", errors.New("temporary body fetch failure")
+	}
 	return p.body, nil
 }
 func (p *fakeStallPoll) StateReason(_ context.Context, _ AgentDefinition, state, reason string) error {
 	p.reports = append(p.reports, state+":"+reason)
 	return nil
+}
+
+func TestStallReasonRulesAndProgress(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	task := InFlightTask{ID: "task1", Number: 9}
+	for _, tc := range []struct {
+		name         string
+		snap         pidriver.Snapshot
+		has, pending bool
+		reason       string
+		nudge        bool
+	}{
+		{"silent model", pidriver.Snapshot{Streaming: true, LastEvent: now.Add(-16 * time.Minute)}, true, false, "model call silent 15m", false},
+		{"silent tool", pidriver.Snapshot{Streaming: true, CurrentTool: "bash", LastEvent: now.Add(-16 * time.Minute)}, true, false, "tool bash silent 15m", false},
+		{"idle task", pidriver.Snapshot{Settled: true, LastEvent: now.Add(-16 * time.Minute)}, true, false, "idle 15m on task #9", true},
+		{"pending approval", pidriver.Snapshot{Settled: true, LastEvent: now.Add(-16 * time.Minute)}, true, true, "", false},
+		{"no task", pidriver.Snapshot{Settled: true, LastEvent: now.Add(-16 * time.Minute)}, false, false, "", false},
+		{"recent token", pidriver.Snapshot{Streaming: true, LastEvent: now.Add(-time.Minute)}, true, false, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reason, nudge := stallReason(tc.snap, now, task, tc.has, tc.pending)
+			if reason != tc.reason || nudge != tc.nudge {
+				t.Fatalf("got %q/%v want %q/%v", reason, nudge, tc.reason, tc.nudge)
+			}
+		})
+	}
 }
 
 func TestInterruptFetchesBodyAndUsesDriverInterrupt(t *testing.T) {
@@ -50,6 +82,44 @@ func TestInterruptFetchesBodyAndUsesDriverInterrupt(t *testing.T) {
 		t.Fatalf("interrupt delivery: %+v", f.Sent)
 	}
 	if err := m.Stop(context.Background(), d.Name); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInterruptBodyFetchRetriesWithoutOvertakingQueuedWake(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, now := setup(t)
+	p := &fakeStallPoll{body: "Stop now", failBodyOnce: true}
+	m.Poll = p
+	d := definition(m.Home)
+	d.Mode = "headless"
+	f := pidriver.NewFake()
+	m.NewDriver = func(io.Writer) pidriver.Driver { return f }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	m.agents[d.Name].nextPoll = now.Add(time.Hour)
+	n := Notification{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "ac_operator", SenderNature: "human", Kind: "interrupt", Priority: "urgent"}
+	if err := m.Wake(ctx, d.AgentID, n); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Sent) != 1 || len(m.agents[d.Name].pendingWakes) != 1 {
+		t.Fatal("failed body fetch was dropped")
+	}
+	regular := Notification{Type: "message.received", MessageID: "fedcba9876543210", SenderID: "agm_lead", SenderNature: "agent"}
+	if err := m.Wake(ctx, d.AgentID, regular); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Sent) != 1 || len(m.agents[d.Name].pendingWakes) != 2 {
+		t.Fatal("new wake overtook interrupt")
+	}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Sent) != 3 || f.Sent[1].Kind != pidriver.Interrupt || f.Sent[1].Text != "Stop now" || f.Sent[2].Source != regular.MessageID {
+		t.Fatalf("retry order: %+v", f.Sent)
+	}
+	if err := m.Stop(ctx, d.Name); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -123,6 +193,21 @@ func TestSettledInFlightNudgesOnceAndPendingApprovalSuppresses(t *testing.T) {
 	}
 	if len(p.reports) < 2 || !strings.HasPrefix(p.reports[0], "stalled:idle 15m") {
 		t.Fatalf("stall reports: %v", p.reports)
+	}
+	p.task = InFlightTask{ID: "task-2", Number: 8}
+	m.agents[d.Name].nextStallCheck = time.Time{}
+	if err := m.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if m.agents[d.Name].stalled || len(f.Sent) != 2 {
+		t.Fatal("changing task did not end stall")
+	}
+	*now = now.Add(15 * time.Minute)
+	if err := m.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Sent) != 3 || !strings.Contains(f.Sent[2].Text, "task #8") {
+		t.Fatalf("new task was not nudged: %+v", f.Sent)
 	}
 	if err := m.Stop(context.Background(), d.Name); err != nil {
 		t.Fatal(err)
