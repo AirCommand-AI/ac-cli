@@ -6,7 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +21,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
-const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --org <org> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name>"
+const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --org <org> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name> | interrupt <name> --message <text>"
 
 // runAgent implements the command contract without depending on daemon service code.
 func (a *App) runAgent(args []string) error {
@@ -123,6 +126,15 @@ func (a *App) runAgent(args []string) error {
 			}
 		}
 		return nil
+	case "interrupt":
+		if len(args) != 4 || !daemonclient.ValidAgentName(args[1]) || args[2] != "--message" || strings.TrimSpace(args[3]) == "" || len([]rune(args[3])) > 500 {
+			return &publicError{message: agentUsage}
+		}
+		if err := a.interruptAgent(args[1], args[3]); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.outputWriter(), "Interrupt sent to %s.\n", args[1])
+		return nil
 	case "attach":
 		if len(args) != 2 || !daemonclient.ValidAgentName(args[1]) {
 			return &publicError{message: agentUsage}
@@ -133,7 +145,7 @@ func (a *App) runAgent(args []string) error {
 		}
 		for _, agent := range agents {
 			if agent.Name == args[1] && agent.Mode == "headless" {
-				return client.Attach(ctx, args[1], a.inputReader(), a.outputWriter())
+				return client.Attach(ctx, args[1], a.inputReader(), a.outputWriter(), func(text string) error { return a.interruptAgent(args[1], text) })
 			}
 		}
 		command := exec.Command("tmux", "-L", "aircom", "attach", "-t", args[1])
@@ -144,6 +156,43 @@ func (a *App) runAgent(args []string) error {
 	default:
 		return &publicError{message: agentUsage}
 	}
+}
+
+func (a *App) interruptAgent(name, text string) error {
+	agent, err := a.resolveAgent(name)
+	if err != nil {
+		return err
+	}
+	credential, err := a.Store.FindByAgent(agent.WorkstreamCode, agent.AgentID)
+	if err != nil {
+		return err
+	}
+	if credential.OrganizationID == "" {
+		return &publicError{message: "Agent organization is missing from its credential."}
+	}
+	machine, err := a.machineCredential()
+	if err != nil {
+		return err
+	}
+	id, err := secrets.IdempotencyID(a.randomReader())
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"text": text, "idempotencyId": id})
+	if err != nil {
+		return err
+	}
+	previous := a.Organization
+	a.Organization = credential.OrganizationID
+	defer func() { a.Organization = previous }()
+	result, err := a.request(http.MethodPost, "/agent/v1/machines/me/agents/"+url.PathEscape(agent.AgentID)+"/interrupt", machine.APIToken, payload)
+	if err != nil {
+		return err
+	}
+	if result.status < 200 || result.status >= 300 {
+		return &publicError{message: fmt.Sprintf("AirCommand interrupt failed: HTTP %d", result.status)}
+	}
+	return nil
 }
 
 type repoFlags []string

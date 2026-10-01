@@ -12,7 +12,7 @@ import (
 
 // Attach holds an unbounded-deadline control connection for one headless
 // viewer. A detached viewer does not stop the agent.
-func (c Client) Attach(ctx context.Context, name string, input io.Reader, output io.Writer) error {
+func (c Client) Attach(ctx context.Context, name string, input io.Reader, output io.Writer, interrupt func(string) error) error {
 	dial := c.Dial
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
@@ -49,8 +49,13 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 			if text == "/detach" {
 				op = "detach"
 			} else if strings.HasPrefix(text, "/interrupt ") {
-				op = "interrupt"
 				text = strings.TrimPrefix(text, "/interrupt ")
+				if interrupt != nil {
+					if err := interrupt(text); err != nil {
+						fmt.Fprintf(output, "[AirCommand] Interrupt failed: %v\n", err)
+					}
+				}
+				continue
 			}
 			if enc.Encode(map[string]any{"op": op, "text": text}) != nil || op == "detach" {
 				return
