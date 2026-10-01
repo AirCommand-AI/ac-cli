@@ -89,10 +89,39 @@ func TestApprovalCheckOnlyTrustsHumanActiveScopedUnexpiredGrant(t *testing.T) {
 }
 func TestApprovalRejectsInvalidFlagsBeforeRequest(t *testing.T) {
 	a, _, stderr := testApp(t, "http://127.0.0.1:1", "", nil)
-	for _, args := range [][]string{{"approval", "check", "--workstream", "694", "--action", "made.up"}, {"approval", "check", "--workstream", "694", "--action", "deploy.prod", "--note", "not allowed"}, {"approval", "request", "--workstream", "694", "--action", "deploy.prod", "extra"}} {
+	for _, args := range [][]string{{"approval", "check", "--workstream", "694"}, {"approval", "check", "--workstream", "694", "--action", "deploy.prod", "--note", "not allowed"}, {"approval", "request", "--workstream", "694", "--action", "deploy.prod", "extra"}} {
 		stderr.Reset()
 		if a.Run(args) == 0 || !strings.Contains(stderr.String(), "Usage: aircom approval") {
 			t.Fatalf("args %v: %q", args, stderr.String())
+		}
+	}
+}
+
+// An invented action must say which actions exist, not just print usage:
+// an agent asked for "git.push" and stalled waiting for a grant that cannot exist.
+func TestApprovalUnknownActionListsValidActions(t *testing.T) {
+	a, _, stderr := testApp(t, "http://127.0.0.1:1", "", nil)
+	for _, action := range []string{"git.push", "made.up"} {
+		for _, operation := range []string{"check", "request"} {
+			t.Run(operation+" "+action, func(t *testing.T) {
+				stderr.Reset()
+				if a.Run([]string{"approval", operation, "--workstream", "694", "--action", action}) == 0 {
+					t.Fatal("unknown action accepted")
+				}
+				for _, want := range append([]string{`Unknown approval action "` + action + `"`, "pushing feature branches"}, approvalActionOrder...) {
+					if !strings.Contains(stderr.String(), want) {
+						t.Fatalf("missing %q in %q", want, stderr.String())
+					}
+				}
+			})
+		}
+	}
+	if len(approvalActionOrder) != len(approvalActions) {
+		t.Fatalf("approvalActionOrder %v does not match approvalActions", approvalActionOrder)
+	}
+	for _, action := range approvalActionOrder {
+		if !approvalActions[action] {
+			t.Fatalf("approvalActionOrder lists unknown action %q", action)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
@@ -48,8 +49,11 @@ func (a *App) approval(arguments []string) error {
 	if operation == "request" {
 		flags.StringVar(&note, "note", "", "reason for approval")
 	}
-	if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || code == "" || !approvalActions[action] || len(note) > 1000 {
+	if err := flags.Parse(arguments[1:]); err != nil || flags.NArg() != 0 || code == "" || action == "" || len(note) > 1000 {
 		return &publicError{message: approvalUsage}
+	}
+	if !approvalActions[action] {
+		return &publicError{message: unknownApprovalAction(action)}
 	}
 	if err := validateWorkstreamCode(code); err != nil {
 		return err
@@ -141,4 +145,15 @@ func approvalStatusError(status int, code string, credential credentials.Credent
 		return &publicError{message: "Invalid approval action or task. Check the action and task reference."}
 	}
 	return workstreamResponseStatusError(status, nil, code, !checking, credential)
+}
+
+// approvalActionOrder lists approvalActions for error messages, most common first.
+var approvalActionOrder = []string{"work.start", "git.push-main", "release.cli", "deploy.prod", "infra.change"}
+
+// unknownApprovalAction names the valid actions so an agent that guessed one
+// (e.g. git.push, ac-cli#18 follow-up) learns there is nothing else to ask for.
+func unknownApprovalAction(action string) string {
+	return fmt.Sprintf("Unknown approval action %q. The only actions are %s. "+
+		"A passing work.start check already covers a task's normal work, including committing and pushing feature branches.",
+		action, strings.Join(approvalActionOrder, ", "))
 }
