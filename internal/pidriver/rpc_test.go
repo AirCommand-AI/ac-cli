@@ -44,6 +44,9 @@ func TestFakePi(t *testing.T) {
 		}
 		switch typ {
 		case "get_state":
+			if os.Getenv("PIDRIVER_FAKE_EXIT_BEFORE_READY") == "1" {
+				return
+			}
 			_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "get_state", "success": true, "data": map[string]any{}})
 			if os.Getenv("PIDRIVER_STALL_READER") == "1" {
 				signal.Ignore(syscall.SIGTERM)

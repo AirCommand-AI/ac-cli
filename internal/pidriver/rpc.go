@@ -31,6 +31,7 @@ type RPC struct {
 	exited         chan Exit
 	done           chan struct{}
 	readDone       chan struct{}
+	runDone        chan struct{}
 	events         chan Event
 	notify         chan struct{}
 	writerNotify   chan struct{}
@@ -53,7 +54,7 @@ type RPC struct {
 }
 
 func New(opts Options) Driver {
-	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), readDone: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), writerNotify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]toolCall)}
+	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), readDone: make(chan struct{}), runDone: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), writerNotify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]toolCall)}
 }
 func (d *RPC) Ready() <-chan struct{} { return d.ready }
 func (d *RPC) Exited() <-chan Exit    { return d.exited }
@@ -118,17 +119,21 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	if err != nil {
 		return err
 	}
-	stdout, err := cmd.StdoutPipe()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return err
 	}
+	cmd.Stdout = stdoutWriter
 	cmd.Stderr = d.opts.Log
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
 	if err = cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return err
 	}
+	_ = stdoutWriter.Close()
 	d.mu.Lock()
 	d.cmd = cmd
 	d.stdin = stdin
@@ -138,18 +143,20 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	// Cmdline is informational only: node changes process.title after launch.
 	// Populate it from /proc when pi confirms readiness, never use it as a kill fence.
 	d.mu.Unlock()
-	go d.read(stdout)
+	go func() { defer stdout.Close(); d.read(stdout) }()
 	go d.write()
 	go d.run()
 	go func() {
-		// Drain final stdout records before Wait closes the pipe.
+		err := cmd.Wait()
+		// A tool may have left descendants holding stdout open. Kill the group
+		// after the parent exits, then drain final records with a fixed bound.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		select {
 		case <-d.readDone:
 		case <-time.After(2 * time.Second):
+			_ = stdout.Close()
+			<-d.readDone
 		}
-		err := cmd.Wait()
-		// The parent may have left tool children in its own process group.
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		exit := Exit{Err: err}
 		if ps := cmd.ProcessState; ps != nil {
 			exit.Code = ps.ExitCode()
@@ -160,9 +167,15 @@ func (d *RPC) Start(spec LaunchSpec) error {
 		d.mu.Lock()
 		d.closed = true
 		d.mu.Unlock()
+		d.wake()
+		select {
+		case d.writerNotify <- struct{}{}:
+		default:
+		}
+		<-d.runDone
+		d.reportUndelivered()
 		d.exited <- exit
 		close(d.done)
-		d.wake()
 	}()
 	d.command("get_state", nil)
 	return nil
@@ -271,6 +284,7 @@ func (d *RPC) Send(msg Outgoing) error {
 	return nil
 }
 func (d *RPC) run() {
+	defer close(d.runDone)
 	for range d.notify {
 		for {
 			d.mu.Lock()
@@ -339,13 +353,14 @@ func (d *RPC) advanceInterrupt(v map[string]any) {
 		d.outgoing = append(restored, d.outgoing...)
 		d.restore = nil
 		d.interruptPhase = ""
-		d.compacting = compact
+		d.compacting = d.compacting || compact
+		clock := d.opts.Clock
+		if clock == nil {
+			clock = time.Now
+		}
 		d.mu.Unlock()
-		if !d.compacting {
-			select {
-			case d.events <- Event{Kind: "rpc_error", Data: v, At: time.Now()}:
-			default:
-			}
+		if !compact {
+			d.emit(Event{Kind: "rpc_error", Data: v, At: clock()})
 		}
 		d.wake()
 		return
@@ -505,6 +520,9 @@ func (d *RPC) handle(line []byte) {
 	}
 	d.mu.Unlock()
 	ev := Event{Kind: typ, Data: v, At: now()}
+	d.emit(ev)
+}
+func (d *RPC) emit(ev Event) {
 	select {
 	case d.events <- ev:
 	default:
@@ -516,6 +534,24 @@ func (d *RPC) handle(line []byte) {
 		case d.events <- ev:
 		default:
 		}
+	}
+}
+func (d *RPC) reportUndelivered() {
+	d.mu.Lock()
+	remaining := append([]Outgoing(nil), d.outgoing...)
+	for _, msg := range d.pending {
+		remaining = append(remaining, msg)
+	}
+	if d.interruptPhase != "" {
+		remaining = append(remaining, d.interruptMsg)
+	}
+	d.mu.Unlock()
+	clock := d.opts.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	for _, msg := range remaining {
+		d.emit(Event{Kind: "undelivered", Data: map[string]any{"text": msg.Text, "kind": msg.Kind, "source": msg.Source}, At: clock()})
 	}
 }
 func (d *RPC) Stop(ctx context.Context) error {

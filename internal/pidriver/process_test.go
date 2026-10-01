@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,48 @@ func waitEvent(t *testing.T, d Driver, kind string) Event {
 		case <-timer.C:
 			t.Fatalf("missing %s", kind)
 		}
+	}
+}
+func TestUndeliveredMessageReportedOnExit(t *testing.T) {
+	t.Setenv("PIDRIVER_FAKE_EXIT_BEFORE_READY", "1")
+	path := fakeBinary(t)
+	d := New(Options{})
+	if err := d.Send(Outgoing{Text: "pending", Source: "wake"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Start(LaunchSpec{PiPath: path, WorkDir: ".", SessionID: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-d.Exited():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no exit")
+	}
+	ev := waitEvent(t, d, "undelivered")
+	if ev.Data["text"] != "pending" {
+		t.Fatal(ev)
+	}
+}
+func TestWriterGoroutinesExit(t *testing.T) {
+	path := fakeBinary(t)
+	before := runtime.NumGoroutine()
+	for i := 0; i < 20; i++ {
+		d := New(Options{})
+		if err := d.Start(LaunchSpec{PiPath: path, WorkDir: ".", SessionID: fmt.Sprintf("cycle-%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+		<-d.Ready()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err := d.Stop(ctx)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.Gosched()
+	time.Sleep(50 * time.Millisecond)
+	if after := runtime.NumGoroutine(); after > before+4 {
+		t.Fatalf("goroutines leaked across 20 cycles: before=%d after=%d", before, after)
 	}
 }
 func TestProcessQueueBeforeReadyAndNoDisposition(t *testing.T) {
