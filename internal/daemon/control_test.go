@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
@@ -33,6 +34,7 @@ func (f *fakeSupervisor) Start(_ context.Context, d Definition) error {
 	f.record("start:" + d.Name)
 	return nil
 }
+func (f *fakeSupervisor) Driver(string) (pidriver.Driver, bool) { return nil, false }
 func (f *fakeSupervisor) Mode(_ context.Context, name, mode string) error {
 	f.record("mode:" + name + ":" + mode)
 	return nil

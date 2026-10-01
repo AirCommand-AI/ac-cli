@@ -47,6 +47,9 @@ func (m *Manager) Wake(ctx context.Context, agentID string, n agentapi.Notificat
 		if err = listenstore.NewStore(m.Home).AppendNotification(agentID, item); err != nil {
 			return err
 		}
+		if err := m.deliver(a, n); err != nil {
+			return err
+		}
 		a.delivered = append(a.delivered, n.MessageID)
 		if len(a.delivered) > 500 {
 			a.delivered = a.delivered[len(a.delivered)-500:]

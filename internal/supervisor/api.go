@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
+	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"time"
 )
 
@@ -12,6 +13,7 @@ type Supervisor interface {
 	Start(ctx context.Context, def AgentDefinition) error
 	Stop(ctx context.Context, name string) error
 	Mode(ctx context.Context, name, mode string) error
+	Driver(name string) (pidriver.Driver, bool)
 	Remove(ctx context.Context, name string) error
 	List(ctx context.Context) ([]AgentStatus, error)
 	Shutdown(ctx context.Context, stopAgents bool) error

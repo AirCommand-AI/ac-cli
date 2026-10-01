@@ -15,6 +15,7 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
+	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 )
 
 type fakeTmux struct {
@@ -67,6 +68,50 @@ func setup(t *testing.T) (*Manager, *fakeTmux, *fakePoll, *time.Time) {
 func definition(home string) AgentDefinition {
 	return AgentDefinition{AgentID: "agm_1", Name: "eng-1", Organization: "Air Command", Workstream: "626", WorkFolder: filepath.Join(home, "work"), Repos: []string{"org/repo"}}
 }
+func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
+	ctx := context.Background()
+	m, tm, _, now := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	var drivers []*pidriver.Fake
+	m.NewDriver = func() pidriver.Driver {
+		f := pidriver.NewFake()
+		drivers = append(drivers, f)
+		return f
+	}
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if len(tm.launches) != 0 || len(drivers) != 1 || len(drivers[0].Launches) != 1 || drivers[0].Launches[0].SessionID != d.AgentID {
+		t.Fatal("headless must start the RPC driver, not tmux")
+	}
+	if len(drivers[0].Sent) != 1 || drivers[0].Sent[0].Source != "startup" {
+		t.Fatal("missing first startup prompt")
+	}
+	drivers[0].MarkReady()
+	n := Notification{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "ac_sender", SenderNature: "human", Priority: "urgent"}
+	if err := m.Wake(ctx, d.AgentID, n); err != nil {
+		t.Fatal(err)
+	}
+	if len(drivers[0].Sent) != 2 || drivers[0].Sent[1].Kind != pidriver.Urgent {
+		t.Fatal("urgent wake did not reach headless driver")
+	}
+	drivers[0].ExitCh <- pidriver.Exit{Code: 7}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(drivers) != 1 || m.agents[d.Name].def.State != "starting" {
+		t.Fatal("unexpected crash restart")
+	}
+	*now = now.Add(5 * time.Second)
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(drivers) != 2 || drivers[1].Launches[0].SessionID != d.AgentID {
+		t.Fatal("headless crash did not resume the same session")
+	}
+}
+
 func TestModeRequiresStoppedAgentAndPersists(t *testing.T) {
 	m, _, _, _ := setup(t)
 	def := definition(m.Home)
@@ -131,7 +176,7 @@ func TestRestartCutoffAndExplicitFreshStart(t *testing.T) {
 		if err := m.Tick(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if len(tm.launches) != i+1 || !contains(tm.launches[i], "--continue") {
+		if len(tm.launches) != i+1 || !contains(tm.launches[i], "--session-id") {
 			t.Fatal("crash restart must continue")
 		}
 	}
@@ -293,7 +338,7 @@ func TestBootPreservesCrashBackoff(t *testing.T) {
 	if err := other.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(tm.launches) != 2 || !contains(tm.launches[1], "--continue") {
+	if len(tm.launches) != 2 || !contains(tm.launches[1], "--session-id") {
 		t.Fatal("boot did not resume after backoff")
 	}
 	_ = other.Shutdown(ctx, false)
@@ -507,7 +552,7 @@ func TestSignalKilledPaneRestartsWithContinue(t *testing.T) {
 	if err := m.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(tm.launches) != 2 || !contains(tm.launches[1], "--continue") {
+	if len(tm.launches) != 2 || !contains(tm.launches[1], "--session-id") {
 		t.Fatalf("restart args: %v", tm.launches)
 	}
 }

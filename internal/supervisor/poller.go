@@ -1,12 +1,15 @@
 package supervisor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
@@ -75,6 +78,37 @@ func (p *HTTPPoller) Fetch(ctx context.Context, d AgentDefinition, cursor string
 		return Feed{}, fmt.Errorf("%s", agentapi.FailureReason(status, service.Code))
 	}
 	return Feed{Notifications: feed.Notifications, Cursor: *feed.Cursor, PollAfter: agentapi.PollDelay(feed.PollAfterSeconds)}, nil
+}
+
+// State reports headless pi event-derived state through the agent credential.
+func (p *HTTPPoller) State(ctx context.Context, d AgentDefinition, state string) error {
+	if p.Store == nil || p.Client == nil {
+		return fmt.Errorf("state API is not configured")
+	}
+	cred, err := p.Store.FindByAgent(d.Workstream, d.AgentID)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]string{"state": state, "source": "daemon", "at": time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return err
+	}
+	base := strings.TrimRight(p.BaseURL, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/agents/me/state", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+cred.APIToken)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := p.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("state API returned HTTP %d", response.StatusCode)
+	}
+	return nil
 }
 func (p *HTTPPoller) Spool(ctx context.Context, d AgentDefinition, n Notification) (any, error) {
 	var names map[agentapi.SenderIdentity]string

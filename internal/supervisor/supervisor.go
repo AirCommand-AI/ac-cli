@@ -13,9 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
+	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
@@ -29,10 +31,13 @@ type Manager struct {
 	Home, Pi, CLI string
 	Tmux          Tmux
 	Poll          Poller
-	Now           func() time.Time
-	mu            sync.Mutex
-	agents        map[string]*managed
-	booted        chan struct{}
+	// NewDriver constructs an isolated RPC driver for each headless launch.
+	// The production constructor is supplied by the daemon entrypoint.
+	NewDriver func() pidriver.Driver
+	Now       func() time.Time
+	mu        sync.Mutex
+	agents    map[string]*managed
+	booted    chan struct{}
 }
 type managed struct {
 	def                            AgentDefinition
@@ -41,11 +46,26 @@ type managed struct {
 	failures, inspectFailures      int
 	lastPoll                       string
 	pid                            int
+	driver                         pidriver.Driver
+	startupSent                    bool
+	pendingWakes                   []agentapi.Notification
 	delivered                      []string
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
-	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, agents: make(map[string]*managed), booted: make(chan struct{})}
+	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, NewDriver: func() pidriver.Driver { return pidriver.New(pidriver.Options{}) }, agents: make(map[string]*managed), booted: make(chan struct{})}
+}
+
+// Driver returns a running headless agent's driver to attach/stall consumers.
+// They must not call Start, Send or Stop while holding m.mu.
+func (m *Manager) Driver(name string) (pidriver.Driver, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a := m.agents[name]
+	if a == nil || a.driver == nil {
+		return nil, false
+	}
+	return a.driver, true
 }
 func (m *Manager) now() time.Time {
 	if m.Now != nil {
@@ -159,6 +179,15 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 	if _, exists := m.agents[def.Name]; exists {
 		return fmt.Errorf("duplicate agent name %s", def.Name)
 	}
+	if def.Mode == "headless" && def.Pi != nil {
+		m.mu.Unlock()
+		err = killRecordedPi(ctx, def.Pi)
+		m.mu.Lock()
+		if err != nil {
+			return err
+		}
+		def.Pi = nil
+	}
 	a := &managed{def: def}
 	if err = m.loadDelivered(a); err != nil {
 		return err
@@ -213,6 +242,9 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	if def.Mode != "tmux" && def.Mode != "headless" {
 		return fmt.Errorf("unsupported agent mode %q", def.Mode)
 	}
+	if old.Desired == "running" && old.Mode != "" && old.Mode != def.Mode {
+		return fmt.Errorf("agent must be stopped before changing mode")
+	}
 	def.Pi = old.Pi
 	def.Nudge = old.Nudge
 	def.SessionMigrated = old.SessionMigrated && old.WorkFolder == def.WorkFolder
@@ -230,6 +262,9 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	}
 	if err := m.save(a); err != nil {
 		return err
+	}
+	if def.Mode == "headless" {
+		return m.launch(ctx, a, false)
 	}
 	pane, err := m.Tmux.Inspect(ctx, def.Name)
 	if err != nil {
@@ -277,7 +312,22 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	if err := m.save(a); err != nil {
 		return err
 	}
-	if err := m.Tmux.Kill(ctx, name); err != nil {
+	if a.driver != nil {
+		d := a.driver
+		a.driver = nil
+		m.mu.Unlock()
+		err := d.Stop(ctx)
+		m.mu.Lock()
+		if err != nil {
+			return err
+		}
+	} else if a.def.Mode != "headless" {
+		if err := m.Tmux.Kill(ctx, name); err != nil {
+			return err
+		}
+	}
+	a.def.Pi = nil
+	if err := m.save(a); err != nil {
 		return err
 	}
 	m.release(a)
@@ -303,7 +353,20 @@ func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
 	defer m.mu.Unlock()
 	var list []AgentStatus
 	for _, a := range m.agents {
-		list = append(list, AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Mode: a.def.Mode, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll})
+		status := AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Mode: a.def.Mode, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll}
+		if a.driver != nil {
+			s := a.driver.State()
+			status.PID = s.PID
+			switch {
+			case s.Streaming:
+				status.PiState = "working"
+			case s.Settled:
+				status.PiState = "idle"
+			default:
+				status.PiState = "starting"
+			}
+		}
+		list = append(list, status)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	return list, nil
@@ -312,9 +375,22 @@ func (m *Manager) Shutdown(ctx context.Context, stopAgents bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.agents {
-		if stopAgents {
-			if err := m.Tmux.Kill(ctx, a.def.Name); err != nil {
+		if a.driver != nil {
+			d := a.driver
+			a.driver = nil
+			m.mu.Unlock()
+			err := d.Stop(ctx)
+			m.mu.Lock()
+			if err != nil {
 				return err
+			}
+			a.def.Pi = nil
+		}
+		if stopAgents {
+			if a.def.Mode != "headless" {
+				if err := m.Tmux.Kill(ctx, a.def.Name); err != nil {
+					return err
+				}
 			}
 			a.def.State = "stopped"
 			if err := m.save(a); err != nil {
@@ -358,6 +434,9 @@ func backoff(count int) time.Duration {
 	}
 }
 func (m *Manager) watch(ctx context.Context, a *managed) error {
+	if a.def.Mode == "headless" {
+		return m.launch(ctx, a, true)
+	}
 	now := m.now()
 	pane, err := m.Tmux.Inspect(ctx, a.def.Name)
 	if err != nil {
@@ -402,17 +481,25 @@ func (m *Manager) watch(ctx context.Context, a *managed) error {
 	return m.launch(ctx, a, false)
 }
 func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
+	if a.def.Mode == "headless" {
+		return m.launchHeadless(a)
+	}
 	if err := m.Tmux.Kill(ctx, a.def.Name); err != nil {
 		return err
 	}
-	args := []string{m.Pi, "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID)}
-	if resume {
-		args = append(args, "--continue")
+	args := []string{m.Pi, "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID), "--session-id", a.def.AgentID}
+	fork := ""
+	if !a.def.SessionMigrated {
+		fork = migrationSource(a.def.WorkFolder, a.def.AgentID)
+		if fork != "" {
+			args = append(args, "--fork", fork)
+		}
 	}
 	args = append(args, "Check your unread AirCommand messages with aircom inbox and handle them.")
 	if err := m.Tmux.Start(ctx, a.def, args); err != nil {
 		return err
 	}
+	a.def.SessionMigrated = true
 	a.def.State = "running"
 	a.def.SessionStartedAt = m.now().Format(time.RFC3339Nano)
 	a.nextStart = time.Time{}
@@ -449,6 +536,9 @@ func (m *Manager) tickAgent(ctx context.Context, a *managed) error {
 		if err := m.acquire(a); err != nil {
 			return err
 		}
+	}
+	if a.def.Mode == "headless" {
+		return m.tickHeadless(ctx, a)
 	}
 	pane, err := m.Tmux.Inspect(ctx, a.def.Name)
 	if err != nil {
@@ -489,8 +579,23 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 		if err := m.save(a); err != nil {
 			return err
 		}
-		if err := m.Tmux.Kill(ctx, a.def.Name); err != nil {
-			return err
+		if a.driver != nil {
+			d := a.driver
+			a.driver = nil
+			m.mu.Unlock()
+			err := d.Stop(ctx)
+			m.mu.Lock()
+			if err != nil {
+				return err
+			}
+			a.def.Pi = nil
+			if err := m.save(a); err != nil {
+				return err
+			}
+		} else if a.def.Mode != "headless" {
+			if err := m.Tmux.Kill(ctx, a.def.Name); err != nil {
+				return err
+			}
 		}
 		m.release(a)
 		return nil
@@ -518,6 +623,9 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 				return err
 			}
 			if err = store.AppendNotification(a.def.AgentID, spooled); err != nil {
+				return err
+			}
+			if err := m.deliver(a, n); err != nil {
 				return err
 			}
 			a.delivered = append(a.delivered, n.MessageID)

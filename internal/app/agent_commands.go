@@ -18,7 +18,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
-const agentUsage = "Usage: aircom agent create <name> | remove <name> | start <name> --org <org> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name>"
+const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --org <org> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name>"
 
 // runAgent implements the command contract without depending on daemon service code.
 func (a *App) runAgent(args []string) error {
@@ -29,10 +29,28 @@ func (a *App) runAgent(args []string) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "create":
-		if len(args) != 2 || !daemonclient.ValidAgentName(args[1]) {
+		if len(args) != 2 && len(args) != 4 || !daemonclient.ValidAgentName(args[1]) {
 			return &publicError{message: agentUsage}
 		}
-		return a.connect([]string{"--name", args[1]})
+		mode := "headless"
+		if len(args) == 4 {
+			if args[2] != "--mode" || args[3] != "headless" && args[3] != "tmux" {
+				return &publicError{message: agentUsage}
+			}
+			mode = args[3]
+		}
+		if err := a.connect([]string{"--name", args[1]}); err != nil {
+			return err
+		}
+		agent, err := a.resolveAgent(args[1])
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(storagepath.AgentDirectory(a.Store.Home(), agent.AgentID), "mode")
+		if err := os.WriteFile(path, []byte(mode), 0600); err != nil {
+			return err
+		}
+		return nil
 	case "remove":
 		if len(args) != 2 || !daemonclient.ValidAgentName(args[1]) {
 			return &publicError{message: agentUsage}
@@ -168,6 +186,16 @@ func (a *App) startAgent(ctx context.Context, client daemonclient.Client, args [
 	}
 	if err := daemonclient.WriteBrief(storagepath.AgentBrief(home, agent.AgentID), name, org, code); err != nil {
 		return &publicError{message: fmt.Sprintf("Unable to write agent brief: %v", err)}
+	}
+	if mode == "" {
+		if _, err := os.Stat(storagepath.AgentDaemonState(home, agent.AgentID)); errors.Is(err, os.ErrNotExist) {
+			mode = "headless"
+			if preference, err := os.ReadFile(filepath.Join(storagepath.AgentDirectory(home, agent.AgentID), "mode")); err == nil {
+				mode = strings.TrimSpace(string(preference))
+			}
+		} else if err != nil {
+			return err
+		}
 	}
 	if err := client.Start(ctx, daemonclient.StartRequest{Name: name, AgentID: agent.AgentID, Organization: org, Workstream: code, Repos: repos, WorkFolder: folder, Mode: mode}); err != nil {
 		return &publicError{message: fmt.Sprintf("Unable to start agent: %v", err)}
