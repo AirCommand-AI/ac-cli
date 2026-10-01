@@ -4,6 +4,7 @@ package pidriver
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"time"
 )
@@ -15,6 +16,7 @@ type Driver interface {
 	Exited() <-chan Exit
 	Send(msg Outgoing) error
 	Events() <-chan Event
+	History(ctx context.Context, since string, limit int) (entries []json.RawMessage, next string, err error)
 	State() Snapshot
 	Stop(ctx context.Context) error
 }

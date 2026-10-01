@@ -38,6 +38,9 @@ func (f *fakeSupervisor) Driver(string) (pidriver.Driver, bool) { return nil, fa
 func (f *fakeSupervisor) Subscribe(string) (<-chan pidriver.Event, func(), bool) {
 	return nil, nil, false
 }
+func (f *fakeSupervisor) History(string, string, int) ([]json.RawMessage, string, error) {
+	return nil, "", nil
+}
 func (f *fakeSupervisor) Mode(_ context.Context, name, mode string) error {
 	f.record("mode:" + name + ":" + mode)
 	return nil

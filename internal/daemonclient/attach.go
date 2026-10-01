@@ -60,8 +60,9 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 	}()
 	for {
 		var item struct {
-			Type  string `json:"type"`
-			Text  string `json:"text"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Entry json.RawMessage `json:"entry"`
 			Event struct {
 				Kind string         `json:"Kind"`
 				Data map[string]any `json:"Data"`
@@ -74,6 +75,8 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 			return err
 		}
 		switch item.Type {
+		case "history":
+			fmt.Fprintf(output, "[history] %s\n", eventSummary(map[string]any{"text": string(item.Entry)}))
 		case "event":
 			fmt.Fprintf(output, "[%s] %s\n", item.Event.Kind, eventSummary(item.Event.Data))
 		case "banner":

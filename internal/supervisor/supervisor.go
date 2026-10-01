@@ -92,6 +92,17 @@ func (m *Manager) Subscribe(name string) (<-chan pidriver.Event, func(), bool) {
 	return ch, cancel, true
 }
 
+// History queries pi outside m.mu, so a slow RPC cannot block supervisor ticks.
+func (m *Manager) History(name, since string, limit int) ([]json.RawMessage, string, error) {
+	d, ok := m.Driver(name)
+	if !ok {
+		return nil, "", os.ErrNotExist
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return d.History(ctx, since, limit)
+}
+
 // Driver returns a running headless agent's driver to attach/stall consumers.
 // They must not call Start, Send or Stop while holding m.mu.
 func (m *Manager) Driver(name string) (pidriver.Driver, bool) {

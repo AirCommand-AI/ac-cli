@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"time"
@@ -15,6 +16,7 @@ type Supervisor interface {
 	Mode(ctx context.Context, name, mode string) error
 	Driver(name string) (pidriver.Driver, bool)
 	Subscribe(name string) (<-chan pidriver.Event, func(), bool)
+	History(name, since string, limit int) ([]json.RawMessage, string, error)
 	Remove(ctx context.Context, name string) error
 	List(ctx context.Context) ([]AgentStatus, error)
 	Shutdown(ctx context.Context, stopAgents bool) error

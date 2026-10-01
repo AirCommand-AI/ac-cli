@@ -301,6 +301,14 @@ func serveAttach(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Sup
 	}
 	defer cancel()
 	_ = encoder.Encode(Response{OK: true, Data: map[string]any{"mode": "headless"}})
+	entries, _, historyErr := m.History(req.Name, "", 200)
+	if historyErr == nil {
+		for _, entry := range entries {
+			if encoder.Encode(map[string]any{"type": "history", "entry": entry}) != nil {
+				return
+			}
+		}
+	}
 	incoming := make(chan Request, 1)
 	go func() {
 		defer close(incoming)

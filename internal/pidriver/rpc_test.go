@@ -54,6 +54,8 @@ func TestFakePi(t *testing.T) {
 					time.Sleep(time.Hour)
 				}
 			}
+		case "get_entries":
+			_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "get_entries", "success": true, "data": map[string]any{"entries": []map[string]any{{"id": "a", "type": "message"}, {"id": "b", "type": "message"}}, "leafId": "b"}})
 		case "prompt":
 			if os.Getenv("PIDRIVER_FAKE_NO_DISPOSITION") == "1" {
 				_ = enc.Encode(map[string]any{"type": "response", "id": id, "command": "prompt", "success": true})
@@ -101,6 +103,10 @@ func TestRPCFakeProcess(t *testing.T) {
 	case <-d.Ready():
 	case <-time.After(5 * time.Second):
 		t.Fatal("never ready")
+	}
+	entries, next, err := d.History(context.Background(), "", 1)
+	if err != nil || len(entries) != 1 || next != "b" {
+		t.Fatalf("history: %s %s %v", entries, next, err)
 	}
 	deadline := time.After(5 * time.Second)
 	seen := false

@@ -2,6 +2,7 @@ package pidriver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 )
@@ -9,14 +10,15 @@ import (
 // Fake is a deterministic driver for supervisor tests. Start records a launch;
 // MarkReady models the successful get_state response; Send never blocks.
 type Fake struct {
-	mu       sync.Mutex
-	Launches []LaunchSpec
-	Sent     []Outgoing
-	Snapshot Snapshot
-	ReadyCh  chan struct{}
-	ExitCh   chan Exit
-	EventCh  chan Event
-	stopped  bool
+	mu             sync.Mutex
+	Launches       []LaunchSpec
+	Sent           []Outgoing
+	HistoryEntries []json.RawMessage
+	Snapshot       Snapshot
+	ReadyCh        chan struct{}
+	ExitCh         chan Exit
+	EventCh        chan Event
+	stopped        bool
 }
 
 func NewFake() *Fake {
@@ -43,6 +45,38 @@ func (f *Fake) Send(m Outgoing) error {
 	}
 	f.Sent = append(f.Sent, m)
 	return nil
+}
+func (f *Fake) History(_ context.Context, since string, limit int) ([]json.RawMessage, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit <= 0 {
+		return nil, "", nil
+	}
+	start := 0
+	for i, entry := range f.HistoryEntries {
+		var v struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal(entry, &v)
+		if v.ID == since {
+			start = i + 1
+			break
+		}
+	}
+	entries := f.HistoryEntries[start:]
+	if len(entries) > limit {
+		entries = entries[len(entries)-limit:]
+	}
+	out := append([]json.RawMessage(nil), entries...)
+	next := since
+	if len(out) > 0 {
+		var v struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal(out[len(out)-1], &v)
+		next = v.ID
+	}
+	return out, next, nil
 }
 func (f *Fake) State() Snapshot { f.mu.Lock(); defer f.mu.Unlock(); return f.Snapshot }
 func (f *Fake) MarkReady() {

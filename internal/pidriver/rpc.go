@@ -21,40 +21,51 @@ import (
 // RPC owns the subprocess and the RPC pipe. One dedicated writer owns stdin;
 // the stdout reader appends to an unbounded queue and never waits for
 // event consumers or command processing.
+type historyRequest struct {
+	since  string
+	result chan historyResponse
+}
+type historyResponse struct {
+	entries []json.RawMessage
+	next    string
+	err     error
+}
 type toolCall struct{ name, parent string }
 type RPC struct {
-	opts           Options
-	mu             sync.Mutex
-	cmd            *exec.Cmd
-	stdin          io.WriteCloser
-	ready          chan struct{}
-	exited         chan Exit
-	done           chan struct{}
-	readDone       chan struct{}
-	runDone        chan struct{}
-	events         chan Event
-	notify         chan struct{}
-	writerNotify   chan struct{}
-	writes         [][]byte
-	starting       bool
-	lines          [][]byte
-	outgoing       []Outgoing
-	state          Snapshot
-	closed         bool
-	stopping       bool
-	compacting     bool
-	seq            int
-	pending        map[int]Outgoing
-	tools          map[string]toolCall
-	currentToolID  string
-	interruptID    int
-	interruptPhase string
-	interruptMsg   Outgoing
-	restore        []string
+	opts            Options
+	mu              sync.Mutex
+	cmd             *exec.Cmd
+	stdin           io.WriteCloser
+	ready           chan struct{}
+	exited          chan Exit
+	done            chan struct{}
+	readDone        chan struct{}
+	runDone         chan struct{}
+	events          chan Event
+	notify          chan struct{}
+	writerNotify    chan struct{}
+	writes          [][]byte
+	starting        bool
+	lines           [][]byte
+	outgoing        []Outgoing
+	state           Snapshot
+	closed          bool
+	stopping        bool
+	compacting      bool
+	seq             int
+	pending         map[int]Outgoing
+	historyRequests []historyRequest
+	pendingHistory  map[int]chan historyResponse
+	tools           map[string]toolCall
+	currentToolID   string
+	interruptID     int
+	interruptPhase  string
+	interruptMsg    Outgoing
+	restore         []string
 }
 
 func New(opts Options) Driver {
-	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), readDone: make(chan struct{}), runDone: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), writerNotify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]toolCall)}
+	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), readDone: make(chan struct{}), runDone: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), writerNotify: make(chan struct{}, 1), pending: make(map[int]Outgoing), pendingHistory: make(map[int]chan historyResponse), tools: make(map[string]toolCall)}
 }
 func (d *RPC) Ready() <-chan struct{} { return d.ready }
 func (d *RPC) Exited() <-chan Exit    { return d.exited }
@@ -273,6 +284,38 @@ func (d *RPC) write() {
 		}
 	}
 }
+func (d *RPC) History(ctx context.Context, since string, limit int) ([]json.RawMessage, string, error) {
+	if limit <= 0 {
+		return nil, since, nil
+	}
+	result := make(chan historyResponse, 1)
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil, "", errors.New("pi exited")
+	}
+	d.historyRequests = append(d.historyRequests, historyRequest{since, result})
+	d.mu.Unlock()
+	d.wake()
+	select {
+	case response := <-result:
+		if len(response.entries) > limit {
+			response.entries = response.entries[len(response.entries)-limit:]
+		}
+		if len(response.entries) > 0 {
+			var entry struct {
+				ID string `json:"id"`
+			}
+			_ = json.Unmarshal(response.entries[len(response.entries)-1], &entry)
+			response.next = entry.ID
+		}
+		return response.entries, response.next, response.err
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	case <-d.done:
+		return nil, "", errors.New("pi exited")
+	}
+}
 func (d *RPC) Send(msg Outgoing) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -297,6 +340,24 @@ func (d *RPC) run() {
 			d.lines = d.lines[1:]
 			d.mu.Unlock()
 			d.handle(line)
+		}
+		for {
+			d.mu.Lock()
+			if len(d.historyRequests) == 0 || !d.state.Ready || d.closed {
+				d.mu.Unlock()
+				break
+			}
+			req := d.historyRequests[0]
+			d.historyRequests = d.historyRequests[1:]
+			d.mu.Unlock()
+			fields := map[string]any{}
+			if req.since != "" {
+				fields["since"] = req.since
+			}
+			id := d.command("get_entries", fields)
+			d.mu.Lock()
+			d.pendingHistory[id] = req.result
+			d.mu.Unlock()
 		}
 		for {
 			d.mu.Lock()
@@ -419,6 +480,21 @@ func (d *RPC) handle(line []byte) {
 	typ, _ := v["type"].(string)
 	if idstr, ok := v["id"].(string); ok && typ == "response" {
 		id, _ := strconv.Atoi(idstr)
+		d.mu.Lock()
+		history := d.pendingHistory[id]
+		delete(d.pendingHistory, id)
+		d.mu.Unlock()
+		if history != nil {
+			response := historyResponse{}
+			if v["success"] != true {
+				response.err = fmt.Errorf("get_entries: %v", v["error"])
+			} else if data, ok := v["data"].(map[string]any); ok {
+				if raw, err := json.Marshal(data["entries"]); err == nil {
+					_ = json.Unmarshal(raw, &response.entries)
+				}
+			}
+			history <- response
+		}
 		d.mu.Lock()
 		interruptResponse := d.interruptPhase != "" && id == d.interruptID
 		d.mu.Unlock()
