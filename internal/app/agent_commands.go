@@ -145,7 +145,17 @@ func (a *App) runAgent(args []string) error {
 		}
 		for _, agent := range agents {
 			if agent.Name == args[1] && agent.Mode == "headless" {
-				return client.Attach(ctx, args[1], a.inputReader(), a.outputWriter(), func(text string) error { return a.interruptAgent(args[1], text) })
+				return client.Attach(ctx, args[1], a.inputReader(), a.outputWriter(), func(text string) error { return a.interruptAgent(args[1], text) }, func(text string) error {
+					machine, err := a.machineCredential()
+					if err != nil {
+						return err
+					}
+					label := machine.MachineName
+					if label == "" {
+						label = "machine"
+					}
+					return a.update([]string{"--workstream", agent.Workstream, "--agent", agent.AgentID, "--body", "Operator (attach on " + label + "): " + text})
+				})
 			}
 		}
 		command := exec.Command("tmux", "-L", "aircom", "attach", "-t", args[1])

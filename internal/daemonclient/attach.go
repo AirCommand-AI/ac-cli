@@ -12,7 +12,7 @@ import (
 
 // Attach holds an unbounded-deadline control connection for one headless
 // viewer. A detached viewer does not stop the agent.
-func (c Client) Attach(ctx context.Context, name string, input io.Reader, output io.Writer, interrupt func(string) error) error {
+func (c Client) Attach(ctx context.Context, name string, input io.Reader, output io.Writer, interrupt func(string) error, posted func(string) error) error {
 	dial := c.Dial
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
@@ -60,6 +60,11 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 			if enc.Encode(map[string]any{"op": op, "text": text}) != nil || op == "detach" {
 				return
 			}
+			if op == "say" && posted != nil {
+				if err := posted(text); err != nil {
+					fmt.Fprintf(output, "[AirCommand] Say sent but update failed: %v\n", err)
+				}
+			}
 		}
 		_ = enc.Encode(map[string]any{"op": "detach"})
 	}()
@@ -81,14 +86,65 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 		}
 		switch item.Type {
 		case "history":
-			fmt.Fprintf(output, "[history] %s\n", eventSummary(map[string]any{"text": string(item.Entry)}))
+			var entry struct {
+				Message map[string]any `json:"message"`
+			}
+			if json.Unmarshal(item.Entry, &entry) == nil && entry.Message != nil {
+				renderMessage(output, entry.Message, false)
+			}
 		case "event":
-			fmt.Fprintf(output, "[%s] %s\n", item.Event.Kind, eventSummary(item.Event.Data))
+			renderEvent(output, item.Event.Kind, item.Event.Data)
 		case "banner":
 			fmt.Fprintf(output, "[AirCommand] %s\n", item.Text)
 		case "state":
 			fmt.Fprintf(output, "[state] %s\n", item.Text)
 		}
+	}
+}
+func renderEvent(out io.Writer, kind string, data map[string]any) {
+	switch kind {
+	case "message_start":
+		if msg, ok := data["message"].(map[string]any); ok && msg["role"] == "user" {
+			renderMessage(out, msg, true)
+		}
+	case "message_update":
+		if part, ok := data["assistantMessageEvent"].(map[string]any); ok && part["type"] == "text_delta" {
+			fmt.Fprint(out, part["delta"])
+		}
+	case "message_end":
+		if msg, ok := data["message"].(map[string]any); ok && msg["role"] == "assistant" {
+			fmt.Fprintln(out)
+		}
+	case "tool_execution_start":
+		fmt.Fprintf(out, "[tool] %s\n", eventSummary(data))
+	case "auto_retry_start", "compaction_start", "agent_start", "agent_settled", "dialog_cancelled", "rpc_error":
+		fmt.Fprintf(out, "[%s] %s\n", kind, eventSummary(data))
+	}
+}
+func renderMessage(out io.Writer, msg map[string]any, live bool) {
+	role, _ := msg["role"].(string)
+	if role != "assistant" && role != "user" {
+		return
+	}
+	var parts []string
+	if content, ok := msg["content"].(string); ok {
+		parts = append(parts, content)
+	}
+	if blocks, ok := msg["content"].([]any); ok {
+		for _, v := range blocks {
+			if b, ok := v.(map[string]any); ok {
+				if text, ok := b["text"].(string); ok {
+					parts = append(parts, text)
+				}
+			}
+		}
+	}
+	text := strings.Join(parts, "")
+	if live && role == "user" && strings.HasPrefix(text, "[AirCommand] ") {
+		fmt.Fprintln(out, "[AirCommand] delivered (user message_start)")
+	}
+	if !live || role == "user" {
+		fmt.Fprintf(out, "%s: %s\n", role, text)
 	}
 }
 func eventSummary(data map[string]any) string {

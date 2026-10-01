@@ -300,6 +300,16 @@ func serveAttach(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Sup
 		return
 	}
 	defer cancel()
+	// Shutdown closes even a viewer blocked while receiving history.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
 	_ = encoder.Encode(Response{OK: true, Data: map[string]any{"mode": "headless"}})
 	entries, _, historyErr := m.History(req.Name, "", 200)
 	if historyErr == nil {
@@ -326,16 +336,6 @@ func serveAttach(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Sup
 			case <-ctx.Done():
 				return
 			}
-		}
-	}()
-	// Shutdown must close the socket to unblock writes to an unresponsive viewer.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-done:
 		}
 	}()
 	for {
