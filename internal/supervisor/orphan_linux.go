@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+func processCmdline(pid int) string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(data), "\x00")
+}
+
 // killRecordedPi fences reuse of a PID by checking kernel start ticks, the
 // executable and the original process group before signaling the group.
 func killRecordedPi(ctx context.Context, p *PiProcess) error {

@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
@@ -55,7 +54,7 @@ func (m *Manager) launchHeadless(a *managed) error {
 		return fmt.Errorf("agent stopped during pi startup")
 	}
 	snap := d.State()
-	a.def.Pi = &PiProcess{PID: snap.PID, PGID: snap.PGID, StartTime: snap.StartTime, Cmdline: strings.Join(snap.Cmdline, "\x00")}
+	a.def.Pi = &PiProcess{PID: snap.PID, PGID: snap.PGID, StartTime: snap.StartTime, Cmdline: processCmdline(snap.PID)}
 	a.def.State = "running"
 	a.def.SessionMigrated = true
 	a.def.SessionStartedAt = m.now().Format(time.RFC3339Nano)
@@ -121,6 +120,16 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 		}
 		return m.save(a)
 	default:
+	}
+	// Interpreter wrappers may exec after Start. Refresh the durable kernel
+	// argv once RPC is ready, before any subsequent daemon restart.
+	if snap := a.driver.State(); snap.Ready && a.def.Pi != nil && snap.PID == a.def.Pi.PID && snap.StartTime == a.def.Pi.StartTime {
+		if cmdline := processCmdline(snap.PID); cmdline != "" && cmdline != a.def.Pi.Cmdline {
+			a.def.Pi.Cmdline = cmdline
+			if err := m.save(a); err != nil {
+				return err
+			}
+		}
 	}
 	for {
 		select {
