@@ -119,7 +119,6 @@ func (*transportFailure) Error() string {
 type exchangeRequest struct {
 	TicketSecret  string `json:"ticketSecret"`
 	APIToken      string `json:"apiToken"`
-	SocketKey     string `json:"socketKey"`
 	IdempotencyID string `json:"idempotencyId"`
 }
 
@@ -473,10 +472,6 @@ func (a *App) exchange(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate enrollment credentials."}
 	}
-	socketKey, err := secrets.Credential(random, "sock_")
-	if err != nil {
-		return &publicError{message: "Unable to generate enrollment credentials."}
-	}
 	idempotencyID, err := secrets.IdempotencyID(random)
 	if err != nil {
 		return &publicError{message: "Unable to generate an enrollment idempotency ID."}
@@ -485,7 +480,6 @@ func (a *App) exchange(arguments []string) error {
 	payload, err := json.Marshal(exchangeRequest{
 		TicketSecret:  ticket,
 		APIToken:      apiToken,
-		SocketKey:     socketKey,
 		IdempotencyID: idempotencyID,
 	})
 	if err != nil {
@@ -505,7 +499,6 @@ func (a *App) exchange(arguments []string) error {
 	}
 	credential := credentials.Credential{
 		APIToken:       apiToken,
-		SocketKey:      socketKey,
 		WorkstreamCode: result.WorkstreamCode,
 		AgentName:      result.AgentName,
 		AgentID:        result.AgentID,
@@ -515,7 +508,7 @@ func (a *App) exchange(arguments []string) error {
 		return storageError(err, "Enrollment succeeded, but the credential file could not be saved securely.")
 	}
 
-	protected := []string{ticket, apiToken, socketKey}
+	protected := []string{ticket, apiToken}
 	output := fmt.Sprintf(
 		"Agent ID: %s\nUse for send/update/read/task/tasks/inbox/ack/listen: --agent %s\nAgent name: %s\nWorkstream: %s\nSocket address: %s\n",
 		safeMetadata(result.AgentID, protected...),

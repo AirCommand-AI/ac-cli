@@ -67,7 +67,6 @@ type listWorkstreamsResponse struct {
 // The agent's name and identity come from its registration, not from the join.
 type joinAgentRequest struct {
 	APIToken      string `json:"apiToken"`
-	SocketKey     string `json:"socketKey"`
 	IdempotencyID string `json:"idempotencyId"`
 }
 
@@ -1251,17 +1250,12 @@ func (a *App) join(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate agent credentials."}
 	}
-	socketKey, err := secrets.Credential(random, "sock_")
-	if err != nil {
-		return &publicError{message: "Unable to generate agent credentials."}
-	}
 	idempotencyID, err := secrets.IdempotencyID(random)
 	if err != nil {
 		return &publicError{message: "Unable to generate a join idempotency ID."}
 	}
 	payload, err := json.Marshal(joinAgentRequest{
 		APIToken:      apiToken,
-		SocketKey:     socketKey,
 		IdempotencyID: idempotencyID,
 	})
 	if err != nil {
@@ -1296,7 +1290,6 @@ func (a *App) join(arguments []string) error {
 	}
 	if err := a.Store.Save(credentials.Credential{
 		APIToken:       apiToken,
-		SocketKey:      socketKey,
 		WorkstreamCode: joined.WorkstreamCode,
 		AgentID:        joined.AgentID,
 		SocketAddress:  joined.SocketAddress,

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
@@ -182,9 +183,60 @@ func findByWorkstreamError(store *Store, workstreamCode string) error {
 func testCredential(agentID string, workstreamCode string) Credential {
 	return Credential{
 		APIToken:       "api_" + agentID,
-		SocketKey:      "sock_" + agentID,
 		WorkstreamCode: workstreamCode,
 		AgentID:        agentID,
 		SocketAddress:  "wss://socket.aircommand.ai/agent/" + agentID,
+	}
+}
+
+func TestSaveWithoutSocketKeyOmitsIt(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	store := NewStore(home)
+	if err := store.Save(testCredential("agent-1", "694")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	contents, err := os.ReadFile(store.Path("agent-1"))
+	if err != nil {
+		t.Fatalf("read credential file: %v", err)
+	}
+	if strings.Contains(string(contents), "socketKey") {
+		t.Fatalf("credential file still writes socketKey: %s", contents)
+	}
+}
+
+func TestOldCredentialFileWithSocketKeyStillLoadsAndRewritesWithoutIt(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	store := NewStore(home)
+	directory, err := storagepath.EnsureAgentDirectory(home, "agent-old")
+	if err != nil {
+		t.Fatalf("EnsureAgentDirectory: %v", err)
+	}
+	old := `{"version":1,"agents":{"agent-old":{"apiToken":"api_old","socketKey":"sock_old","workstreamCode":"694","agentId":"agent-old","socketAddress":"ac:agent-old"}}}`
+	if err := os.WriteFile(filepath.Join(directory, "credentials.json"), []byte(old), 0o600); err != nil {
+		t.Fatalf("write old credential file: %v", err)
+	}
+
+	loaded, err := store.FindByAgent("694", "agent-old")
+	if err != nil {
+		t.Fatalf("FindByAgent: %v", err)
+	}
+	if loaded.APIToken != "api_old" || loaded.SocketKey != "sock_old" || loaded.SocketAddress != "ac:agent-old" {
+		t.Fatalf("loaded credential = %#v", loaded)
+	}
+
+	loaded.SocketKey = ""
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	contents, err := os.ReadFile(store.Path("agent-old"))
+	if err != nil {
+		t.Fatalf("read credential file: %v", err)
+	}
+	if strings.Contains(string(contents), "socketKey") {
+		t.Fatalf("rewritten credential file still carries socketKey: %s", contents)
 	}
 }

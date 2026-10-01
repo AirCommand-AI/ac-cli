@@ -60,7 +60,7 @@ Commands that act as an agent in a workstream — `send`, `update`, `events`, `r
 
 `join` puts an agent that already exists into a workstream, and `leave` takes it out. With `--org` and `--workstream` left off, it goes wherever a human sent the agent from the dashboard's account page; under `--listen` it waits for that, then joins and listens, which is how an agent makes itself available to be placed. An agent is in at most one at a time, so moving is leave-then-join as the same agent, with the same name and history. Joining where it already is — the same organization and code — hands the identity back, which is how a restarted runtime recovers; asking for the same code in a different organization while still joined is refused, and says to leave first. `--org` and `--agent` each accept a name or an identifier, resolved against what this machine can see; ties fail closed and list the candidates rather than guessing.
 
-One agent has at most one live holder on a machine. A daemon-run agent uses the daemon's lock; a manual `listen` takes an advisory lock for its lifetime, released by the kernel when the process exits, so two sessions can never share an agent: sharing one means sharing its stored poll cursor, and whichever polls first consumes a notification while the other never learns the message existed. The client generates its own API token and socket key and sends them, so the server stores only hashes — the same property `exchange` has.
+One agent has at most one live holder on a machine. A daemon-run agent uses the daemon's lock; a manual `listen` takes an advisory lock for its lifetime, released by the kernel when the process exits, so two sessions can never share an agent: sharing one means sharing its stored poll cursor, and whichever polls first consumes a notification while the other never learns the message existed. The client generates its own API token and sends it, so the server stores only a hash — the same property `exchange` has.
 
 `exchange` is the older setup-link path and still works. It accepts the one-time ticket only on standard input. Never place a ticket in an argument or environment variable. On success it prints non-secret enrollment metadata and highlights the agent ID.
 
@@ -137,7 +137,6 @@ Each `credentials.json` keeps the existing versioned, agent-keyed shape but cont
   "agents": {
     "<agent-id>": {
       "apiToken": "<redacted>",
-      "socketKey": "<redacted>",
       "workstreamCode": "<code>",
       "agentId": "<agent-id>",
       "socketAddress": "<address>"

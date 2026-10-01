@@ -14,8 +14,10 @@ import (
 const fileVersion = 1
 
 type Credential struct {
-	APIToken       string `json:"apiToken"`
-	SocketKey      string `json:"socketKey"`
+	APIToken string `json:"apiToken"`
+	// SocketKey is no longer generated. It stays so credential files written
+	// by older clients still load; omitempty drops it when they are rewritten.
+	SocketKey      string `json:"socketKey,omitempty"`
 	WorkstreamCode string `json:"workstreamCode"`
 	AgentID        string `json:"agentId"`
 	SocketAddress  string `json:"socketAddress"`
@@ -84,7 +86,7 @@ func (s *Store) CheckLayout() error {
 }
 
 func (s *Store) Save(credential Credential) error {
-	if credential.AgentID == "" || credential.WorkstreamCode == "" || credential.APIToken == "" || credential.SocketKey == "" || credential.SocketAddress == "" {
+	if credential.AgentID == "" || credential.WorkstreamCode == "" || credential.APIToken == "" || credential.SocketAddress == "" {
 		return errors.New("credential is incomplete")
 	}
 	directory, err := storagepath.EnsureAgentDirectory(s.home, credential.AgentID)

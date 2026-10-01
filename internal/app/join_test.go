@@ -196,6 +196,7 @@ type assignmentServer struct {
 	polls               int
 	joinedPath          string
 	joinedOrganization  string
+	joinedBody          map[string]any
 }
 
 func (s *assignmentServer) handler(t *testing.T) http.Handler {
@@ -215,6 +216,9 @@ func (s *assignmentServer) handler(t *testing.T) http.Handler {
 		case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/v1/agents/"):
 			s.joinedPath = request.URL.Path
 			s.joinedOrganization = request.Header.Get(organizationHeader)
+			if err := json.NewDecoder(request.Body).Decode(&s.joinedBody); err != nil {
+				t.Errorf("decode join request: %v", err)
+			}
 			writer.WriteHeader(http.StatusCreated)
 			_, _ = writer.Write([]byte(`{"agentId":"agm_0123456789abcdef0123456789abcdef","agentName":"Pi","workstreamCode":"694","socketAddress":"ac:agm_0123456789abcdef0123456789abcdef","generation":1}`))
 		default:
@@ -240,6 +244,20 @@ func TestJoinPicksUpAnAssignmentFromTheDashboard(t *testing.T) {
 	// server verifies.
 	if fake.joinedOrganization != "org_aaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("organization header = %q", fake.joinedOrganization)
+	}
+	// The join carries only the API token and idempotency ID; no socket key.
+	if _, ok := fake.joinedBody["socketKey"]; ok {
+		t.Fatalf("join request still carries a socket key: %v", fake.joinedBody)
+	}
+	if fake.joinedBody["apiToken"] == nil || fake.joinedBody["idempotencyId"] == nil {
+		t.Fatalf("join request missing generated credentials: %v", fake.joinedBody)
+	}
+	stored, err := client.Store.FindByAgent("694", "agm_0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("FindByAgent: %v", err)
+	}
+	if stored.SocketKey != "" || stored.SocketAddress == "" {
+		t.Fatalf("stored credential = socketKey %q, socketAddress %q", stored.SocketKey, stored.SocketAddress)
 	}
 }
 

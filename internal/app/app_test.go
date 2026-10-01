@@ -23,16 +23,17 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 
 	ticket := "setup_ticket_from_stdin"
 	apiToken := "api_" + repeatedHex(0x11)
-	socketKey := "sock_" + repeatedHex(0x22)
 	idempotencyID := repeatedHex(0x33)
 	wantBody, err := json.Marshal(exchangeRequest{
 		TicketSecret:  ticket,
 		APIToken:      apiToken,
-		SocketKey:     socketKey,
 		IdempotencyID: idempotencyID,
 	})
 	if err != nil {
 		t.Fatalf("marshal expected request: %v", err)
+	}
+	if bytes.Contains(wantBody, []byte("socketKey")) {
+		t.Fatalf("exchange request still carries a socket key: %s", wantBody)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -60,7 +61,7 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 	}))
 	defer server.Close()
 
-	client, stdout, stderr := testApp(t, server.URL, ticket+"\n", deterministicRandom(0x11, 0x22, 0x33))
+	client, stdout, stderr := testApp(t, server.URL, ticket+"\n", deterministicRandom(0x11, 0x33))
 	transport := &failOnceTransport{base: http.DefaultTransport}
 	client.HTTPClient = &http.Client{Transport: transport}
 	if exitCode := client.Run([]string{"exchange"}); exitCode != 0 {
@@ -76,7 +77,7 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 	}
 
 	output := stdout.String()
-	for name, secret := range map[string]string{"ticket": ticket, "API token": apiToken, "socket key": socketKey} {
+	for name, secret := range map[string]string{"ticket": ticket, "API token": apiToken} {
 		if strings.Contains(output, secret) || strings.Contains(stderr.String(), secret) {
 			t.Errorf("%s reached command output", name)
 		}
@@ -106,7 +107,6 @@ func TestExchangeIntegrationUsesStdinAndReusesRequestOnTransportRetry(t *testing
 	}
 	wantCredential := credentials.Credential{
 		APIToken:       apiToken,
-		SocketKey:      socketKey,
 		WorkstreamCode: "694",
 		AgentID:        "agent-7",
 		SocketAddress:  "ac:agent-7",
