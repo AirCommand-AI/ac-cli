@@ -18,8 +18,8 @@ import (
 	"time"
 )
 
-// RPC owns the subprocess and the RPC pipe. All writes to stdin are serialized
-// in run; the stdout reader appends to an unbounded queue and never waits for
+// RPC owns the subprocess and the RPC pipe. One dedicated writer owns stdin;
+// the stdout reader appends to an unbounded queue and never waits for
 // event consumers or command processing.
 type RPC struct {
 	opts           Options
@@ -31,6 +31,9 @@ type RPC struct {
 	done           chan struct{}
 	events         chan Event
 	notify         chan struct{}
+	writerNotify   chan struct{}
+	writes         [][]byte
+	starting       bool
 	lines          [][]byte
 	outgoing       []Outgoing
 	state          Snapshot
@@ -46,7 +49,7 @@ type RPC struct {
 }
 
 func New(opts Options) Driver {
-	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
+	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), writerNotify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
 }
 func (d *RPC) Ready() <-chan struct{} { return d.ready }
 func (d *RPC) Exited() <-chan Exit    { return d.exited }
@@ -80,11 +83,13 @@ func checkVersion(path string) error {
 }
 func (d *RPC) Start(spec LaunchSpec) error {
 	d.mu.Lock()
-	if d.cmd != nil || d.closed {
+	if d.cmd != nil || d.closed || d.starting {
 		d.mu.Unlock()
 		return errors.New("driver already started or stopped")
 	}
+	d.starting = true
 	d.mu.Unlock()
+	defer func() { d.mu.Lock(); d.starting = false; d.mu.Unlock() }()
 	if spec.PiPath == "" {
 		spec.PiPath = "pi"
 	}
@@ -124,6 +129,7 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	// Populate it from /proc when pi confirms readiness, never use it as a kill fence.
 	d.mu.Unlock()
 	go d.read(stdout)
+	go d.write()
 	go d.run()
 	go func() {
 		err := cmd.Wait()
@@ -203,11 +209,38 @@ func (d *RPC) command(kind string, fields map[string]any) int {
 		fields["id"] = strconv.Itoa(id)
 	}
 	data, _ := json.Marshal(fields)
-	if d.stdin != nil && !d.closed {
-		_, _ = d.stdin.Write(append(data, '\n'))
+	if !d.closed {
+		d.writes = append(d.writes, append(data, '\n'))
+		select {
+		case d.writerNotify <- struct{}{}:
+		default:
+		}
 	}
 	d.mu.Unlock()
 	return id
+}
+func (d *RPC) write() {
+	for range d.writerNotify {
+		for {
+			d.mu.Lock()
+			if len(d.writes) == 0 || d.closed {
+				done := d.closed
+				d.mu.Unlock()
+				if done {
+					return
+				}
+				break
+			}
+			data := d.writes[0]
+			d.writes[0] = nil
+			d.writes = d.writes[1:]
+			stdin := d.stdin
+			d.mu.Unlock()
+			if _, err := stdin.Write(data); err != nil {
+				return
+			}
+		}
+	}
 }
 func (d *RPC) Send(msg Outgoing) error {
 	d.mu.Lock()

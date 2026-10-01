@@ -9,8 +9,11 @@ import (
 	"testing"
 )
 
+var testProtocolDriver *RPC
+
 func protocolDriver() (*RPC, *bytes.Buffer) {
 	d := New(Options{}).(*RPC)
+	testProtocolDriver = d
 	b := new(bytes.Buffer)
 	d.stdin = writeNopCloser{b}
 	d.state.Ready = true
@@ -23,6 +26,12 @@ type writeNopCloser struct{ *bytes.Buffer }
 func (writeNopCloser) Close() error { return nil }
 func record(t *testing.T, b *bytes.Buffer) map[string]any {
 	t.Helper()
+	testProtocolDriver.mu.Lock()
+	for _, data := range testProtocolDriver.writes {
+		_, _ = b.Write(data)
+	}
+	testProtocolDriver.writes = nil
+	testProtocolDriver.mu.Unlock()
 	line, err := b.ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
