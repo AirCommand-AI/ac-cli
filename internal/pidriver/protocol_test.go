@@ -88,6 +88,11 @@ func TestDialogCancelAndToolEvent(t *testing.T) {
 	if snap := d.State(); snap.CurrentTool != "bash" || snap.ParentToolCallID != "parent" {
 		t.Fatalf("nested tool state: %+v", snap)
 	}
+	d.handle([]byte(`{"type":"tool_execution_start","toolCallId":"child","parentToolCallId":"nested","toolName":"read"}`))
+	d.handle([]byte(`{"type":"tool_execution_end","toolCallId":"child"}`))
+	if d.State().CurrentTool != "bash" {
+		t.Fatal("parent tool lost when child ended")
+	}
 	d.handle([]byte(`{"type":"agent_settled"}`))
 	if !d.State().Settled {
 		t.Fatal("not settled")
@@ -110,8 +115,9 @@ func TestInterruptClearsBeforeAbortAndRestores(t *testing.T) {
 	if prompt["type"] != "prompt" || prompt["message"] != "[AirCommand] /now" {
 		t.Fatal(prompt)
 	}
+	d.outgoing = append(d.outgoing, Outgoing{Text: "later"})
 	d.handle([]byte(`{"type":"response","id":"3","command":"prompt","success":true}`))
-	if len(d.outgoing) != 2 || d.outgoing[0].Text != "first" || d.outgoing[1].Text != "second" {
+	if len(d.outgoing) != 3 || d.outgoing[0].Text != "first" || d.outgoing[1].Text != "second" {
 		t.Fatalf("lost queue: %+v", d.outgoing)
 	}
 }

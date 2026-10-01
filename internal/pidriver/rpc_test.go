@@ -192,10 +192,13 @@ func TestStopAlreadyCancelledContext(t *testing.T) {
 	}
 }
 func TestVersion(t *testing.T) {
-	for _, v := range []string{"0.87.0", "0.86.99"} {
-		m := versionRE.FindStringSubmatch(v)
-		if m == nil || !strings.Contains(v, ".") {
-			t.Fatal(v)
+	for _, tc := range []struct {
+		version string
+		valid   bool
+	}{{"0.87.0", false}, {"0.87.1", true}, {"0.86.99", false}, {"0.99.1", true}, {"1.0.0", true}, {"nonsense", false}} {
+		err := validateVersion(tc.version)
+		if (err == nil) != tc.valid {
+			t.Fatalf("version %q: err %v, want valid %v", tc.version, err, tc.valid)
 		}
 	}
 }
