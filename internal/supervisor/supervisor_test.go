@@ -263,6 +263,38 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	}
 }
 
+type stopErrorDriver struct{ *pidriver.Fake }
+
+func (d *stopErrorDriver) Stop(context.Context) error { return errors.New("pi did not exit") }
+func TestHeadlessStopErrorStillReleasesLockAndClearsPi(t *testing.T) {
+	m, _, _, _ := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	f := &stopErrorDriver{pidriver.NewFake()}
+	m.NewDriver = func(io.Writer) pidriver.Driver { return f }
+	if err := m.Start(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Stop(context.Background(), d.Name); err == nil {
+		t.Fatal("expected Stop failure")
+	}
+	a := m.agents[d.Name]
+	if a.lock != nil || a.def.Pi != nil || a.def.Desired != "stopped" {
+		t.Fatalf("failed stop left ownership: %+v", a)
+	}
+	var saved AgentDefinition
+	data, err := os.ReadFile(m.definitionPath(d.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Pi != nil || saved.Desired != "stopped" {
+		t.Fatalf("failed stop persisted stale state: %+v", saved)
+	}
+}
+
 type blockingDriver struct {
 	*pidriver.Fake
 	entered chan struct{}

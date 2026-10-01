@@ -11,7 +11,7 @@ func (m *Manager) deliver(a *managed, n agentapi.Notification) error {
 	if a.def.Mode != "headless" {
 		return nil
 	}
-	if a.driver == nil || !a.startupSent {
+	if a.driver == nil || !a.startupSent || len(a.pendingWakes) != 0 {
 		a.pendingWakes = append(a.pendingWakes, n)
 		return nil
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"os"
@@ -14,6 +15,41 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 )
+
+func TestWakesDuringHeadlessCrashBackoffKeepOrder(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, now := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	var drivers []*pidriver.Fake
+	m.NewDriver = func(io.Writer) pidriver.Driver { f := pidriver.NewFake(); drivers = append(drivers, f); return f }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	m.agents[d.Name].nextPoll = now.Add(time.Hour)
+	drivers[0].ExitCh <- pidriver.Exit{Code: 1}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []Notification{
+		{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "agm_lead", SenderNature: "agent"},
+		{Type: "message.received", MessageID: "fedcba9876543210", SenderID: "ac_operator", SenderNature: "human", Priority: "urgent"},
+	} {
+		if err := m.Wake(ctx, d.AgentID, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	*now = now.Add(5 * time.Second)
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(drivers) != 2 || len(drivers[1].Sent) != 3 || drivers[1].Sent[0].Source != "startup" || drivers[1].Sent[1].Source != "0123456789abcdef" || drivers[1].Sent[2].Source != "fedcba9876543210" || drivers[1].Sent[2].Kind != pidriver.Urgent {
+		t.Fatalf("crash wake order: %+v", drivers)
+	}
+	if err := m.Stop(ctx, d.Name); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestHeadlessPushPollRaceSendsOnce(t *testing.T) {
 	ctx := context.Background()

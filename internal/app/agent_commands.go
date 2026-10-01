@@ -46,7 +46,11 @@ func (a *App) runAgent(args []string) error {
 		if err != nil {
 			return err
 		}
-		path := filepath.Join(storagepath.AgentDirectory(a.Store.Home(), agent.AgentID), "mode")
+		dir, err := storagepath.EnsureAgentDirectory(a.Store.Home(), agent.AgentID)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(dir, "mode")
 		if err := os.WriteFile(path, []byte(mode), 0600); err != nil {
 			return err
 		}

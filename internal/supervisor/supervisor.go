@@ -352,17 +352,15 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	if err := m.save(a); err != nil {
 		return err
 	}
+	var stopErr error
 	if a.driver != nil {
 		d := a.driver
 		a.driver = nil
 		m.stopEvents(a)
 		m.mu.Unlock()
-		err := d.Stop(ctx)
+		stopErr = d.Stop(ctx)
 		m.mu.Lock()
 		m.closeAgentLog(a)
-		if err != nil {
-			return err
-		}
 	} else if a.def.Mode != "headless" {
 		if err := m.Tmux.Kill(ctx, name); err != nil {
 			return err
@@ -371,10 +369,11 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	a.def.Pi = nil
 	a.pendingWakes = nil
 	if err := m.save(a); err != nil {
+		m.release(a)
 		return err
 	}
 	m.release(a)
-	return nil
+	return stopErr
 }
 func (m *Manager) Remove(ctx context.Context, name string) error {
 	if err := m.Stop(ctx, name); err != nil {

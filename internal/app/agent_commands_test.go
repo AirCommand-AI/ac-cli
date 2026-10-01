@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +78,42 @@ func shortAgentTestHome(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	return home
+}
+
+func TestAgentCreateModePreferenceAndDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		args       []string
+	}{{"Headless", "headless", []string{"agent", "create", "Headless"}}, {"Terminal", "tmux", []string{"agent", "create", "Terminal", "--mode", "tmux"}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/agents":
+					_, _ = w.Write([]byte(`{"agentId":"agm_12345678901234567890123456789012","name":"` + tc.name + `"}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/agents":
+					_, _ = w.Write([]byte(`{"agents":[{"agentId":"agm_12345678901234567890123456789012","name":"` + tc.name + `","status":"active"}]}`))
+				default:
+					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			client, stdout, stderr := testApp(t, server.URL, "", nil)
+			storedMachine(t, client)
+			if code, out, errText := run(t, client, stdout, stderr, tc.args...); code != 0 {
+				t.Fatalf("create failed %s %s", out, errText)
+			}
+			path := filepath.Join(storagepath.AgentDirectory(client.Store.Home(), "agm_12345678901234567890123456789012"), "mode")
+			value, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(value) != tc.mode {
+				t.Fatalf("mode %q, want %q", value, tc.mode)
+			}
+		})
+	}
 }
 
 func TestOfflineAgentModeOnlyWhenStopped(t *testing.T) {
