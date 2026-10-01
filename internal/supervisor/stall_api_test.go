@@ -11,6 +11,42 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
+func TestChooseInFlightTaskUsesOverviewMilestoneAndPositionOrder(t *testing.T) {
+	rows := []stallTaskRow{
+		{ID: "a", Assignee: "agm_1", Status: "in_flight", Milestone: "Later", Number: 1, Position: 1},
+		{ID: "b", Assignee: "agm_1", Status: "in_flight", Milestone: "Now", Number: 10, Position: 0},
+		{ID: "c", Assignee: "agm_1", Status: "in_flight", Milestone: "Now", Number: 11, Position: 3},
+	}
+	chosen, ok := chooseInFlightTask(rows, []stallMilestoneRow{{Name: "Now", Position: 1}, {Name: "Later", Position: 2}}, "agm_1")
+	if !ok || chosen.ID != "c" {
+		t.Fatalf("overview selection: %+v", chosen)
+	}
+}
+
+func TestHTTPPollerSkipsApprovalsWithoutInFlightTask(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/agent/v1/workstreams/980" {
+			t.Errorf("unexpected approval fetch: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"tasks":[]}`))
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	store := credentials.NewStore(home)
+	d := definition(home)
+	d.Workstream = "980"
+	if err := store.Save(credentials.Credential{AgentID: d.AgentID, WorkstreamCode: d.Workstream, APIToken: "agent-token", SocketKey: "key", SocketAddress: "ac:agm_1"}); err != nil {
+		t.Fatal(err)
+	}
+	p := &HTTPPoller{BaseURL: server.URL, Client: server.Client(), Store: store}
+	_, found, pending, err := p.InFlight(context.Background(), d)
+	if err != nil || found || pending || calls != 1 {
+		t.Fatalf("no task: found=%v pending=%v calls=%d err=%v", found, pending, calls, err)
+	}
+}
+
 func TestHTTPPollerStallRoutesUseAgentCredential(t *testing.T) {
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

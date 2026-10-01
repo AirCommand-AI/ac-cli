@@ -70,7 +70,17 @@ func (m *Manager) checkStall(ctx context.Context, a *managed) {
 		}
 		return
 	}
+	current := d.State()
+	if !current.LastEvent.Equal(snap.LastEvent) {
+		return
+	}
+	if !hasTask || a.stalled {
+		a.nextStallCheck = m.now().Add(5 * time.Minute)
+	}
 	now := m.now()
+	// The first task observed after restart inherits pi's already-settled
+	// interval. With C2's single {taskId,nudgedAt} guard, A→B→A may nudge A
+	// again; both cases are intentional until per-task history is persisted.
 	if hasTask && task.ID != a.stallTaskID {
 		if a.stallTaskID != "" {
 			a.stallTaskSince = now
@@ -91,6 +101,9 @@ func (m *Manager) checkStall(ctx context.Context, a *managed) {
 			m.mu.Unlock()
 			err = api.StateReason(ctx, def, state, "")
 			m.mu.Lock()
+			if a.driver != d {
+				return
+			}
 			if err != nil {
 				log.Printf("supervisor: agent %s: restore state: %v", def.Name, err)
 			}
@@ -99,15 +112,37 @@ func (m *Manager) checkStall(ctx context.Context, a *managed) {
 	}
 	changed := !a.stalled || reason != a.stallReason
 	a.stalled, a.stallReason = true, reason
+	a.nextStallCheck = now.Add(5 * time.Minute)
 	if changed || now.Sub(a.lastStallReport) >= stallRefresh {
 		m.mu.Unlock()
 		err = api.StateReason(ctx, def, "stalled", reason)
 		m.mu.Lock()
+		if a.driver != d {
+			return
+		}
+		current = d.State()
+		if !a.stalled || !current.LastEvent.Equal(snap.LastEvent) {
+			a.stalled, a.stallReason = false, ""
+			state := "idle"
+			if current.Streaming {
+				state = "working"
+			}
+			m.mu.Unlock()
+			restoreErr := api.StateReason(ctx, def, state, "")
+			m.mu.Lock()
+			if restoreErr != nil {
+				log.Printf("supervisor: agent %s: restore after stall race: %v", def.Name, restoreErr)
+			}
+			return
+		}
 		if err == nil {
 			a.lastStallReport = now
 		} else {
 			log.Printf("supervisor: agent %s: report stalled: %v", def.Name, err)
 		}
+	}
+	if a.driver != d || !d.State().LastEvent.Equal(snap.LastEvent) {
+		return
 	}
 	if !nudge || !hasTask || task.ID == "" || a.def.Nudge != nil && a.def.Nudge.TaskID == task.ID {
 		return
@@ -123,8 +158,15 @@ func (m *Manager) checkStall(ctx context.Context, a *managed) {
 	}
 	m.mu.Unlock()
 	text := fmt.Sprintf("You appear to have stopped making progress on task %s. Continue it, or report what is blocking you.", taskLabel(task))
-	err = d.Send(pidriver.Outgoing{Text: text, Kind: pidriver.Urgent, Source: "auto-nudge"})
+	if d.State().LastEvent.Equal(snap.LastEvent) {
+		err = d.Send(pidriver.Outgoing{Text: text, Kind: pidriver.Urgent, Source: "auto-nudge"})
+	} else {
+		err = fmt.Errorf("pi progressed before auto-nudge")
+	}
 	m.mu.Lock()
+	if a.driver != d {
+		return
+	}
 	if err != nil {
 		a.def.Nudge = previous
 		if saveErr := m.save(a); saveErr != nil {
@@ -139,6 +181,9 @@ func (m *Manager) checkStall(ctx context.Context, a *managed) {
 		m.mu.Unlock()
 		updateErr := updates.NudgeUpdate(ctx, def, task)
 		m.mu.Lock()
+		if a.driver != d {
+			return
+		}
 		if updateErr != nil {
 			log.Printf("supervisor: agent %s: nudge update: %v", def.Name, updateErr)
 		}

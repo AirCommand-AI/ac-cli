@@ -59,6 +59,7 @@ type managed struct {
 	eventsCancel                                                    context.CancelFunc
 	subscribers                                                     map[chan pidriver.Event]struct{}
 	pendingWakes                                                    []agentapi.Notification
+	interruptFailures                                               map[string]int
 	delivered                                                       []string
 }
 
@@ -529,7 +530,7 @@ func (m *Manager) watch(ctx context.Context, a *managed) error {
 }
 func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 	if a.def.Mode == "headless" {
-		return m.launchHeadless(a)
+		return m.launchHeadless(ctx, a)
 	}
 	if err := m.Tmux.Kill(ctx, a.def.Name); err != nil {
 		return err
@@ -690,7 +691,7 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 			if err = atomicJSON(m.deliveredPath(a.def.AgentID), a.delivered); err != nil {
 				return err
 			}
-			if err := m.deliver(a, n); err != nil {
+			if err := m.deliver(ctx, a, n); err != nil {
 				return err
 			}
 		}

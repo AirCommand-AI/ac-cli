@@ -54,7 +54,7 @@ func (m *Manager) Wake(ctx context.Context, agentID string, n agentapi.Notificat
 		if err := atomicJSON(m.deliveredPath(agentID), a.delivered); err != nil {
 			return err
 		}
-		return m.deliver(a, n)
+		return m.deliver(ctx, a, n)
 	}
 	return nil
 }

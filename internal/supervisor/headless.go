@@ -16,7 +16,7 @@ const startupPrompt = "Check your unread AirCommand messages with aircom inbox a
 
 // launchHeadless is called with m.mu held. The process start happens outside
 // the manager lock, so slow version checks and pi startup do not block wakes.
-func (m *Manager) launchHeadless(a *managed) error {
+func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
 	if m.NewDriver == nil {
 		return fmt.Errorf("headless pi driver is unavailable")
 	}
@@ -87,7 +87,7 @@ func (m *Manager) launchHeadless(a *managed) error {
 		return err
 	}
 	a.startupSent = true
-	return m.drainPending(a)
+	return m.drainPending(ctx, a)
 }
 
 func (m *Manager) discardLaunch(a *managed, d pidriver.Driver) {
@@ -114,7 +114,7 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 		if !a.nextStart.IsZero() && m.now().Before(a.nextStart) {
 			return nil
 		}
-		return m.launchHeadless(a)
+		return m.launchHeadless(ctx, a)
 	}
 	select {
 	case exit := <-a.driver.Exited():
@@ -148,7 +148,7 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 			return err
 		}
 	}
-	if err := m.drainPending(a); err != nil {
+	if err := m.drainPending(ctx, a); err != nil {
 		return err
 	}
 	m.checkStall(ctx, a)
@@ -158,14 +158,14 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	return nil
 }
 
-func (m *Manager) drainPending(a *managed) error {
+func (m *Manager) drainPending(ctx context.Context, a *managed) error {
 	if a.driver == nil || !a.startupSent || len(a.pendingWakes) == 0 {
 		return nil
 	}
 	pending := a.pendingWakes
 	a.pendingWakes = nil
 	for _, n := range pending {
-		if err := m.deliver(a, n); err != nil {
+		if err := m.deliver(ctx, a, n); err != nil {
 			return err
 		}
 	}
