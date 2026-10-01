@@ -74,7 +74,7 @@ func (m *Manager) checkStall(ctx context.Context, a *managed) {
 	if !current.LastEvent.Equal(snap.LastEvent) {
 		return
 	}
-	if !hasTask || a.stalled {
+	if !hasTask || pending || a.stalled {
 		a.nextStallCheck = m.now().Add(5 * time.Minute)
 	}
 	now := m.now()

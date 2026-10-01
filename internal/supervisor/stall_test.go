@@ -63,6 +63,61 @@ func (p *fakeStallPoll) StateReason(_ context.Context, _ AgentDefinition, state,
 	return nil
 }
 
+func TestPiProgressEventClearsStallAndReportsCurrentState(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		settled bool
+		want    string
+	}{{"model", false, "working"}, {"settled", true, "idle"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			m, _, _, now := setup(t)
+			p := &fakeStallPoll{task: InFlightTask{ID: "task-1", Number: 1}, found: true}
+			m.Poll = p
+			d := definition(m.Home)
+			d.Mode = "headless"
+			f := pidriver.NewFake()
+			m.NewDriver = func(io.Writer) pidriver.Driver { return f }
+			if err := m.Start(ctx, d); err != nil {
+				t.Fatal(err)
+			}
+			m.agents[d.Name].nextPoll = now.Add(time.Hour)
+			f.Snapshot = pidriver.Snapshot{Ready: true, Streaming: !tc.settled, Settled: tc.settled, LastEvent: now.Add(-16 * time.Minute)}
+			if err := m.Tick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if !m.agents[d.Name].stalled {
+				t.Fatal("did not enter stalled state")
+			}
+			f.Snapshot.LastEvent = *now
+			f.EventCh <- pidriver.Event{Kind: "message_update", At: *now}
+			deadline := time.After(time.Second)
+			for {
+				p.fakePoll.mu.Lock()
+				states := append([]string(nil), p.fakePoll.states...)
+				p.fakePoll.mu.Unlock()
+				m.mu.Lock()
+				stalled := m.agents[d.Name].stalled
+				m.mu.Unlock()
+				if !stalled && len(states) > 0 {
+					if states[len(states)-1] != tc.want {
+						t.Fatalf("reported %v, want %s", states, tc.want)
+					}
+					break
+				}
+				select {
+				case <-deadline:
+					t.Fatalf("pi progress did not clear stall: states=%v stalled=%v", states, stalled)
+				case <-time.After(time.Millisecond):
+				}
+			}
+			if err := m.Stop(ctx, d.Name); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestIdleWithoutTaskChecksAtFiveMinuteIntervals(t *testing.T) {
 	ctx := context.Background()
 	m, _, _, now := setup(t)
@@ -368,6 +423,17 @@ func TestSettledInFlightNudgesOnceAndPendingApprovalSuppresses(t *testing.T) {
 	if len(p.reports) != 0 || len(f.Sent) != 1 {
 		t.Fatal("pending approval was stalled")
 	}
+	if delay := m.agents[d.Name].nextStallCheck.Sub(*now); delay != 5*time.Minute {
+		t.Fatalf("pending approval check interval %s, want 5m", delay)
+	}
+	*now = now.Add(4 * time.Minute)
+	if err := m.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if p.checks != 1 {
+		t.Fatalf("pending approval checked too often: %d", p.checks)
+	}
+	*now = now.Add(-4 * time.Minute)
 	p.pending = false
 	m.agents[d.Name].nextStallCheck = time.Time{}
 	if err := m.Tick(context.Background()); err != nil {
