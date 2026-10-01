@@ -18,6 +18,7 @@ type Supervisor interface {
 	Subscribe(name string) (<-chan pidriver.Event, func(), bool)
 	Takeover(ctx context.Context, name string) (TakeoverSpec, error)
 	ResumeTakeover(name string) error
+	RecordTakeover(name string, pid int) error
 	History(name, since string, limit int) ([]json.RawMessage, string, error)
 	Remove(ctx context.Context, name string) error
 	List(ctx context.Context) ([]AgentStatus, error)
@@ -32,25 +33,30 @@ type TakeoverSpec struct {
 	Args      []string `json:"args"`
 }
 
+type TakeoverProcess struct {
+	PID       int    `json:"pid"`
+	StartTime string `json:"startTime"`
+}
 type AgentDefinition struct {
-	Version          int         `json:"version"`
-	AgentID          string      `json:"agentId"`
-	Name             string      `json:"name"`
-	Organization     string      `json:"organization"`
-	Workstream       string      `json:"workstream"`
-	WorkFolder       string      `json:"workFolder"`
-	Repos            []string    `json:"repos"`
-	Harness          string      `json:"harness"`
-	Mode             string      `json:"mode"`
-	Desired          string      `json:"desired"`
-	State            string      `json:"state"`
-	Reason           string      `json:"reason,omitempty"`
-	Crashes          []time.Time `json:"crashes,omitempty"`
-	LastExit         *Exit       `json:"lastExit,omitempty"`
-	Pi               *PiProcess  `json:"pi,omitempty"`
-	SessionMigrated  bool        `json:"sessionMigrated,omitempty"`
-	Nudge            *NudgeState `json:"nudge,omitempty"`
-	SessionStartedAt string      `json:"sessionStartedAt,omitempty"`
+	Version          int              `json:"version"`
+	AgentID          string           `json:"agentId"`
+	Name             string           `json:"name"`
+	Organization     string           `json:"organization"`
+	Workstream       string           `json:"workstream"`
+	WorkFolder       string           `json:"workFolder"`
+	Repos            []string         `json:"repos"`
+	Harness          string           `json:"harness"`
+	Mode             string           `json:"mode"`
+	Desired          string           `json:"desired"`
+	State            string           `json:"state"`
+	Reason           string           `json:"reason,omitempty"`
+	Crashes          []time.Time      `json:"crashes,omitempty"`
+	LastExit         *Exit            `json:"lastExit,omitempty"`
+	Pi               *PiProcess       `json:"pi,omitempty"`
+	Takeover         *TakeoverProcess `json:"takeover,omitempty"`
+	SessionMigrated  bool             `json:"sessionMigrated,omitempty"`
+	Nudge            *NudgeState      `json:"nudge,omitempty"`
+	SessionStartedAt string           `json:"sessionStartedAt,omitempty"`
 }
 type PiProcess struct {
 	PID       int    `json:"pid"`

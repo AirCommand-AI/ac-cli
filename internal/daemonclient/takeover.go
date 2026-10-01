@@ -4,10 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os/exec"
+	"sync"
+	"time"
 )
+
+type synchronizedWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+}
+
+func (s *synchronizedWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writer.Write(p)
+}
 
 type takeoverSpec struct {
 	PiPath, WorkDir, SessionID string
@@ -48,7 +62,8 @@ func (c Client) Takeover(ctx context.Context, name string, input io.Reader, outp
 	command.Dir = spec.WorkDir
 	command.Stdin = input
 	command.Stdout = output
-	command.Stderr = stderr
+	safeStderr := &synchronizedWriter{writer: stderr}
+	command.Stderr = safeStderr
 	if err := command.Start(); err != nil {
 		return err
 	}
@@ -57,18 +72,26 @@ func (c Client) Takeover(ctx context.Context, name string, input io.Reader, outp
 		_ = command.Wait()
 		return err
 	}
-	// Loss of the daemon's fence must not leave foreground pi writing a
-	// session that a restarted daemon may reopen headless.
-	finished := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(io.Discard, conn)
+	// A daemon restart can close the socket while the person is still using
+	// pi. The persisted takeover fences the restarted daemon; never kill pi.
+	lost := make(chan struct{})
+	waitResult := make(chan error, 1)
+	go func() { _, _ = io.Copy(io.Discard, conn); close(lost) }()
+	go func() { waitResult <- command.Wait() }()
+	select {
+	case err = <-waitResult:
+		// If the peer closed at the same instant pi exited, report that loss
+		// before our own Close makes it indistinguishable from normal exit.
 		select {
-		case <-finished:
-		default:
-			_ = command.Process.Kill()
+		case <-lost:
+			fmt.Fprintln(safeStderr, "daemon connection lost; your pi keeps running; headless resumes after you exit")
+		case <-time.After(10 * time.Millisecond):
 		}
-	}()
-	err = command.Wait()
-	close(finished)
-	return err
+		_ = conn.Close()
+		<-lost
+		return err
+	case <-lost:
+		fmt.Fprintln(safeStderr, "daemon connection lost; your pi keeps running; headless resumes after you exit")
+		return <-waitResult
+	}
 }

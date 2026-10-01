@@ -53,6 +53,7 @@ type managed struct {
 	pid                                                             int
 	driver                                                          pidriver.Driver
 	takenOver                                                       bool
+	takeoverConnected                                               bool
 	logFile                                                         *os.File
 	startupSent                                                     bool
 	legacySession                                                   bool
@@ -237,6 +238,15 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 		def.Pi = nil
 	}
 	a := &managed{def: def, legacySession: !def.SessionMigrated}
+	if def.State == "taken-over" || def.Takeover != nil {
+		if takeoverAlive(def.Takeover) {
+			a.takenOver = true
+			a.nextPoll = m.now()
+		} else {
+			a.def.Takeover = nil
+			a.def.State = "starting"
+		}
+	}
 	if err = m.loadDelivered(a); err != nil {
 		return err
 	}
@@ -244,9 +254,11 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 		if err = m.acquire(a); err != nil {
 			return err
 		}
-		if err = m.watch(ctx, a); err != nil {
-			m.release(a)
-			return err
+		if !a.takenOver {
+			if err = m.watch(ctx, a); err != nil {
+				m.release(a)
+				return err
+			}
 		}
 	}
 	m.agents[def.Name] = a
@@ -271,6 +283,9 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a := m.agents[def.Name]
+	if a != nil && (a.takenOver || a.def.Takeover != nil || a.def.State == "taken-over") {
+		return fmt.Errorf("agent is taken over")
+	}
 	if a != nil && a.def.AgentID != def.AgentID {
 		return fmt.Errorf("agent name already belongs to another ID")
 	}
@@ -342,6 +357,9 @@ func (m *Manager) Mode(_ context.Context, name, mode string) error {
 	if a == nil {
 		return os.ErrNotExist
 	}
+	if a.takenOver || a.def.Takeover != nil || a.def.State == "taken-over" {
+		return fmt.Errorf("agent is taken over")
+	}
 	if a.def.Desired != "stopped" {
 		return fmt.Errorf("agent must be stopped before changing mode")
 	}
@@ -359,6 +377,9 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	a := m.agents[name]
 	if a == nil {
 		return os.ErrNotExist
+	}
+	if a.takenOver || a.def.Takeover != nil || a.def.State == "taken-over" {
+		return fmt.Errorf("agent is taken over")
 	}
 	a.def.Desired = "stopped"
 	a.def.State = "stopped"
@@ -602,6 +623,15 @@ func (m *Manager) tickAgent(ctx context.Context, a *managed) error {
 	}
 	if a.def.Mode == "headless" {
 		if a.takenOver {
+			if !a.takeoverConnected && a.def.Takeover != nil && !takeoverAlive(a.def.Takeover) {
+				a.takenOver = false
+				a.def.Takeover = nil
+				a.def.State = "starting"
+				if err := m.save(a); err != nil {
+					return err
+				}
+				return nil
+			}
 			if m.Poll != nil && !m.now().Before(a.nextPoll) {
 				return m.poll(ctx, a)
 			}

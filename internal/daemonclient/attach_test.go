@@ -8,8 +8,8 @@ import (
 
 func TestRenderDeliveredOnUserStart(t *testing.T) {
 	out := new(bytes.Buffer)
-	renderEvent(out, "message_start", map[string]any{"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "[AirCommand] wake"}}}})
-	if !strings.Contains(out.String(), "delivered (user message_start)") || !strings.Contains(out.String(), "user: [AirCommand] wake") {
+	renderEvent(out, "message_start", map[string]any{"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "[AirCommand] wake\nDelivery kind: urgent"}}}})
+	if !strings.Contains(out.String(), "urgent delivered") || !strings.Contains(out.String(), "user: [AirCommand] wake") {
 		t.Fatal(out.String())
 	}
 }

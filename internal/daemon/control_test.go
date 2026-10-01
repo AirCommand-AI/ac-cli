@@ -40,6 +40,10 @@ func (f *fakeSupervisor) Takeover(_ context.Context, name string) (supervisor.Ta
 	f.record("takeover:" + name)
 	return supervisor.TakeoverSpec{PiPath: "pi", SessionID: "agm_1"}, nil
 }
+func (f *fakeSupervisor) RecordTakeover(name string, pid int) error {
+	f.record("pid:" + name)
+	return nil
+}
 func (f *fakeSupervisor) ResumeTakeover(name string) error { f.record("resume:" + name); return nil }
 func (f *fakeSupervisor) Subscribe(string) (<-chan pidriver.Event, func(), bool) {
 	return nil, nil, false

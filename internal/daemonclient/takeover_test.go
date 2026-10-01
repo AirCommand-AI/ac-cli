@@ -11,16 +11,18 @@ import (
 	"time"
 )
 
-func TestTakeoverKillsForegroundWhenControlFenceLost(t *testing.T) {
+func TestTakeoverKeepsForegroundWhenControlFenceLost(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fake-pi")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 30\n"), 0700); err != nil {
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 1\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	client, server := net.Pipe()
 	defer server.Close()
+	closed := make(chan struct{})
 	c := Client{SocketPath: "unused", Dial: func(context.Context, string, string) (net.Conn, error) { return client, nil }}
 	go func() {
 		defer server.Close()
+		defer close(closed)
 		decoder := json.NewDecoder(server)
 		encoder := json.NewEncoder(server)
 		var req map[string]any
@@ -30,15 +32,22 @@ func TestTakeoverKillsForegroundWhenControlFenceLost(t *testing.T) {
 		_ = decoder.Decode(&pid)
 	}()
 	done := make(chan error, 1)
+	stderr := new(bytes.Buffer)
 	go func() {
-		done <- c.Takeover(context.Background(), "agent", bytes.NewBuffer(nil), &bytes.Buffer{}, &bytes.Buffer{})
+		done <- c.Takeover(context.Background(), "agent", bytes.NewBuffer(nil), &bytes.Buffer{}, stderr)
 	}()
 	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("fake daemon never received pid")
+	}
+	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("foreground pi survived lost control connection")
+		if err != nil {
+			t.Fatalf("foreground pi was killed: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("foreground pi not killed after connection loss")
+		t.Fatal("foreground pi hung")
 	}
+	// A dropped daemon connection must not kill the foreground process.
 }

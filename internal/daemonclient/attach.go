@@ -48,8 +48,12 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 			op := "say"
 			if text == "/detach" {
 				op = "detach"
-			} else if strings.HasPrefix(text, "/interrupt ") {
-				text = strings.TrimPrefix(text, "/interrupt ")
+			} else if text == "/interrupt" || strings.HasPrefix(text, "/interrupt ") {
+				text = strings.TrimSpace(strings.TrimPrefix(text, "/interrupt"))
+				if text == "" {
+					fmt.Fprintln(output, "[AirCommand] /interrupt requires a message")
+					continue
+				}
 				if interrupt != nil {
 					if err := interrupt(text); err != nil {
 						fmt.Fprintf(output, "[AirCommand] Interrupt failed: %v\n", err)
@@ -140,8 +144,13 @@ func renderMessage(out io.Writer, msg map[string]any, live bool) {
 		}
 	}
 	text := strings.Join(parts, "")
-	if live && role == "user" && strings.HasPrefix(text, "[AirCommand] ") {
-		fmt.Fprintln(out, "[AirCommand] delivered (user message_start)")
+	if live && role == "user" {
+		for _, kind := range []string{"urgent", "nudge", "interrupt"} {
+			if strings.Contains(text, "\nDelivery kind: "+kind) {
+				fmt.Fprintf(out, "[AirCommand] %s delivered\n", kind)
+				break
+			}
+		}
 	}
 	if !live || role == "user" {
 		fmt.Fprintf(out, "%s: %s\n", role, text)

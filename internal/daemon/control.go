@@ -348,6 +348,8 @@ func serveAttach(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Sup
 			return
 		case ev, open := <-events:
 			if !open {
+				_ = conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+				_ = encoder.Encode(map[string]any{"type": "banner", "text": "viewer too slow, detached"})
 				return
 			}
 			if err := encoder.Encode(map[string]any{"type": "event", "event": ev}); err != nil {
@@ -356,10 +358,6 @@ func serveAttach(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Sup
 		case item, open := <-incoming:
 			if !open || item.Op == "detach" {
 				return
-			}
-			if item.Op == "interrupt" {
-				_ = encoder.Encode(map[string]any{"type": "banner", "text": "Interrupt is not available until the audited machine route is connected"})
-				continue
 			}
 			if item.Op == "say" && strings.TrimSpace(item.Text) != "" {
 				driver, ok := m.Driver(req.Name)
@@ -382,7 +380,12 @@ func serveTakeover(ctx context.Context, conn net.Conn, reader *bufio.Reader, m S
 		_ = encoder.Encode(Response{Error: &APIError{Code: "invalid", Message: err.Error()}})
 		return
 	}
-	defer func() { _ = m.ResumeTakeover(req.Name) }()
+	pidReported := false
+	defer func() {
+		if ctx.Err() == nil && !pidReported {
+			_ = m.ResumeTakeover(req.Name)
+		}
+	}()
 	if encoder.Encode(Response{OK: true, Data: spec}) != nil {
 		return
 	}
@@ -404,6 +407,10 @@ func serveTakeover(ctx context.Context, conn net.Conn, reader *bufio.Reader, m S
 	if err := json.NewDecoder(reader).Decode(&child); err != nil || child.Type != "pid" || child.PID <= 0 {
 		return
 	}
+	pidReported = true
+	if err := m.RecordTakeover(req.Name, child.PID); err != nil {
+		_ = encoder.Encode(map[string]any{"type": "error", "text": err.Error()})
+	}
 	// Hold the lock/session fence while the CLI owns the foreground process.
 	for {
 		if _, err := reader.ReadByte(); err != nil {
@@ -413,7 +420,7 @@ func serveTakeover(ctx context.Context, conn net.Conn, reader *bufio.Reader, m S
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if err := syscall.Kill(child.PID, 0); errors.Is(err, syscall.ESRCH) {
+		if err := m.ResumeTakeover(req.Name); err == nil {
 			return
 		}
 		select {

@@ -28,6 +28,14 @@ func (m *Manager) deliver(ctx context.Context, a *managed, n agentapi.Notificati
 	}
 	guidance := pidriver.FormatMessageGuidance(m.CLI, a.def.Workstream, a.def.AgentID, agentapi.ComposeSummary(n, a.def.Workstream, nil), n.MessageID, n.SenderID)
 	text := guidance
+	// The user message_start is the delivery signal. Carry a typed marker in
+	// the prompt so attach can identify urgent/nudge/interrupt banners then.
+	deliveryKind := ""
+	if n.Kind == "nudge" || n.Kind == "interrupt" {
+		deliveryKind = n.Kind
+	} else if n.Priority == "urgent" {
+		deliveryKind = "urgent"
+	}
 	d := a.driver
 	def := a.def
 	attempts := a.interruptFailures[n.MessageID]
@@ -62,6 +70,9 @@ func (m *Manager) deliver(ctx context.Context, a *managed, n agentapi.Notificati
 		}
 	}
 	if err == nil {
+		if deliveryKind != "" {
+			text += "\nDelivery kind: " + deliveryKind
+		}
 		err = d.Send(pidriver.Outgoing{Text: text, Kind: kind, Source: n.MessageID})
 	}
 	m.mu.Lock()

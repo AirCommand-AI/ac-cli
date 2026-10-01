@@ -174,6 +174,9 @@ func (a *App) runAgent(args []string) error {
 }
 
 func (a *App) interruptAgent(name, text string) error {
+	if strings.TrimSpace(text) == "" || len([]rune(text)) > 500 {
+		return &publicError{message: "Interrupt message must contain 1–500 characters."}
+	}
 	agent, err := a.resolveAgent(name)
 	if err != nil {
 		return err
@@ -205,7 +208,26 @@ func (a *App) interruptAgent(name, text string) error {
 		return err
 	}
 	if result.status < 200 || result.status >= 300 {
-		return &publicError{message: fmt.Sprintf("AirCommand interrupt failed: HTTP %d", result.status)}
+		var failure struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Error   struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(result.body, &failure)
+		code, message := failure.Code, failure.Message
+		if code == "" {
+			code = failure.Error.Code
+		}
+		if message == "" {
+			message = failure.Error.Message
+		}
+		if code == "" {
+			code = fmt.Sprintf("HTTP %d", result.status)
+		}
+		return &publicError{message: fmt.Sprintf("AirCommand interrupt failed: %s: %s", code, message)}
 	}
 	return nil
 }

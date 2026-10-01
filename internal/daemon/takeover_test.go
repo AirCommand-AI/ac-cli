@@ -45,7 +45,7 @@ func TestTakeoverControlHandshake(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.calls) != 2 || f.calls[0] != "takeover:eng-1" || f.calls[1] != "resume:eng-1" {
+	if len(f.calls) != 3 || f.calls[0] != "takeover:eng-1" || f.calls[1] != "pid:eng-1" || f.calls[2] != "resume:eng-1" {
 		t.Fatal(f.calls)
 	}
 }
