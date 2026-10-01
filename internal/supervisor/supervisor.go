@@ -50,12 +50,41 @@ type managed struct {
 	driver                         pidriver.Driver
 	logFile                        *os.File
 	startupSent                    bool
+	legacySession                  bool
+	eventsDone                     chan struct{}
+	eventsCancel                   context.CancelFunc
+	subscribers                    map[chan pidriver.Event]struct{}
 	pendingWakes                   []agentapi.Notification
 	delivered                      []string
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
 	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, NewDriver: func(log io.Writer) pidriver.Driver { return pidriver.New(pidriver.Options{Log: log}) }, agents: make(map[string]*managed), booted: make(chan struct{})}
+}
+
+// Subscribe receives every pi event from the dedicated consumer. A slow
+// subscriber is closed rather than blocking pi, and cancel is idempotent.
+func (m *Manager) Subscribe(name string) (<-chan pidriver.Event, func(), bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a := m.agents[name]
+	if a == nil || a.driver == nil {
+		return nil, nil, false
+	}
+	if a.subscribers == nil {
+		a.subscribers = make(map[chan pidriver.Event]struct{})
+	}
+	ch := make(chan pidriver.Event, 256)
+	a.subscribers[ch] = struct{}{}
+	cancel := func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if _, exists := a.subscribers[ch]; exists {
+			delete(a.subscribers, ch)
+			close(ch)
+		}
+	}
+	return ch, cancel, true
 }
 
 // Driver returns a running headless agent's driver to attach/stall consumers.
@@ -190,7 +219,7 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 		}
 		def.Pi = nil
 	}
-	a := &managed{def: def}
+	a := &managed{def: def, legacySession: !def.SessionMigrated}
 	if err = m.loadDelivered(a); err != nil {
 		return err
 	}
@@ -233,6 +262,7 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 		m.agents[def.Name] = a
 	}
 	old := a.def
+	a.legacySession = old.AgentID != "" && !old.SessionMigrated && old.WorkFolder == def.WorkFolder
 	def.Version = 1
 	def.Harness = "pi"
 	if def.Mode == "" {
@@ -249,7 +279,7 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	}
 	def.Pi = old.Pi
 	def.Nudge = old.Nudge
-	def.SessionMigrated = old.SessionMigrated && old.WorkFolder == def.WorkFolder
+	def.SessionMigrated = !a.legacySession
 	def.Desired = "running"
 	def.State = "starting"
 	def.Crashes = nil
@@ -321,6 +351,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	if a.driver != nil {
 		d := a.driver
 		a.driver = nil
+		m.stopEvents(a)
 		m.mu.Unlock()
 		err := d.Stop(ctx)
 		m.mu.Lock()
@@ -334,6 +365,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		}
 	}
 	a.def.Pi = nil
+	a.pendingWakes = nil
 	if err := m.save(a); err != nil {
 		return err
 	}
@@ -367,7 +399,7 @@ func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
 			switch {
 			case s.Streaming:
 				status.PiState = "working"
-			case s.Settled:
+			case s.Ready:
 				status.PiState = "idle"
 			default:
 				status.PiState = "starting"
@@ -385,6 +417,7 @@ func (m *Manager) Shutdown(ctx context.Context, stopAgents bool) error {
 		if a.driver != nil {
 			d := a.driver
 			a.driver = nil
+			m.stopEvents(a)
 			m.mu.Unlock()
 			err := d.Stop(ctx)
 			m.mu.Lock()
@@ -500,7 +533,7 @@ func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 	}
 	args := []string{m.Pi, "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID), "--session-id", a.def.AgentID}
 	fork := ""
-	if !a.def.SessionMigrated {
+	if a.legacySession && !a.def.SessionMigrated {
 		fork = migrationSource(a.def.WorkFolder, a.def.AgentID)
 		if fork != "" {
 			args = append(args, "--fork", fork)
@@ -510,7 +543,9 @@ func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 	if err := m.Tmux.Start(ctx, a.def, args); err != nil {
 		return err
 	}
-	a.def.SessionMigrated = true
+	if !a.legacySession || fixedSessionExists(a.def.WorkFolder, a.def.AgentID) {
+		a.def.SessionMigrated = true
+	}
 	a.def.State = "running"
 	a.def.SessionStartedAt = m.now().Format(time.RFC3339Nano)
 	a.nextStart = time.Time{}
@@ -568,6 +603,12 @@ func (m *Manager) tickAgent(ctx context.Context, a *managed) error {
 		return m.watch(ctx, a)
 	}
 	a.pid = pane.PID
+	if !a.def.SessionMigrated && fixedSessionExists(a.def.WorkFolder, a.def.AgentID) {
+		a.def.SessionMigrated = true
+		if err := m.save(a); err != nil {
+			return err
+		}
+	}
 	if m.Poll != nil && !m.now().Before(a.nextPoll) {
 		return m.poll(ctx, a)
 	}
@@ -593,6 +634,7 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 		if a.driver != nil {
 			d := a.driver
 			a.driver = nil
+			m.stopEvents(a)
 			m.mu.Unlock()
 			err := d.Stop(ctx)
 			m.mu.Lock()
@@ -609,6 +651,7 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 				return err
 			}
 		}
+		a.pendingWakes = nil
 		m.release(a)
 		return nil
 	}
@@ -637,14 +680,14 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 			if err = store.AppendNotification(a.def.AgentID, spooled); err != nil {
 				return err
 			}
-			if err := m.deliver(a, n); err != nil {
-				return err
-			}
 			a.delivered = append(a.delivered, n.MessageID)
 			if len(a.delivered) > 500 {
 				a.delivered = a.delivered[len(a.delivered)-500:]
 			}
 			if err = atomicJSON(m.deliveredPath(a.def.AgentID), a.delivered); err != nil {
+				return err
+			}
+			if err := m.deliver(a, n); err != nil {
 				return err
 			}
 		}

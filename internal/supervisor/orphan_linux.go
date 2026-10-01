@@ -11,18 +11,10 @@ import (
 	"time"
 )
 
-func processCmdline(pid int) string {
-	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimRight(string(data), "\x00")
-}
-
-// killRecordedPi fences reuse of a PID by checking kernel start ticks, the
-// executable and the original process group before signaling the group.
+// killRecordedPi fences PID reuse with kernel start ticks and the original
+// process group. pi changes process.title, so command line is not a stable fence.
 func killRecordedPi(ctx context.Context, p *PiProcess) error {
-	if p == nil || p.PID <= 0 || p.PGID <= 0 || p.StartTime == "" || p.Cmdline == "" {
+	if p == nil || p.PID <= 0 || p.PGID <= 0 || p.StartTime == "" {
 		return nil
 	}
 	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", p.PID))
@@ -34,16 +26,6 @@ func killRecordedPi(ctx context.Context, p *PiProcess) error {
 	}
 	fields := strings.Fields(string(stat)[strings.LastIndex(string(stat), ")")+1:])
 	if len(fields) < 20 || fields[19] != p.StartTime {
-		return nil
-	}
-	cmd, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", p.PID))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if strings.TrimRight(string(cmd), "\x00") != p.Cmdline {
 		return nil
 	}
 	pgid, err := syscall.Getpgid(p.PID)
@@ -75,8 +57,27 @@ func killRecordedPi(ctx context.Context, p *PiProcess) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			_ = syscall.Kill(-p.PGID, syscall.SIGKILL)
-			return fmt.Errorf("timed out waiting for orphan pi pid %d", p.PID)
+			if err := syscall.Kill(-p.PGID, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				return err
+			}
+			wait := time.NewTimer(2 * time.Second)
+			defer wait.Stop()
+			for {
+				current, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", p.PID))
+				if os.IsNotExist(err) || err == nil && strings.HasPrefix(string(current)[strings.LastIndex(string(current), ")")+1:], " Z ") {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-wait.C:
+					return fmt.Errorf("orphan pi pid %d survived SIGKILL", p.PID)
+				case <-tick.C:
+				}
+			}
 		case <-tick.C:
 		}
 	}

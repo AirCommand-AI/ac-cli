@@ -15,8 +15,7 @@ func migrationSource(workDir, agentID string) string {
 	if err != nil {
 		return ""
 	}
-	name := "--" + strings.ReplaceAll(strings.Trim(filepath.Clean(workDir), string(filepath.Separator)), string(filepath.Separator), "-") + "--"
-	files, _ := filepath.Glob(filepath.Join(root, ".pi", "agent", "sessions", name, "*.jsonl"))
+	files, _ := filepath.Glob(filepath.Join(sessionDir(root, workDir), "*.jsonl"))
 	var latest string
 	var newest time.Time
 	for _, path := range files {
@@ -30,4 +29,18 @@ func migrationSource(workDir, agentID string) string {
 		}
 	}
 	return latest
+}
+
+func sessionDir(root, workDir string) string {
+	// pi's project session directory replaces both separators and colons.
+	encoded := strings.NewReplacer(string(filepath.Separator), "-", ":", "-").Replace(strings.Trim(filepath.Clean(workDir), string(filepath.Separator)))
+	return filepath.Join(root, ".pi", "agent", "sessions", "--"+encoded+"--")
+}
+func fixedSessionExists(workDir, agentID string) bool {
+	root, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	files, _ := filepath.Glob(filepath.Join(sessionDir(root, workDir), "*_"+agentID+".jsonl"))
+	return len(files) != 0
 }

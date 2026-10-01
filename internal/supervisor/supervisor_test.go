@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -47,6 +48,7 @@ type fakePoll struct {
 	feed   Feed
 	err    error
 	calls  int
+	mu     sync.Mutex
 	states []string
 }
 
@@ -55,7 +57,9 @@ func (p *fakePoll) Fetch(_ context.Context, _ AgentDefinition, _ string, _ bool)
 	return p.feed, p.err
 }
 func (p *fakePoll) State(_ context.Context, _ AgentDefinition, state string) error {
+	p.mu.Lock()
 	p.states = append(p.states, state)
+	p.mu.Unlock()
 	return nil
 }
 func (p *fakePoll) Spool(_ context.Context, _ AgentDefinition, n Notification) (any, error) {
@@ -74,6 +78,74 @@ func setup(t *testing.T) (*Manager, *fakeTmux, *fakePoll, *time.Time) {
 func definition(home string) AgentDefinition {
 	return AgentDefinition{AgentID: "agm_1", Name: "eng-1", Organization: "Air Command", Workstream: "626", WorkFolder: filepath.Join(home, "work"), Repos: []string{"org/repo"}}
 }
+func TestForkOnlyExistingPreUpgradeAgentAndMarkMigratedAfterSessionExists(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, now := setup(t)
+	t.Setenv("HOME", m.Home)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	dir := sessionDir(m.Home, d.WorkFolder)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, "2026-09-01_legacy.jsonl")
+	if err := os.WriteFile(legacy, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var drivers []*pidriver.Fake
+	m.NewDriver = func(io.Writer) pidriver.Driver {
+		f := pidriver.NewFake()
+		drivers = append(drivers, f)
+		return f
+	}
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if got := drivers[0].Launches[0].ForkFrom; got != "" {
+		t.Fatalf("new agent forked another session: %q", got)
+	}
+	if !m.agents[d.Name].def.SessionMigrated {
+		t.Fatal("new agent not marked migrated")
+	}
+	if err := m.Stop(ctx, d.Name); err != nil {
+		t.Fatal(err)
+	}
+	old := d
+	old.Desired, old.State, old.SessionMigrated = "stopped", "stopped", false
+	if err := atomicJSON(m.definitionPath(d.AgentID), old); err != nil {
+		t.Fatal(err)
+	}
+	m2, _, _, _ := setup(t)
+	m2.Home = m.Home
+	m2.Now = func() time.Time { return *now }
+	m2.NewDriver = m.NewDriver
+	m2.mu.Lock()
+	err := m2.bootAgent(ctx, m.definitionPath(d.AgentID))
+	m2.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m2.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if got := drivers[1].Launches[0].ForkFrom; got != legacy {
+		t.Fatalf("pre-upgrade fork source = %q", got)
+	}
+	if m2.agents[d.Name].def.SessionMigrated {
+		t.Fatal("marked migrated before pi created the fixed session")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "2026-10-01_"+d.AgentID+".jsonl"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m2.agents[d.Name].nextPoll = now.Add(time.Hour)
+	if err := m2.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !m2.agents[d.Name].def.SessionMigrated {
+		t.Fatal("did not mark successful fork")
+	}
+}
+
 func TestSessionMigrationSkipsExistingFixedSession(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOME", root)
@@ -125,22 +197,49 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 		t.Fatal("missing first startup prompt")
 	}
 	drivers[0].MarkReady()
+	viewer, cancelViewer, ok := m.Subscribe(d.Name)
+	if !ok {
+		t.Fatal("headless event subscription unavailable")
+	}
+	defer cancelViewer()
+	m.agents[d.Name].nextPoll = now.Add(time.Hour)
 	drivers[0].EventCh <- pidriver.Event{Kind: "agent_start"}
 	drivers[0].EventCh <- pidriver.Event{Kind: "agent_settled"}
 	if err := m.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(poll.states) != 2 || poll.states[0] != "working" || poll.states[1] != "idle" {
-		t.Fatalf("pi work state: %v", poll.states)
+	deadline := time.After(time.Second)
+	for {
+		poll.mu.Lock()
+		states := append([]string(nil), poll.states...)
+		poll.mu.Unlock()
+		if len(states) == 2 {
+			if states[0] != "working" || states[1] != "idle" {
+				t.Fatalf("pi work state: %v", states)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("pi work state not reported: %v", states)
+		case <-time.After(time.Millisecond):
+		}
 	}
 	n := Notification{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "ac_sender", SenderNature: "human", Priority: "urgent"}
 	if err := m.Wake(ctx, d.AgentID, n); err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case ev := <-viewer:
+		if ev.Kind != "agent_start" {
+			t.Fatalf("first subscriber event: %s", ev.Kind)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event subscriber did not receive pi event")
+	}
 	if len(drivers[0].Sent) != 2 || drivers[0].Sent[1].Kind != pidriver.Urgent {
 		t.Fatal("urgent wake did not reach headless driver")
 	}
-	m.agents[d.Name].nextRetry = time.Time{}
 	drivers[0].ExitCh <- pidriver.Exit{Code: 7}
 	if err := m.Tick(ctx); err != nil {
 		t.Fatal(err)
@@ -154,6 +253,33 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	}
 	if len(drivers) != 2 || drivers[1].Launches[0].SessionID != d.AgentID {
 		t.Fatal("headless crash did not resume the same session")
+	}
+}
+
+func TestDashboardStopStopsHeadlessDriverAndReleasesLock(t *testing.T) {
+	ctx := context.Background()
+	m, _, poll, _ := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	f := pidriver.NewFake()
+	m.NewDriver = func(io.Writer) pidriver.Driver { return f }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	store := credentials.NewStore(m.Home)
+	if err := store.Save(credentials.Credential{AgentID: d.AgentID, WorkstreamCode: d.Workstream, APIToken: "agent-token", SocketKey: "key", SocketAddress: "ac:agm_1"}); err != nil {
+		t.Fatal(err)
+	}
+	poll.err = ErrAgentStopped
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a := m.agents[d.Name]
+	if a.def.State != "stopped-by-dashboard" || a.driver != nil || a.lock != nil || a.def.Pi != nil {
+		t.Fatalf("dashboard stop left pi running: %+v", a)
+	}
+	if err := f.Send(pidriver.Outgoing{Text: "test"}); err == nil {
+		t.Fatal("stopped driver accepted prompt")
 	}
 }
 

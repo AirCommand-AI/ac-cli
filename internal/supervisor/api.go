@@ -14,6 +14,7 @@ type Supervisor interface {
 	Stop(ctx context.Context, name string) error
 	Mode(ctx context.Context, name, mode string) error
 	Driver(name string) (pidriver.Driver, bool)
+	Subscribe(name string) (<-chan pidriver.Event, func(), bool)
 	Remove(ctx context.Context, name string) error
 	List(ctx context.Context) ([]AgentStatus, error)
 	Shutdown(ctx context.Context, stopAgents bool) error

@@ -112,7 +112,11 @@ func (a *App) runAgent(args []string) error {
 			return &publicError{message: fmt.Sprintf("Unable to list agents: %v", err)}
 		}
 		for _, agent := range agents {
-			fmt.Fprintf(a.outputWriter(), "%s\t%s\t%s\t%s\t%s\t%s\n", agent.Name, agent.AgentID, agent.State, agent.Workstream, agent.Mode, agent.PiState)
+			if agent.Mode == "headless" {
+				fmt.Fprintf(a.outputWriter(), "%s\t%s\t%s\t%s\t%s\t%s\n", agent.Name, agent.AgentID, agent.State, agent.Workstream, agent.Mode, agent.PiState)
+			} else {
+				fmt.Fprintf(a.outputWriter(), "%s\t%s\t%s\t%s\n", agent.Name, agent.AgentID, agent.State, agent.Workstream)
+			}
 		}
 		return nil
 	case "attach":

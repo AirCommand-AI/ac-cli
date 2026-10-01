@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
@@ -34,7 +35,7 @@ func (m *Manager) launchHeadless(a *managed) error {
 	a.startupSent = false
 	args := []string{"--aircommand-headless", "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID)}
 	spec := pidriver.LaunchSpec{PiPath: m.Pi, WorkDir: a.def.WorkFolder, SessionID: a.def.AgentID, Args: args}
-	if !a.def.SessionMigrated {
+	if a.legacySession && !a.def.SessionMigrated {
 		spec.ForkFrom = migrationSource(a.def.WorkFolder, a.def.AgentID)
 	}
 	m.mu.Unlock()
@@ -51,35 +52,54 @@ func (m *Manager) launchHeadless(a *managed) error {
 		m.mu.Unlock()
 		_ = d.Stop(context.Background())
 		m.mu.Lock()
+		if a.driver == d {
+			a.driver = nil
+			m.closeAgentLog(a)
+		}
 		return fmt.Errorf("agent stopped during pi startup")
 	}
 	snap := d.State()
-	a.def.Pi = &PiProcess{PID: snap.PID, PGID: snap.PGID, StartTime: snap.StartTime, Cmdline: processCmdline(snap.PID)}
+	a.def.Pi = &PiProcess{PID: snap.PID, PGID: snap.PGID, StartTime: snap.StartTime, Cmdline: strings.Join(snap.Cmdline, " ")}
 	a.def.State = "running"
-	a.def.SessionMigrated = true
+	if !a.legacySession || fixedSessionExists(a.def.WorkFolder, a.def.AgentID) {
+		a.def.SessionMigrated = true
+	}
 	a.def.SessionStartedAt = m.now().Format(time.RFC3339Nano)
 	a.nextStart = time.Time{}
 	a.nextPoll = m.now()
 	if err := m.save(a); err != nil {
+		m.discardLaunch(a, d)
 		return err
 	}
+	a.eventsDone = make(chan struct{})
+	reportCtx, cancel := context.WithCancel(context.Background())
+	a.eventsCancel = cancel
+	states := make(chan string, 32)
+	go m.reportLoop(reportCtx, a.def, states)
+	go m.consumeEvents(a, d, a.eventsDone, states)
 	// Send queues until Ready; it is the first RPC prompt (R6). Never call
 	// driver methods that can write to pi under the supervisor mutex.
 	m.mu.Unlock()
 	err = d.Send(pidriver.Outgoing{Text: startupPrompt, Kind: pidriver.Regular, Source: "startup"})
 	m.mu.Lock()
 	if err != nil {
+		m.discardLaunch(a, d)
 		return err
 	}
 	a.startupSent = true
-	pending := a.pendingWakes
-	a.pendingWakes = nil
-	for _, n := range pending {
-		if err := m.deliver(a, n); err != nil {
-			return err
-		}
+	return m.drainPending(a)
+}
+
+func (m *Manager) discardLaunch(a *managed, d pidriver.Driver) {
+	m.mu.Unlock()
+	_ = d.Stop(context.Background())
+	m.mu.Lock()
+	if a.driver == d {
+		a.driver = nil
+		m.stopEvents(a)
+		m.closeAgentLog(a)
+		a.def.Pi = nil
 	}
-	return nil
 }
 
 func (m *Manager) closeAgentLog(a *managed) {
@@ -99,6 +119,7 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	select {
 	case exit := <-a.driver.Exited():
 		a.driver = nil
+		m.stopEvents(a)
 		m.closeAgentLog(a)
 		a.def.Pi = nil
 		now := m.now()
@@ -121,47 +142,112 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 		return m.save(a)
 	default:
 	}
-	// Interpreter wrappers may exec after Start. Refresh the durable kernel
-	// argv once RPC is ready, before any subsequent daemon restart.
-	if snap := a.driver.State(); snap.Ready && a.def.Pi != nil && snap.PID == a.def.Pi.PID && snap.StartTime == a.def.Pi.StartTime {
-		if cmdline := processCmdline(snap.PID); cmdline != "" && cmdline != a.def.Pi.Cmdline {
-			a.def.Pi.Cmdline = cmdline
-			if err := m.save(a); err != nil {
-				return err
-			}
+	if !a.def.SessionMigrated && fixedSessionExists(a.def.WorkFolder, a.def.AgentID) {
+		a.def.SessionMigrated = true
+		if err := m.save(a); err != nil {
+			return err
 		}
 	}
-	for {
-		select {
-		case e, ok := <-a.driver.Events():
-			if !ok {
-				return nil
-			}
-			if e.Kind == "agent_start" || e.Kind == "agent_settled" {
-				state := "working"
-				if e.Kind == "agent_settled" {
-					state = "idle"
-				}
-				m.reportHeadlessState(ctx, a, state)
-			}
-		default:
-			if m.Poll != nil && !m.now().Before(a.nextPoll) {
-				return m.poll(ctx, a)
-			}
-			return nil
-		}
+	if err := m.drainPending(a); err != nil {
+		return err
 	}
+	if m.Poll != nil && !m.now().Before(a.nextPoll) {
+		return m.poll(ctx, a)
+	}
+	return nil
 }
 
-func (m *Manager) reportHeadlessState(ctx context.Context, a *managed, state string) {
+func (m *Manager) drainPending(a *managed) error {
+	if a.driver == nil || !a.startupSent || len(a.pendingWakes) == 0 {
+		return nil
+	}
+	pending := a.pendingWakes
+	a.pendingWakes = nil
+	for _, n := range pending {
+		if err := m.deliver(a, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) stopEvents(a *managed) {
+	if a.eventsDone != nil {
+		close(a.eventsDone)
+		a.eventsDone = nil
+	}
+	if a.eventsCancel != nil {
+		a.eventsCancel()
+		a.eventsCancel = nil
+	}
+	for ch := range a.subscribers {
+		delete(a.subscribers, ch)
+		close(ch)
+	}
+}
+func (m *Manager) reportLoop(ctx context.Context, def AgentDefinition, states <-chan string) {
 	reporter, ok := m.Poll.(interface {
 		State(context.Context, AgentDefinition, string) error
 	})
 	if !ok {
 		return
 	}
-	if err := reporter.State(ctx, a.def, state); err != nil {
-		// Reporting failure cannot interrupt pi or stop processing wakes.
-		log.Printf("supervisor: agent %s: report %s: %v", a.def.Name, state, err)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case state := <-states:
+			if err := reporter.State(ctx, def, state); err != nil && ctx.Err() == nil {
+				log.Printf("supervisor: agent %s: report %s: %v", def.Name, state, err)
+			}
+		}
+	}
+}
+
+func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struct{}, states chan string) {
+	for {
+		select {
+		case <-done:
+			return
+		case e, open := <-d.Events():
+			if !open {
+				return
+			}
+			m.mu.Lock()
+			if a.driver != d {
+				m.mu.Unlock()
+				return
+			}
+			for ch := range a.subscribers {
+				select {
+				case ch <- e:
+				default:
+					delete(a.subscribers, ch)
+					close(ch)
+				}
+			}
+			m.mu.Unlock()
+			if e.Kind != "agent_start" && e.Kind != "agent_settled" {
+				continue
+			}
+			state := "working"
+			if e.Kind == "agent_settled" {
+				state = "idle"
+			}
+			select {
+			case states <- state:
+			default:
+				// Only state transitions use this queue; never let a slow
+				// server block the pi event reader.
+				select {
+				case <-states:
+				default:
+				}
+				select {
+				case states <- state:
+				default:
+				}
+			}
+		}
 	}
 }

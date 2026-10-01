@@ -11,6 +11,7 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
+	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
 func TestAgentCommandsUseLocalDaemonSocket(t *testing.T) {
@@ -75,6 +76,44 @@ func shortAgentTestHome(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	return home
+}
+
+func TestOfflineAgentModeOnlyWhenStopped(t *testing.T) {
+	_, client, stdout, stderr := leaveFixture(t)
+	home := shortAgentTestHome(t)
+	client.Store = credentials.NewStore(home)
+	storedAgent(t, client, leadID, "583", "Lead")
+	path := storagepath.AgentDaemonState(home, leadID)
+	def := supervisor.AgentDefinition{Name: "Lead", AgentID: leadID, Workstream: "583", WorkFolder: filepath.Join(home, "work"), Desired: "running", Mode: "tmux"}
+	writeDef := func() {
+		t.Helper()
+		data, err := json.Marshal(def)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeDef()
+	if code, _, _ := run(t, client, stdout, stderr, "agent", "mode", "Lead", "headless"); code == 0 {
+		t.Fatal("changed running agent mode")
+	}
+	def.Desired = "stopped"
+	writeDef()
+	if code, out, errText := run(t, client, stdout, stderr, "agent", "mode", "Lead", "headless"); code != 0 {
+		t.Fatalf("mode failed: %s %s", out, errText)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &def); err != nil {
+		t.Fatal(err)
+	}
+	if def.Mode != "headless" || def.Desired != "stopped" {
+		t.Fatalf("offline mode corrupted state: %+v", def)
+	}
 }
 
 func TestRemovedLegacyTopLevelCommands(t *testing.T) {
