@@ -1,6 +1,6 @@
 # AirCommand adapter for pi.dev
 
-This pi extension turns new AirCommand spool entries into agent turns. It contains no HTTP or polling logic: `aircom listen` owns the network connection, cursor, retry policy, and JSONL spool.
+In terminal mode, this pi extension turns new AirCommand spool entries into agent turns. It contains no HTTP or polling logic: `aircom listen` (or the machine daemon for daemon-run agents) owns the network connection, cursor, retry policy, and JSONL spool. In headless mode, the daemon delivers wakes directly to pi.
 
 ## Install
 
@@ -68,7 +68,15 @@ pi --aircommand-workstream <code> --aircommand-agent <agentId>
 
 Supplying both values starts the watcher at `session_start` without reading credentials. Supplying only `--aircommand-agent` reads that agent's per-agent credential metadata to obtain the workstream. A workstream flag without an agent flag is rejected because it cannot identify an isolated agent.
 
-With neither flag, the extension does nothing at startup: it does not inspect AirCommand storage, create a spool, arm a watcher, or display an error. This is the normal behavior for unrelated pi sessions even when the extension is installed globally.
+With neither enrollment flag, the extension does nothing at startup: it does not inspect AirCommand storage, create a spool, arm a watcher, or display an error. This is the normal behavior for unrelated pi sessions even when the extension is installed globally.
+
+For daemon-driven RPC sessions, add the boolean `--aircommand-headless` flag (no value follows it):
+
+```sh
+pi --aircommand-headless --aircommand-workstream <code> --aircommand-agent <agentId>
+```
+
+The extension still connects for runtime and branch reporting, task guidance, and `/aircommand`, but does not tail the spool, report `aircom state`, or report `aircom usage`; the daemon owns wakes and working/idle state. Headless token usage is not reported in this phase. Without the flag, terminal-mode spool, state, and usage behavior is unchanged.
 
 The binary used in injected message-handling guidance defaults to `~/.local/bin/aircom`. Override it with:
 
