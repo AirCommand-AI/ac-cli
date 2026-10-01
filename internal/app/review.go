@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
 const reviewUsage = "Usage: aircom review start <task> --of <task> [--commits <a>..<b>] [--repo <path>] | review finding <task> --severity <critical|major|minor|nit> --category <correctness|security|performance|tests|style|docs|design|other> --summary <text> [--file <path>] [--line <n>] | review finish <task> --outcome <approved|sent_back> [--no-findings] | review finding-status <findingId> --status <fixed|wontfix|invalid>; all forms require --workstream <code> [--agent <agentId|name>]"
@@ -134,8 +136,34 @@ func (a *App) review(args []string) error {
 		return e
 	}
 	if response.status < 200 || response.status >= 300 {
-		return workstreamResponseStatusError(response.status, response.body, code, false, credential)
+		return reviewResponseError(action, response.status, response.body, code, credential)
 	}
 	_, e = fmt.Fprintf(a.outputWriter(), "Review %s recorded for %s.\n", action, safeMetadata(ref, credential.APIToken, credential.SocketKey))
 	return e
+}
+
+// reviewRecordingHint explains the shape the server requires; agents that ran
+// review start on the task under review got a bare "workstream not found".
+const reviewRecordingHint = "A review is recorded on its own task of type review, assigned to you; " +
+	"name the task being reviewed with --of. Create one with: aircom task create --type review --assignee <you> --title <text>."
+
+// reviewResponseError shows the server's reason for review failures. The
+// generic workstream mapping turned "Review or task not found" into
+// "Workstream N was not found", which hid the real problem.
+func reviewResponseError(action string, status int, body []byte, code string, credential credentials.Credential) error {
+	if status == http.StatusUnauthorized || status == http.StatusConflict {
+		return workstreamResponseStatusError(status, body, code, true, credential)
+	}
+	var response struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &response) != nil || strings.TrimSpace(response.Message) == "" {
+		return workstreamResponseStatusError(status, body, code, true, credential)
+	}
+	message := fmt.Sprintf("Review %s failed: %s (HTTP %d).", action,
+		safeMetadata(strings.TrimSpace(response.Message), credential.APIToken, credential.SocketKey), status)
+	if action != "finding-status" && (status == http.StatusBadRequest || status == http.StatusNotFound) {
+		message += " " + reviewRecordingHint
+	}
+	return &publicError{message: message}
 }
