@@ -22,25 +22,30 @@ import (
 // in run; the stdout reader appends to an unbounded queue and never waits for
 // event consumers or command processing.
 type RPC struct {
-	mu         sync.Mutex
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	ready      chan struct{}
-	exited     chan Exit
-	events     chan Event
-	notify     chan struct{}
-	lines      [][]byte
-	outgoing   []Outgoing
-	state      Snapshot
-	closed     bool
-	compacting bool
-	seq        int
-	pending    map[int]Outgoing
-	tools      map[string]string
+	mu             sync.Mutex
+	cmd            *exec.Cmd
+	stdin          io.WriteCloser
+	ready          chan struct{}
+	exited         chan Exit
+	done           chan struct{}
+	events         chan Event
+	notify         chan struct{}
+	lines          [][]byte
+	outgoing       []Outgoing
+	state          Snapshot
+	closed         bool
+	compacting     bool
+	seq            int
+	pending        map[int]Outgoing
+	tools          map[string]string
+	interruptID    int
+	interruptPhase string
+	interruptMsg   Outgoing
+	restore        []string
 }
 
 func New() *RPC {
-	return &RPC{ready: make(chan struct{}), exited: make(chan Exit, 1), events: make(chan Event, 256), notify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
+	return &RPC{ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
 }
 func (d *RPC) Ready() <-chan struct{} { return d.ready }
 func (d *RPC) Exited() <-chan Exit    { return d.exited }
@@ -127,6 +132,7 @@ func (d *RPC) Start(spec LaunchSpec) error {
 		d.closed = true
 		d.mu.Unlock()
 		d.exited <- exit
+		close(d.done)
 		d.wake()
 	}()
 	d.command("get_state", nil)
@@ -207,7 +213,7 @@ func (d *RPC) run() {
 		}
 		for {
 			d.mu.Lock()
-			if !d.state.Ready || d.compacting || len(d.outgoing) == 0 || d.closed {
+			if !d.state.Ready || d.compacting || d.interruptPhase != "" || len(d.outgoing) == 0 || d.closed {
 				done := d.closed
 				d.mu.Unlock()
 				if done {
@@ -224,8 +230,13 @@ func (d *RPC) run() {
 }
 func (d *RPC) dispatch(msg Outgoing) {
 	if msg.Kind == Interrupt {
-		d.command("clear_queue", nil)
-		d.command("abort", nil)
+		id := d.command("clear_queue", nil)
+		d.mu.Lock()
+		d.interruptID = id
+		d.interruptPhase = "clear_queue"
+		d.interruptMsg = msg
+		d.mu.Unlock()
+		return
 	}
 	behavior := "followUp"
 	if msg.Kind == Urgent || msg.Kind == Interrupt {
@@ -240,6 +251,50 @@ func (d *RPC) dispatch(msg Outgoing) {
 	d.pending[id] = msg
 	d.mu.Unlock()
 }
+func (d *RPC) advanceInterrupt(v map[string]any) {
+	d.mu.Lock()
+	phase := d.interruptPhase
+	msg := d.interruptMsg
+	d.mu.Unlock()
+	switch phase {
+	case "clear_queue":
+		if data, ok := v["data"].(map[string]any); ok {
+			for _, key := range []string{"steering", "followUp"} {
+				if items, ok := data[key].([]any); ok {
+					for _, item := range items {
+						if text, ok := item.(string); ok {
+							d.restore = append(d.restore, text)
+						}
+					}
+				}
+			}
+		}
+		id := d.command("abort", nil)
+		d.mu.Lock()
+		d.interruptID = id
+		d.interruptPhase = "abort"
+		d.mu.Unlock()
+	case "abort":
+		text := msg.Text
+		if !strings.HasPrefix(text, "[AirCommand] ") {
+			text = "[AirCommand] " + text
+		}
+		id := d.command("prompt", map[string]any{"message": text, "streamingBehavior": "steer"})
+		d.mu.Lock()
+		d.interruptID = id
+		d.interruptPhase = "prompt"
+		d.mu.Unlock()
+	case "prompt":
+		d.mu.Lock()
+		for _, text := range d.restore {
+			d.outgoing = append(d.outgoing, Outgoing{Text: text, Kind: Regular})
+		}
+		d.restore = nil
+		d.interruptPhase = ""
+		d.mu.Unlock()
+		d.wake()
+	}
+}
 func (d *RPC) handle(line []byte) {
 	var v map[string]any
 	if json.Unmarshal(line, &v) != nil {
@@ -248,6 +303,12 @@ func (d *RPC) handle(line []byte) {
 	typ, _ := v["type"].(string)
 	if idstr, ok := v["id"].(string); ok {
 		id, _ := strconv.Atoi(idstr)
+		d.mu.Lock()
+		interruptResponse := d.interruptPhase != "" && id == d.interruptID
+		d.mu.Unlock()
+		if interruptResponse {
+			d.advanceInterrupt(v)
+		}
 		d.mu.Lock()
 		msg, found := d.pending[id]
 		delete(d.pending, id)
@@ -333,7 +394,7 @@ func (d *RPC) Stop(ctx context.Context) error {
 	}
 	_ = stdin.Close()
 	select {
-	case <-d.exited:
+	case <-d.done:
 		return nil
 	case <-ctx.Done():
 	}
@@ -341,13 +402,13 @@ func (d *RPC) Stop(ctx context.Context) error {
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	select {
-	case <-d.exited:
+	case <-d.done:
 		return nil
 	case <-timer.C:
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	select {
-	case <-d.exited:
+	case <-d.done:
 		return nil
 	case <-time.After(2 * time.Second):
 		return errors.New("pi group did not exit")
