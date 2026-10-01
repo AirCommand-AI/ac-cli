@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -57,8 +56,12 @@ func killRecordedPi(ctx context.Context, p *PiProcess) error {
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if _, err := os.Stat(fmt.Sprintf("/proc/%s/stat", strconv.Itoa(p.PID))); os.IsNotExist(err) {
+		current, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", p.PID))
+		if os.IsNotExist(err) || err == nil && strings.HasPrefix(string(current)[strings.LastIndex(string(current), ")")+1:], " Z ") {
 			return nil
+		}
+		if err != nil {
+			return err
 		}
 		select {
 		case <-ctx.Done():

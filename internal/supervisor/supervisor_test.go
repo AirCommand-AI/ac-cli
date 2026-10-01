@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -43,14 +44,19 @@ func (f *fakeTmux) Start(_ context.Context, d AgentDefinition, args []string) er
 func (f *fakeTmux) Kill(_ context.Context, n string) error { delete(f.panes, n); f.kills++; return nil }
 
 type fakePoll struct {
-	feed  Feed
-	err   error
-	calls int
+	feed   Feed
+	err    error
+	calls  int
+	states []string
 }
 
 func (p *fakePoll) Fetch(_ context.Context, _ AgentDefinition, _ string, _ bool) (Feed, error) {
 	p.calls++
 	return p.feed, p.err
+}
+func (p *fakePoll) State(_ context.Context, _ AgentDefinition, state string) error {
+	p.states = append(p.states, state)
+	return nil
 }
 func (p *fakePoll) Spool(_ context.Context, _ AgentDefinition, n Notification) (any, error) {
 	return map[string]string{"messageId": n.MessageID, "senderId": n.SenderID, "summary": "pointer"}, nil
@@ -68,13 +74,37 @@ func setup(t *testing.T) (*Manager, *fakeTmux, *fakePoll, *time.Time) {
 func definition(home string) AgentDefinition {
 	return AgentDefinition{AgentID: "agm_1", Name: "eng-1", Organization: "Air Command", Workstream: "626", WorkFolder: filepath.Join(home, "work"), Repos: []string{"org/repo"}}
 }
+func TestSessionMigrationSkipsExistingFixedSession(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	work := filepath.Join(root, "work", "eng-1")
+	dir := filepath.Join(root, ".pi", "agent", "sessions", "--"+strings.ReplaceAll(strings.TrimPrefix(work, "/"), "/", "-")+"--")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, "2026-09-01_legacy.jsonl")
+	if err := os.WriteFile(legacy, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := migrationSource(work, "agm_1"); got != legacy {
+		t.Fatalf("migration source %q, want %q", got, legacy)
+	}
+	fixed := filepath.Join(dir, "2026-10-01_agm_1.jsonl")
+	if err := os.WriteFile(fixed, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := migrationSource(work, "agm_1"); got != "" {
+		t.Fatalf("existing fixed session would be forked again: %q", got)
+	}
+}
+
 func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	ctx := context.Background()
-	m, tm, _, now := setup(t)
+	m, tm, poll, now := setup(t)
 	d := definition(m.Home)
 	d.Mode = "headless"
 	var drivers []*pidriver.Fake
-	m.NewDriver = func() pidriver.Driver {
+	m.NewDriver = func(io.Writer) pidriver.Driver {
 		f := pidriver.NewFake()
 		drivers = append(drivers, f)
 		return f
@@ -85,10 +115,24 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	if len(tm.launches) != 0 || len(drivers) != 1 || len(drivers[0].Launches) != 1 || drivers[0].Launches[0].SessionID != d.AgentID {
 		t.Fatal("headless must start the RPC driver, not tmux")
 	}
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if len(drivers) != 1 {
+		t.Fatal("restarting a running headless agent spawned a second pi")
+	}
 	if len(drivers[0].Sent) != 1 || drivers[0].Sent[0].Source != "startup" {
 		t.Fatal("missing first startup prompt")
 	}
 	drivers[0].MarkReady()
+	drivers[0].EventCh <- pidriver.Event{Kind: "agent_start"}
+	drivers[0].EventCh <- pidriver.Event{Kind: "agent_settled"}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(poll.states) != 2 || poll.states[0] != "working" || poll.states[1] != "idle" {
+		t.Fatalf("pi work state: %v", poll.states)
+	}
 	n := Notification{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "ac_sender", SenderNature: "human", Priority: "urgent"}
 	if err := m.Wake(ctx, d.AgentID, n); err != nil {
 		t.Fatal(err)
@@ -96,6 +140,7 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	if len(drivers[0].Sent) != 2 || drivers[0].Sent[1].Kind != pidriver.Urgent {
 		t.Fatal("urgent wake did not reach headless driver")
 	}
+	m.agents[d.Name].nextRetry = time.Time{}
 	drivers[0].ExitCh <- pidriver.Exit{Code: 7}
 	if err := m.Tick(ctx); err != nil {
 		t.Fatal(err)
@@ -109,6 +154,37 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	}
 	if len(drivers) != 2 || drivers[1].Launches[0].SessionID != d.AgentID {
 		t.Fatal("headless crash did not resume the same session")
+	}
+}
+
+func TestStartPreservesModeAndDurableFields(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, _ := setup(t)
+	d := definition(m.Home)
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	a := m.agents[d.Name]
+	a.def.Nudge = &NudgeState{TaskID: "task1", NudgedAt: "2026-10-01T00:00:00Z"}
+	a.def.SessionMigrated = true
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if a.def.Nudge == nil || a.def.Nudge.TaskID != "task1" || !a.def.SessionMigrated || a.def.Mode != "tmux" {
+		t.Fatalf("start dropped durable fields: %+v", a.def)
+	}
+	if err := m.Stop(ctx, d.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Mode(ctx, d.Name, "headless"); err != nil {
+		t.Fatal(err)
+	}
+	m.NewDriver = func(io.Writer) pidriver.Driver { return pidriver.NewFake() }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if a.def.Mode != "headless" || a.def.Nudge == nil || !a.def.SessionMigrated {
+		t.Fatalf("start lost mode or fields: %+v", a.def)
 	}
 }
 

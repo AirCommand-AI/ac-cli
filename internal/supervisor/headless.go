@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,10 +20,17 @@ func (m *Manager) launchHeadless(a *managed) error {
 	if m.NewDriver == nil {
 		return fmt.Errorf("headless pi driver is unavailable")
 	}
-	d := m.NewDriver()
+	logPath := filepath.Join(filepath.Dir(m.definitionPath(a.def.AgentID)), "pi.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("open pi log: %w", err)
+	}
+	d := m.NewDriver(f)
 	if d == nil {
+		f.Close()
 		return fmt.Errorf("headless pi driver is unavailable")
 	}
+	a.logFile = f
 	a.driver = d
 	a.startupSent = false
 	args := []string{"--aircommand-headless", "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID)}
@@ -30,11 +39,12 @@ func (m *Manager) launchHeadless(a *managed) error {
 		spec.ForkFrom = migrationSource(a.def.WorkFolder, a.def.AgentID)
 	}
 	m.mu.Unlock()
-	err := d.Start(spec)
+	err = d.Start(spec)
 	m.mu.Lock()
 	if err != nil {
 		if a.driver == d {
 			a.driver = nil
+			m.closeAgentLog(a)
 		}
 		return err
 	}
@@ -73,6 +83,13 @@ func (m *Manager) launchHeadless(a *managed) error {
 	return nil
 }
 
+func (m *Manager) closeAgentLog(a *managed) {
+	if a.logFile != nil {
+		_ = a.logFile.Close()
+		a.logFile = nil
+	}
+}
+
 func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	if a.driver == nil {
 		if !a.nextStart.IsZero() && m.now().Before(a.nextStart) {
@@ -83,6 +100,7 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	select {
 	case exit := <-a.driver.Exited():
 		a.driver = nil
+		m.closeAgentLog(a)
 		a.def.Pi = nil
 		now := m.now()
 		a.def.LastExit = &Exit{At: now.Format(time.RFC3339Nano), Code: exit.Code, Signal: exit.Signal}

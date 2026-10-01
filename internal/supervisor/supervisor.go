@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -33,7 +34,7 @@ type Manager struct {
 	Poll          Poller
 	// NewDriver constructs an isolated RPC driver for each headless launch.
 	// The production constructor is supplied by the daemon entrypoint.
-	NewDriver func() pidriver.Driver
+	NewDriver func(io.Writer) pidriver.Driver
 	Now       func() time.Time
 	mu        sync.Mutex
 	agents    map[string]*managed
@@ -47,13 +48,14 @@ type managed struct {
 	lastPoll                       string
 	pid                            int
 	driver                         pidriver.Driver
+	logFile                        *os.File
 	startupSent                    bool
 	pendingWakes                   []agentapi.Notification
 	delivered                      []string
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
-	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, NewDriver: func() pidriver.Driver { return pidriver.New(pidriver.Options{}) }, agents: make(map[string]*managed), booted: make(chan struct{})}
+	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, NewDriver: func(log io.Writer) pidriver.Driver { return pidriver.New(pidriver.Options{Log: log}) }, agents: make(map[string]*managed), booted: make(chan struct{})}
 }
 
 // Driver returns a running headless agent's driver to attach/stall consumers.
@@ -264,6 +266,10 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 		return err
 	}
 	if def.Mode == "headless" {
+		if a.driver != nil {
+			a.def.State = "running"
+			return m.save(a)
+		}
 		return m.launch(ctx, a, false)
 	}
 	pane, err := m.Tmux.Inspect(ctx, def.Name)
@@ -318,6 +324,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		m.mu.Unlock()
 		err := d.Stop(ctx)
 		m.mu.Lock()
+		m.closeAgentLog(a)
 		if err != nil {
 			return err
 		}
@@ -381,10 +388,14 @@ func (m *Manager) Shutdown(ctx context.Context, stopAgents bool) error {
 			m.mu.Unlock()
 			err := d.Stop(ctx)
 			m.mu.Lock()
+			m.closeAgentLog(a)
 			if err != nil {
 				return err
 			}
 			a.def.Pi = nil
+			if err := m.save(a); err != nil {
+				return err
+			}
 		}
 		if stopAgents {
 			if a.def.Mode != "headless" {
@@ -585,6 +596,7 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 			m.mu.Unlock()
 			err := d.Stop(ctx)
 			m.mu.Lock()
+			m.closeAgentLog(a)
 			if err != nil {
 				return err
 			}

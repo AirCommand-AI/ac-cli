@@ -66,7 +66,7 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		// as plain errors. Translate these into the stable C3 wire codes.
 		case strings.Contains(err.Error(), "already"):
 			code = "already_running"
-		case strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "unsupported"):
+		case strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "must be stopped"):
 			code = "invalid"
 		}
 		return Response{Error: &APIError{Code: code, Message: err.Error()}}
