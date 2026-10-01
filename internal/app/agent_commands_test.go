@@ -16,6 +16,43 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
+func TestTerminalAttachStillUsesTmux(t *testing.T) {
+	home := shortAgentTestHome(t)
+	socket := storagepath.DaemonSocket(home)
+	if err := os.MkdirAll(filepath.Dir(socket), 0700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var req map[string]any
+		_ = json.NewDecoder(conn).Decode(&req)
+		_ = json.NewEncoder(conn).Encode(map[string]any{"ok": true, "data": map[string]any{"agents": []any{map[string]any{"name": "eng-1", "agentId": "agm_1", "mode": "tmux"}}}})
+	}()
+	bin := t.TempDir()
+	argsPath := filepath.Join(bin, "args")
+	script := "#!/bin/sh\nprintf '%s ' \"$@\" > " + argsPath + "\n"
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	app := &App{Store: credentials.NewStore(home), Stdout: new(bytes.Buffer), Stderr: new(bytes.Buffer)}
+	if code := app.Run([]string{"agent", "attach", "eng-1"}); code != 0 {
+		t.Fatalf("attach exit %d", code)
+	}
+	got, err := os.ReadFile(argsPath)
+	if err != nil || string(got) != "-L aircom attach -t eng-1 " {
+		t.Fatalf("tmux args %q %v", got, err)
+	}
+}
 func TestAgentCommandsUseLocalDaemonSocket(t *testing.T) {
 	home := shortAgentTestHome(t)
 	path := storagepath.DaemonSocket(home)

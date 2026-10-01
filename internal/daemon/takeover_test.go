@@ -3,12 +3,85 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
+type waitingTakeoverSupervisor struct {
+	*fakeSupervisor
+	released atomic.Bool
+}
+
+func (f *waitingTakeoverSupervisor) ResumeTakeover(name string) error {
+	if !f.released.Load() {
+		return errors.New("foreground pi still running")
+	}
+	f.record("resume:" + name)
+	return nil
+}
+func TestTakeoverWaitsForForegroundExitAfterSocketClose(t *testing.T) {
+	server, client := net.Pipe()
+	f := &waitingTakeoverSupervisor{fakeSupervisor: &fakeSupervisor{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveConnection(ctx, server, f, time.Now(), "dev", "", 0, func() {}, new(atomic.Bool), nil)
+	}()
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	enc := json.NewEncoder(client)
+	dec := json.NewDecoder(client)
+	_ = enc.Encode(Request{Op: "agent.takeover", Name: "eng-1"})
+	var ready Response
+	if err := dec.Decode(&ready); err != nil || !ready.OK {
+		t.Fatalf("ready %+v %v", ready, err)
+	}
+	_ = enc.Encode(map[string]any{"type": "pid", "pid": 12345})
+	_ = client.Close()
+	select {
+	case <-done:
+		t.Fatal("resumed while foreground pi alive")
+	case <-time.After(150 * time.Millisecond):
+	}
+	f.released.Store(true)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("did not resume after pi exit")
+	}
+}
+func TestTakeoverWithoutPIDResumesOnDisconnect(t *testing.T) {
+	server, client := net.Pipe()
+	f := &fakeSupervisor{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveConnection(ctx, server, f, time.Now(), "dev", "", 0, func() {}, new(atomic.Bool), nil)
+	}()
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	_ = json.NewEncoder(client).Encode(Request{Op: "agent.takeover", Name: "eng-1"})
+	var reply Response
+	if err := json.NewDecoder(client).Decode(&reply); err != nil || !reply.OK {
+		t.Fatalf("reply %+v %v", reply, err)
+	}
+	_ = client.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("no-pid takeover did not resume")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) != 2 || f.calls[0] != "takeover:eng-1" || f.calls[1] != "resume:eng-1" {
+		t.Fatal(f.calls)
+	}
+}
 func TestTakeoverControlHandshake(t *testing.T) {
 	server, client := net.Pipe()
 	f := &fakeSupervisor{}
