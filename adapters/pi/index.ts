@@ -19,6 +19,7 @@ import { Type } from "typebox";
 const WORKSTREAM_FLAG = "aircommand-workstream";
 const AGENT_FLAG = "aircommand-agent";
 const CLI_FLAG = "aircommand-cli";
+const HEADLESS_FLAG = "aircommand-headless";
 const COMMAND_NAME = "aircommand";
 const CONNECT_TOOL_NAME = "aircommand_connect";
 const ENCODED_COMPONENT_PREFIX = "id-";
@@ -127,6 +128,11 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		type: "string",
 		default: join(homedir(), ".local", "bin", "aircom"),
 	});
+	pi.registerFlag(HEADLESS_FLAG, {
+		description: "Daemon handles AirCommand wakes and state; disable extension spool, state and usage hooks",
+		type: "boolean",
+	});
+	const headless = pi.getFlag(HEADLESS_FLAG) === true;
 
 	let activeConnection: ActiveConnection | undefined;
 	let sessionActive = false;
@@ -186,7 +192,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	};
 	const reportState = (state: "working" | "idle") => {
 		const enrollment = activeConnection?.enrollment;
-		if (!sessionActive || !enrollment) return;
+		if (headless || !sessionActive || !enrollment) return;
 		const now = Date.now();
 		if (lastState === state && now - lastStateAt < 60_000) return;
 		lastState = state;
@@ -223,7 +229,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		}
 
 		const token = {};
-		const newTail = tailSpool(
+		const newTail = headless ? { close() {} } : tailSpool(
 			spoolPath(enrollment.agentId),
 			(notification) => {
 				if (!sessionActive || activeConnection?.token !== token) return;
@@ -274,7 +280,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		name: CONNECT_TOOL_NAME,
 		label: "Connect AirCommand",
 		description:
-			"Connect this running pi session to the AirCommand agent identified by an agent ID returned from aircom join. Starts watching only that agent's notification spool.",
+			"Connect this running pi session to the AirCommand agent identified by an agent ID returned from aircom join. In terminal mode, starts watching only that agent's notification spool; in headless mode the daemon delivers wakes.",
 		promptSnippet: "Join an AirCommand workstream, connect this session, and use messages and operator-authorized tasks",
 		// These persist for the session, so the per-wake notification can stay
 		// terse instead of restating the whole procedure on every message.
@@ -332,7 +338,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 						ctx,
 						result === "already-connected"
 							? `AirCommand is already watching workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}.`
-							: `AirCommand is watching workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}. Anything that arrived before now is unread but will not be announced — run aircom inbox once to see it.`,
+							: `AirCommand is connected to workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}. ${headless ? "The daemon delivers wakes" : "The extension watches the spool"}; anything that arrived before now is unread but will not be announced — run aircom inbox once to see it.`,
 						"info",
 					);
 				} catch (error) {
@@ -382,7 +388,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			connect(enrollment, ctx);
 			notify(
 				ctx,
-				`AirCommand is watching workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}.`,
+				`AirCommand is connected to workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}. ${headless ? "The daemon delivers wakes." : "The extension watches the spool."}`,
 				"info",
 			);
 		} catch (error) {
@@ -400,7 +406,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	// turns remain in the agent's unattributed usage bucket. No cost estimate.
 	pi.on("turn_end", async (event, ctx) => {
 		const connection = activeConnection;
-		if (!sessionActive || !connection || event.message.role !== "assistant") return;
+		if (headless || !sessionActive || !connection || event.message.role !== "assistant") return;
 		const input = event.message.usage?.input ?? 0;
 		const output = event.message.usage?.output ?? 0;
 		if (input + output <= 0) return;

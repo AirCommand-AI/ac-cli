@@ -18,6 +18,21 @@ func TestPiAdapterReportsTurnUsage(t *testing.T) {
 	}
 }
 
+func TestPiHeadlessFlagDisablesExtensionDeliveryAndReporting(t *testing.T) {
+	extension := readAdapterFile(t, filepath.Join(adapterRepositoryRoot(t), "adapters", "pi", "index.ts"))
+	for _, part := range []string{
+		`pi.registerFlag(HEADLESS_FLAG, {`, `type: "boolean"`,
+		`const headless = pi.getFlag(HEADLESS_FLAG) === true`,
+		`headless ? { close() {} } : tailSpool(`,
+		`if (headless || !sessionActive || !enrollment) return;`,
+		`if (headless || !sessionActive || !connection || event.message.role !== "assistant") return;`,
+	} {
+		if !strings.Contains(extension, part) {
+			t.Errorf("headless adapter missing %q", part)
+		}
+	}
+}
+
 func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	t.Parallel()
 
