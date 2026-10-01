@@ -151,6 +151,7 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	if err := m.drainPending(a); err != nil {
 		return err
 	}
+	m.checkStall(ctx, a)
 	if m.Poll != nil && !m.now().Before(a.nextPoll) {
 		return m.poll(ctx, a)
 	}
@@ -218,6 +219,11 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				m.mu.Unlock()
 				return
 			}
+			wasStalled := a.stalled
+			if wasStalled {
+				a.stalled = false
+				a.stallReason = ""
+			}
 			for ch := range a.subscribers {
 				select {
 				case ch <- e:
@@ -227,11 +233,11 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				}
 			}
 			m.mu.Unlock()
-			if e.Kind != "agent_start" && e.Kind != "agent_settled" {
+			if !wasStalled && e.Kind != "agent_start" && e.Kind != "agent_settled" {
 				continue
 			}
 			state := "working"
-			if e.Kind == "agent_settled" {
+			if e.Kind == "agent_settled" || wasStalled && d.State().Settled {
 				state = "idle"
 			}
 			select {

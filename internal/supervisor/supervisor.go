@@ -41,21 +41,25 @@ type Manager struct {
 	booted    chan struct{}
 }
 type managed struct {
-	def                            AgentDefinition
-	lock                           *agentlock.Lock
-	nextStart, nextPoll, nextRetry time.Time
-	failures, inspectFailures      int
-	lastPoll                       string
-	pid                            int
-	driver                         pidriver.Driver
-	logFile                        *os.File
-	startupSent                    bool
-	legacySession                  bool
-	eventsDone                     chan struct{}
-	eventsCancel                   context.CancelFunc
-	subscribers                    map[chan pidriver.Event]struct{}
-	pendingWakes                   []agentapi.Notification
-	delivered                      []string
+	def                                                             AgentDefinition
+	lock                                                            *agentlock.Lock
+	nextStart, nextPoll, nextRetry, nextStallCheck, lastStallReport time.Time
+	stalled                                                         bool
+	stallReason                                                     string
+	stallTaskID                                                     string
+	stallTaskSince                                                  time.Time
+	failures, inspectFailures                                       int
+	lastPoll                                                        string
+	pid                                                             int
+	driver                                                          pidriver.Driver
+	logFile                                                         *os.File
+	startupSent                                                     bool
+	legacySession                                                   bool
+	eventsDone                                                      chan struct{}
+	eventsCancel                                                    context.CancelFunc
+	subscribers                                                     map[chan pidriver.Event]struct{}
+	pendingWakes                                                    []agentapi.Notification
+	delivered                                                       []string
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {

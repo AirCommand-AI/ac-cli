@@ -110,6 +110,106 @@ func (p *HTTPPoller) State(ctx context.Context, d AgentDefinition, state string)
 	}
 	return nil
 }
+func (p *HTTPPoller) apiCall(ctx context.Context, d AgentDefinition, method, path string, payload any) ([]byte, error) {
+	if p.Store == nil || p.Client == nil {
+		return nil, fmt.Errorf("agent API is not configured")
+	}
+	cred, err := p.Store.FindByAgent(d.Workstream, d.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	var body []byte
+	if payload != nil {
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(p.BaseURL, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+cred.APIToken)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	response, err := p.Client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	result, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(result) > 4*1024*1024 {
+		return nil, fmt.Errorf("agent API response too large")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("agent API returned HTTP %d", response.StatusCode)
+	}
+	return result, nil
+}
+func (p *HTTPPoller) InFlight(ctx context.Context, d AgentDefinition) (InFlightTask, bool, bool, error) {
+	base := "/agent/v1/workstreams/" + url.PathEscape(d.Workstream)
+	body, err := p.apiCall(ctx, d, http.MethodGet, base, nil)
+	if err != nil {
+		return InFlightTask{}, false, false, err
+	}
+	var detail struct {
+		Tasks []struct {
+			ID, Status, Assignee string
+			Number, Position     int
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal(body, &detail); err != nil {
+		return InFlightTask{}, false, false, err
+	}
+	approval, err := p.apiCall(ctx, d, http.MethodGet, base+"/approvals/requests?mine=pending", nil)
+	if err != nil {
+		return InFlightTask{}, false, false, err
+	}
+	var pending struct {
+		Requests []json.RawMessage `json:"requests"`
+	}
+	if err := json.Unmarshal(approval, &pending); err != nil {
+		return InFlightTask{}, false, false, err
+	}
+	selected := InFlightTask{}
+	found := false
+	for _, task := range detail.Tasks {
+		if task.Assignee != d.AgentID || task.Status != "in_flight" {
+			continue
+		}
+		if !found || task.Position < selected.Position || task.Position == selected.Position && task.Number < selected.Number {
+			selected = InFlightTask{ID: task.ID, Number: task.Number, Position: task.Position}
+			found = true
+		}
+	}
+	return selected, found, len(pending.Requests) > 0, nil
+}
+func (p *HTTPPoller) StateReason(ctx context.Context, d AgentDefinition, state, reason string) error {
+	payload := map[string]string{"state": state, "reason": reason, "source": "daemon", "at": time.Now().UTC().Format(time.RFC3339Nano)}
+	_, err := p.apiCall(ctx, d, http.MethodPut, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/agents/me/state", payload)
+	return err
+}
+func (p *HTTPPoller) MessageBody(ctx context.Context, d AgentDefinition, id string) (string, error) {
+	body, err := p.apiCall(ctx, d, http.MethodGet, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/messages/"+url.PathEscape(id), nil)
+	if err != nil {
+		return "", err
+	}
+	var message struct {
+		Body string `json:"body"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &message); err != nil {
+		return "", err
+	}
+	if message.ID != id {
+		return "", fmt.Errorf("message ID mismatch")
+	}
+	return message.Body, nil
+}
 func (p *HTTPPoller) Spool(ctx context.Context, d AgentDefinition, n Notification) (any, error) {
 	var names map[agentapi.SenderIdentity]string
 	if p.Senders != nil {
