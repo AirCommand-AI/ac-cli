@@ -33,6 +33,10 @@ func (f *fakeSupervisor) Start(_ context.Context, d Definition) error {
 	f.record("start:" + d.Name)
 	return nil
 }
+func (f *fakeSupervisor) Mode(_ context.Context, name, mode string) error {
+	f.record("mode:" + name + ":" + mode)
+	return nil
+}
 func (f *fakeSupervisor) Stop(_ context.Context, name string) error {
 	f.record("stop:" + name)
 	return nil

@@ -182,7 +182,7 @@ func validate(d AgentDefinition) error {
 	if d.Desired != "running" && d.Desired != "stopped" {
 		return fmt.Errorf("invalid desired state")
 	}
-	if d.Harness != "" && d.Harness != "pi" || d.Mode != "" && d.Mode != "tmux" {
+	if d.Harness != "" && d.Harness != "pi" || d.Mode != "" && d.Mode != "tmux" && d.Mode != "headless" {
 		return fmt.Errorf("unsupported harness or mode")
 	}
 	return nil
@@ -204,7 +204,18 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	old := a.def
 	def.Version = 1
 	def.Harness = "pi"
-	def.Mode = "tmux"
+	if def.Mode == "" {
+		def.Mode = old.Mode
+	}
+	if def.Mode == "" {
+		def.Mode = "tmux"
+	}
+	if def.Mode != "tmux" && def.Mode != "headless" {
+		return fmt.Errorf("unsupported agent mode %q", def.Mode)
+	}
+	def.Pi = old.Pi
+	def.Nudge = old.Nudge
+	def.SessionMigrated = old.SessionMigrated && old.WorkFolder == def.WorkFolder
 	def.Desired = "running"
 	def.State = "starting"
 	def.Crashes = nil
@@ -228,6 +239,30 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 		return m.launch(ctx, a, false)
 	}
 	return m.watch(ctx, a)
+}
+
+// Mode changes only stopped agents; this prevents two pi processes from
+// writing to the same session during a terminal/headless switch.
+func (m *Manager) Mode(_ context.Context, name, mode string) error {
+	if mode != "tmux" && mode != "headless" {
+		return fmt.Errorf("unsupported agent mode %q", mode)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a := m.agents[name]
+	if a == nil {
+		return os.ErrNotExist
+	}
+	if a.def.Desired != "stopped" {
+		return fmt.Errorf("agent must be stopped before changing mode")
+	}
+	previous := a.def.Mode
+	a.def.Mode = mode
+	if err := m.save(a); err != nil {
+		a.def.Mode = previous
+		return err
+	}
+	return nil
 }
 func (m *Manager) Stop(ctx context.Context, name string) error {
 	m.mu.Lock()
@@ -268,7 +303,7 @@ func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
 	defer m.mu.Unlock()
 	var list []AgentStatus
 	for _, a := range m.agents {
-		list = append(list, AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll})
+		list = append(list, AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Mode: a.def.Mode, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	return list, nil

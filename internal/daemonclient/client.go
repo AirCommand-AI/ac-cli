@@ -24,6 +24,8 @@ type AgentStatus struct {
 	Workstream string          `json:"workstream"`
 	Desired    string          `json:"desired"`
 	State      string          `json:"state"`
+	Mode       string          `json:"mode"`
+	PiState    string          `json:"piState"`
 	PID        int             `json:"pid"`
 	LastExit   json.RawMessage `json:"lastExit"`
 	LastPollAt string          `json:"lastPollAt"`
@@ -44,6 +46,7 @@ type StartRequest struct {
 	Workstream   string   `json:"workstream"`
 	Repos        []string `json:"repos"`
 	WorkFolder   string   `json:"workFolder"`
+	Mode         string   `json:"mode,omitempty"`
 }
 
 type RemoteError struct {
@@ -123,6 +126,10 @@ func (c Client) Start(ctx context.Context, r StartRequest) error {
 		Op string `json:"op"`
 		StartRequest
 	}{"agent.start", r}, nil)
+}
+
+func (c Client) Mode(ctx context.Context, name, mode string) error {
+	return c.call(ctx, map[string]any{"op": "agent.mode", "name": name, "mode": mode}, nil)
 }
 
 func (c Client) Stop(ctx context.Context, name string) error {

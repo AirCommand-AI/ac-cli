@@ -67,6 +67,34 @@ func setup(t *testing.T) (*Manager, *fakeTmux, *fakePoll, *time.Time) {
 func definition(home string) AgentDefinition {
 	return AgentDefinition{AgentID: "agm_1", Name: "eng-1", Organization: "Air Command", Workstream: "626", WorkFolder: filepath.Join(home, "work"), Repos: []string{"org/repo"}}
 }
+func TestModeRequiresStoppedAgentAndPersists(t *testing.T) {
+	m, _, _, _ := setup(t)
+	def := definition(m.Home)
+	if err := m.Start(context.Background(), def); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Mode(context.Background(), def.Name, "headless"); err == nil {
+		t.Fatal("running agent changed mode")
+	}
+	if err := m.Stop(context.Background(), def.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Mode(context.Background(), def.Name, "headless"); err != nil {
+		t.Fatal(err)
+	}
+	var saved AgentDefinition
+	data, err := os.ReadFile(m.definitionPath(def.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Mode != "headless" {
+		t.Fatalf("saved mode = %q", saved.Mode)
+	}
+}
+
 func TestRestartCutoffAndExplicitFreshStart(t *testing.T) {
 	ctx := context.Background()
 	m, tm, _, now := setup(t)

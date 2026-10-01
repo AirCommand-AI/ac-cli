@@ -11,6 +11,7 @@ import (
 type Supervisor interface {
 	Start(ctx context.Context, def AgentDefinition) error
 	Stop(ctx context.Context, name string) error
+	Mode(ctx context.Context, name, mode string) error
 	Remove(ctx context.Context, name string) error
 	List(ctx context.Context) ([]AgentStatus, error)
 	Shutdown(ctx context.Context, stopAgents bool) error
@@ -31,7 +32,20 @@ type AgentDefinition struct {
 	State            string      `json:"state"`
 	Crashes          []time.Time `json:"crashes,omitempty"`
 	LastExit         *Exit       `json:"lastExit,omitempty"`
+	Pi               *PiProcess  `json:"pi,omitempty"`
+	SessionMigrated  bool        `json:"sessionMigrated,omitempty"`
+	Nudge            *NudgeState `json:"nudge,omitempty"`
 	SessionStartedAt string      `json:"sessionStartedAt,omitempty"`
+}
+type PiProcess struct {
+	PID       int    `json:"pid"`
+	PGID      int    `json:"pgid"`
+	StartTime string `json:"startTime"`
+	Cmdline   string `json:"cmdline"`
+}
+type NudgeState struct {
+	TaskID   string `json:"taskId"`
+	NudgedAt string `json:"nudgedAt"`
 }
 type Exit struct {
 	At     string `json:"at"`
@@ -44,6 +58,8 @@ type AgentStatus struct {
 	Workstream string `json:"workstream"`
 	Desired    string `json:"desired"`
 	State      string `json:"state"`
+	Mode       string `json:"mode"`
+	PiState    string `json:"piState,omitempty"`
 	PID        int    `json:"pid,omitempty"`
 	LastExit   *Exit  `json:"lastExit,omitempty"`
 	LastPollAt string `json:"lastPollAt,omitempty"`

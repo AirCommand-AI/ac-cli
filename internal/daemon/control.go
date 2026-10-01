@@ -32,6 +32,7 @@ type Request struct {
 	Workstream   string   `json:"workstream,omitempty"`
 	Repos        []string `json:"repos,omitempty"`
 	WorkFolder   string   `json:"workFolder,omitempty"`
+	Mode         string   `json:"mode,omitempty"`
 	StopAgents   bool     `json:"stopAgents,omitempty"`
 }
 type APIError struct {
@@ -91,7 +92,14 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		if request.Name == "" || request.AgentID == "" || request.Organization == "" || request.Workstream == "" || request.WorkFolder == "" {
 			return fail(ErrInvalid)
 		}
-		if err := supervisor.Start(ctx, Definition{Version: 1, Name: request.Name, AgentID: request.AgentID, Organization: request.Organization, Workstream: request.Workstream, Repos: request.Repos, WorkFolder: request.WorkFolder}); err != nil {
+		if err := supervisor.Start(ctx, Definition{Version: 1, Name: request.Name, AgentID: request.AgentID, Organization: request.Organization, Workstream: request.Workstream, Repos: request.Repos, WorkFolder: request.WorkFolder, Mode: request.Mode}); err != nil {
+			return fail(err)
+		}
+	case "agent.mode":
+		if request.Name == "" || request.Mode == "" {
+			return fail(ErrInvalid)
+		}
+		if err := supervisor.Mode(ctx, request.Name, request.Mode); err != nil {
 			return fail(err)
 		}
 	case "agent.stop":
