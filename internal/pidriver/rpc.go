@@ -1,0 +1,357 @@
+package pidriver
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// RPC owns the subprocess and the RPC pipe. All writes to stdin are serialized
+// in run; the stdout reader appends to an unbounded queue and never waits for
+// event consumers or command processing.
+type RPC struct {
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	ready      chan struct{}
+	exited     chan Exit
+	events     chan Event
+	notify     chan struct{}
+	lines      [][]byte
+	outgoing   []Outgoing
+	state      Snapshot
+	closed     bool
+	compacting bool
+	seq        int
+	pending    map[int]Outgoing
+	tools      map[string]string
+}
+
+func New() *RPC {
+	return &RPC{ready: make(chan struct{}), exited: make(chan Exit, 1), events: make(chan Event, 256), notify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
+}
+func (d *RPC) Ready() <-chan struct{} { return d.ready }
+func (d *RPC) Exited() <-chan Exit    { return d.exited }
+func (d *RPC) Events() <-chan Event   { return d.events }
+func (d *RPC) State() Snapshot        { d.mu.Lock(); defer d.mu.Unlock(); return d.state }
+func (d *RPC) wake() {
+	select {
+	case d.notify <- struct{}{}:
+	default:
+	}
+}
+
+var versionRE = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
+
+func checkVersion(path string) error {
+	out, err := exec.Command(path, "--version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("pi --version: %w: %s", err, out)
+	}
+	m := versionRE.FindStringSubmatch(string(out))
+	if m == nil {
+		return fmt.Errorf("unrecognized pi version: %q", out)
+	}
+	a, _ := strconv.Atoi(m[1])
+	b, _ := strconv.Atoi(m[2])
+	c, _ := strconv.Atoi(m[3])
+	if a == 0 && (b < 87 || b == 87 && c < 1) {
+		return fmt.Errorf("headless mode requires pi >= 0.87.1, found %s", m[0])
+	}
+	return nil
+}
+func (d *RPC) Start(spec LaunchSpec) error {
+	d.mu.Lock()
+	if d.cmd != nil || d.closed {
+		d.mu.Unlock()
+		return errors.New("driver already started or stopped")
+	}
+	d.mu.Unlock()
+	if spec.PiPath == "" {
+		spec.PiPath = "pi"
+	}
+	if err := checkVersion(spec.PiPath); err != nil {
+		return err
+	}
+	args := []string{"--mode", "rpc", "--session-id", spec.SessionID}
+	if spec.ForkFrom != "" {
+		args = append(args, "--fork", spec.ForkFrom)
+	}
+	args = append(args, spec.Args...)
+	cmd := exec.Command(spec.PiPath, args...)
+	cmd.Dir = spec.WorkDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = os.Stderr
+	if err = cmd.Start(); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.cmd = cmd
+	d.stdin = stdin
+	d.state.PID = cmd.Process.Pid
+	d.state.PGID = cmd.Process.Pid
+	d.state.StartTime = processStartTime(cmd.Process.Pid)
+	d.mu.Unlock()
+	go d.read(stdout)
+	go d.run()
+	go func() {
+		err := cmd.Wait()
+		exit := Exit{Err: err}
+		if ps := cmd.ProcessState; ps != nil {
+			exit.Code = ps.ExitCode()
+			if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				exit.Signal = ws.Signal().String()
+			}
+		}
+		d.mu.Lock()
+		d.closed = true
+		d.mu.Unlock()
+		d.exited <- exit
+		d.wake()
+	}()
+	d.command("get_state", nil)
+	return nil
+}
+func processStartTime(pid int) string {
+	// Linux /proc stat field 22. comm may contain spaces and parentheses.
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return ""
+	}
+	i := bytes.LastIndexByte(data, ')')
+	if i < 0 {
+		return ""
+	}
+	fields := strings.Fields(string(data[i+1:]))
+	if len(fields) < 20 {
+		return ""
+	}
+	return fields[19]
+}
+func (d *RPC) read(r io.Reader) {
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			d.mu.Lock()
+			d.lines = append(d.lines, bytes.TrimSuffix(line, []byte{'\n'}))
+			d.mu.Unlock()
+			d.wake()
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+func (d *RPC) command(kind string, fields map[string]any) int {
+	d.mu.Lock()
+	d.seq++
+	id := d.seq
+	if fields == nil {
+		fields = make(map[string]any)
+	}
+	fields["type"] = kind
+	if _, ok := fields["id"]; !ok {
+		fields["id"] = strconv.Itoa(id)
+	}
+	data, _ := json.Marshal(fields)
+	if d.stdin != nil && !d.closed {
+		_, _ = d.stdin.Write(append(data, '\n'))
+	}
+	d.mu.Unlock()
+	return id
+}
+func (d *RPC) Send(msg Outgoing) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return errors.New("pi exited")
+	}
+	d.outgoing = append(d.outgoing, msg)
+	d.wake()
+	return nil
+}
+func (d *RPC) run() {
+	for range d.notify {
+		for {
+			d.mu.Lock()
+			if len(d.lines) == 0 {
+				d.mu.Unlock()
+				break
+			}
+			line := d.lines[0]
+			d.lines[0] = nil
+			d.lines = d.lines[1:]
+			d.mu.Unlock()
+			d.handle(line)
+		}
+		for {
+			d.mu.Lock()
+			if !d.state.Ready || d.compacting || len(d.outgoing) == 0 || d.closed {
+				done := d.closed
+				d.mu.Unlock()
+				if done {
+					return
+				}
+				break
+			}
+			msg := d.outgoing[0]
+			d.outgoing = d.outgoing[1:]
+			d.mu.Unlock()
+			d.dispatch(msg)
+		}
+	}
+}
+func (d *RPC) dispatch(msg Outgoing) {
+	if msg.Kind == Interrupt {
+		d.command("clear_queue", nil)
+		d.command("abort", nil)
+	}
+	behavior := "followUp"
+	if msg.Kind == Urgent || msg.Kind == Interrupt {
+		behavior = "steer"
+	}
+	text := msg.Text
+	if !strings.HasPrefix(text, "[AirCommand] ") {
+		text = "[AirCommand] " + text
+	}
+	id := d.command("prompt", map[string]any{"message": text, "streamingBehavior": behavior})
+	d.mu.Lock()
+	d.pending[id] = msg
+	d.mu.Unlock()
+}
+func (d *RPC) handle(line []byte) {
+	var v map[string]any
+	if json.Unmarshal(line, &v) != nil {
+		return
+	}
+	typ, _ := v["type"].(string)
+	if idstr, ok := v["id"].(string); ok {
+		id, _ := strconv.Atoi(idstr)
+		d.mu.Lock()
+		msg, found := d.pending[id]
+		delete(d.pending, id)
+		d.mu.Unlock()
+		if found && v["success"] == false {
+			d.mu.Lock()
+			d.outgoing = append([]Outgoing{msg}, d.outgoing...)
+			d.compacting = true
+			d.mu.Unlock()
+		}
+		if typ == "response" && v["command"] == "get_state" && v["success"] == true {
+			d.mu.Lock()
+			if !d.state.Ready {
+				d.state.Ready = true
+				close(d.ready)
+			}
+			d.mu.Unlock()
+			d.wake()
+		}
+	}
+	if typ == "compaction_start" {
+		d.mu.Lock()
+		d.compacting = true
+		d.mu.Unlock()
+	}
+	if typ == "compaction_end" {
+		d.mu.Lock()
+		d.compacting = false
+		d.mu.Unlock()
+		d.wake()
+	}
+	if typ == "extension_ui_request" {
+		method, _ := v["method"].(string)
+		switch method {
+		case "select", "confirm", "input", "editor":
+			d.command("extension_ui_response", map[string]any{"id": v["id"], "cancelled": true})
+			typ = "dialog_cancelled"
+		}
+	}
+	d.mu.Lock()
+	d.state.LastEvent = time.Now()
+	switch typ {
+	case "agent_start":
+		d.state.Streaming = true
+		d.state.Settled = false
+	case "agent_settled":
+		d.state.Streaming = false
+		d.state.Settled = true
+	case "tool_execution_start":
+		id, _ := v["toolCallId"].(string)
+		name, _ := v["toolName"].(string)
+		d.tools[id] = name
+		d.state.CurrentTool = name
+		d.state.ParentToolCallID, _ = v["parentToolCallId"].(string)
+	case "tool_execution_end":
+		id, _ := v["toolCallId"].(string)
+		delete(d.tools, id)
+		d.state.CurrentTool = ""
+		d.state.ParentToolCallID = ""
+	}
+	d.mu.Unlock()
+	ev := Event{Kind: typ, Data: v, At: time.Now()}
+	select {
+	case d.events <- ev:
+	default:
+		select {
+		case <-d.events:
+		default:
+		}
+		select {
+		case d.events <- ev:
+		default:
+		}
+	}
+}
+func (d *RPC) Stop(ctx context.Context) error {
+	d.mu.Lock()
+	cmd := d.cmd
+	stdin := d.stdin
+	d.mu.Unlock()
+	if cmd == nil {
+		return nil
+	}
+	_ = stdin.Close()
+	select {
+	case <-d.exited:
+		return nil
+	case <-ctx.Done():
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-d.exited:
+		return nil
+	case <-timer.C:
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	select {
+	case <-d.exited:
+		return nil
+	case <-time.After(2 * time.Second):
+		return errors.New("pi group did not exit")
+	}
+}
+
+var _ Driver = (*RPC)(nil)
