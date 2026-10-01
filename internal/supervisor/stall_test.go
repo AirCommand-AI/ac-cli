@@ -63,6 +63,44 @@ func (p *fakeStallPoll) StateReason(_ context.Context, _ AgentDefinition, state,
 	return nil
 }
 
+func TestIdleWithoutTaskChecksAtFiveMinuteIntervals(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, now := setup(t)
+	p := &fakeStallPoll{}
+	m.Poll = p
+	d := definition(m.Home)
+	d.Mode = "headless"
+	f := pidriver.NewFake()
+	m.NewDriver = func(io.Writer) pidriver.Driver { return f }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	m.agents[d.Name].nextPoll = now.Add(time.Hour)
+	f.Snapshot = pidriver.Snapshot{Ready: true, Settled: true, LastEvent: now.Add(-16 * time.Minute)}
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		*now = now.Add(time.Minute)
+		if err := m.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p.checks != 1 {
+		t.Fatalf("idle without task polled %d times within 5m", p.checks)
+	}
+	*now = now.Add(time.Minute)
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p.checks != 2 {
+		t.Fatalf("did not check after 5m: %d", p.checks)
+	}
+	if err := m.Stop(ctx, d.Name); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStallCheckErrorsAndRemovedAgentDoNotReport(t *testing.T) {
 	for _, stop := range []bool{false, true} {
 		t.Run(fmt.Sprint(stop), func(t *testing.T) {
