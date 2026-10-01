@@ -16,11 +16,20 @@ type Supervisor interface {
 	Mode(ctx context.Context, name, mode string) error
 	Driver(name string) (pidriver.Driver, bool)
 	Subscribe(name string) (<-chan pidriver.Event, func(), bool)
+	Takeover(ctx context.Context, name string) (TakeoverSpec, error)
+	ResumeTakeover(name string) error
 	History(name, since string, limit int) ([]json.RawMessage, string, error)
 	Remove(ctx context.Context, name string) error
 	List(ctx context.Context) ([]AgentStatus, error)
 	Shutdown(ctx context.Context, stopAgents bool) error
 	Run(ctx context.Context) error
+}
+
+type TakeoverSpec struct {
+	PiPath    string   `json:"piPath"`
+	WorkDir   string   `json:"workDir"`
+	SessionID string   `json:"sessionId"`
+	Args      []string `json:"args"`
 }
 
 type AgentDefinition struct {

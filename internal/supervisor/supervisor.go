@@ -52,6 +52,7 @@ type managed struct {
 	lastPoll                                                        string
 	pid                                                             int
 	driver                                                          pidriver.Driver
+	takenOver                                                       bool
 	logFile                                                         *os.File
 	startupSent                                                     bool
 	legacySession                                                   bool
@@ -600,6 +601,12 @@ func (m *Manager) tickAgent(ctx context.Context, a *managed) error {
 		}
 	}
 	if a.def.Mode == "headless" {
+		if a.takenOver {
+			if m.Poll != nil && !m.now().Before(a.nextPoll) {
+				return m.poll(ctx, a)
+			}
+			return nil
+		}
 		return m.tickHeadless(ctx, a)
 	}
 	pane, err := m.Tmux.Inspect(ctx, a.def.Name)

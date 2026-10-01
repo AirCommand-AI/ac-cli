@@ -21,7 +21,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
-const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --org <org> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name> | interrupt <name> --message <text>"
+const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --org <org> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name> | takeover <name> | interrupt <name> --message <text>"
 
 // runAgent implements the command contract without depending on daemon service code.
 func (a *App) runAgent(args []string) error {
@@ -135,6 +135,11 @@ func (a *App) runAgent(args []string) error {
 		}
 		fmt.Fprintf(a.outputWriter(), "Interrupt sent to %s.\n", args[1])
 		return nil
+	case "takeover":
+		if len(args) != 2 || !daemonclient.ValidAgentName(args[1]) {
+			return &publicError{message: agentUsage}
+		}
+		return client.Takeover(ctx, args[1], a.inputReader(), a.outputWriter(), a.errorWriter())
 	case "attach":
 		if len(args) != 2 || !daemonclient.ValidAgentName(args[1]) {
 			return &publicError{message: agentUsage}

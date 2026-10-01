@@ -14,7 +14,8 @@ import (
 // permanent 4xx), the normal urgent pointer lets the agent read/ack it and
 // keeps later wakes from being blocked behind it.
 func (m *Manager) deliver(ctx context.Context, a *managed, n agentapi.Notification) error {
-	if a.def.Mode != "headless" {
+	if a.def.Mode != "headless" || a.takenOver {
+		// The foreground extension reads the durable spool during takeover.
 		return nil
 	}
 	if a.driver == nil || !a.startupSent || len(a.pendingWakes) != 0 {

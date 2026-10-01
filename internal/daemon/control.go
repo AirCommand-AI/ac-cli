@@ -274,9 +274,13 @@ func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, 
 		_ = encoder.Encode(Response{Error: &APIError{Code: "invalid", Message: "invalid JSON request"}})
 		return
 	}
-	if req.Op == "agent.attach" {
+	if req.Op == "agent.attach" || req.Op == "agent.takeover" {
 		_ = conn.SetDeadline(time.Time{})
-		serveAttach(ctx, conn, reader, supervisor, req)
+		if req.Op == "agent.attach" {
+			serveAttach(ctx, conn, reader, supervisor, req)
+		} else {
+			serveTakeover(ctx, conn, reader, supervisor, req)
+		}
 		return
 	}
 	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
@@ -367,6 +371,55 @@ func serveAttach(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Sup
 					return
 				}
 			}
+		}
+	}
+}
+
+func serveTakeover(ctx context.Context, conn net.Conn, reader *bufio.Reader, m Supervisor, req Request) {
+	encoder := json.NewEncoder(conn)
+	spec, err := m.Takeover(ctx, req.Name)
+	if err != nil {
+		_ = encoder.Encode(Response{Error: &APIError{Code: "invalid", Message: err.Error()}})
+		return
+	}
+	defer func() { _ = m.ResumeTakeover(req.Name) }()
+	if encoder.Encode(Response{OK: true, Data: spec}) != nil {
+		return
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	// The CLI cannot know the foreground pid until after the daemon has stopped
+	// headless pi. A missing pid means it never launched; resume immediately.
+	var child struct {
+		Type string `json:"type"`
+		PID  int    `json:"pid"`
+	}
+	if err := json.NewDecoder(reader).Decode(&child); err != nil || child.Type != "pid" || child.PID <= 0 {
+		return
+	}
+	// Hold the lock/session fence while the CLI owns the foreground process.
+	for {
+		if _, err := reader.ReadByte(); err != nil {
+			break
+		}
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := syscall.Kill(child.PID, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

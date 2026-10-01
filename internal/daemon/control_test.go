@@ -15,6 +15,7 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
+	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
 type fakeSupervisor struct {
@@ -35,6 +36,11 @@ func (f *fakeSupervisor) Start(_ context.Context, d Definition) error {
 	return nil
 }
 func (f *fakeSupervisor) Driver(string) (pidriver.Driver, bool) { return nil, false }
+func (f *fakeSupervisor) Takeover(_ context.Context, name string) (supervisor.TakeoverSpec, error) {
+	f.record("takeover:" + name)
+	return supervisor.TakeoverSpec{PiPath: "pi", SessionID: "agm_1"}, nil
+}
+func (f *fakeSupervisor) ResumeTakeover(name string) error { f.record("resume:" + name); return nil }
 func (f *fakeSupervisor) Subscribe(string) (<-chan pidriver.Event, func(), bool) {
 	return nil, nil, false
 }
