@@ -423,27 +423,36 @@ func (d *RPC) Stop(ctx context.Context) error {
 		return nil
 	}
 	_ = stdin.Close()
-	wait := func(grace time.Duration) bool {
+	wait := func(grace time.Duration, interruptible bool) bool {
 		timer := time.NewTimer(grace)
 		defer timer.Stop()
+		if interruptible {
+			select {
+			case <-d.done:
+				return true
+			case <-ctx.Done():
+				return false
+			case <-timer.C:
+				return false
+			}
+		}
 		select {
 		case <-d.done:
 			return true
-		case <-ctx.Done():
-			return false
 		case <-timer.C:
 			return false
 		}
 	}
-	if wait(5 * time.Second) {
+	if wait(5*time.Second, true) {
 		return nil
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	if wait(3 * time.Second) {
+	// Even an already-cancelled caller cannot skip SIGTERM's grace period.
+	if wait(3*time.Second, false) {
 		return nil
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	if wait(2 * time.Second) {
+	if wait(2*time.Second, false) {
 		return nil
 	}
 	return errors.New("pi group did not exit after SIGKILL")

@@ -121,6 +121,33 @@ func TestStopWithoutDeadline(t *testing.T) {
 		t.Fatal("Stop consumed Exited")
 	}
 }
+func TestStopAlreadyCancelledContext(t *testing.T) {
+	t.Setenv("PIDRIVER_FAKE_PI", "1")
+	t.Setenv("PIDRIVER_HANG_ON_EOF", "1")
+	path := filepath.Join(t.TempDir(), "pi")
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'pi 0.99.1'; else exec %q -test.run=^TestFakePi$; fi\n", os.Args[0])
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	d := New(Options{})
+	if err := d.Start(LaunchSpec{PiPath: path, WorkDir: ".", SessionID: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-d.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("not ready")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	begin := time.Now()
+	if err := d.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(begin); elapsed < 3*time.Second || elapsed > 5*time.Second {
+		t.Fatalf("cancelled-context Stop skipped SIGTERM grace: %v", elapsed)
+	}
+}
 func TestVersion(t *testing.T) {
 	for _, v := range []string{"0.87.0", "0.86.99"} {
 		m := versionRE.FindStringSubmatch(v)
