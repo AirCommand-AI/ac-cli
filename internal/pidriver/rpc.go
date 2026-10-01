@@ -18,9 +18,10 @@ import (
 	"time"
 )
 
-// RPC owns the subprocess and the RPC pipe. All writes to stdin are serialized
-// in run; the stdout reader appends to an unbounded queue and never waits for
+// RPC owns the subprocess and the RPC pipe. One dedicated writer owns stdin;
+// the stdout reader appends to an unbounded queue and never waits for
 // event consumers or command processing.
+type toolCall struct{ name, parent string }
 type RPC struct {
 	opts           Options
 	mu             sync.Mutex
@@ -29,16 +30,23 @@ type RPC struct {
 	ready          chan struct{}
 	exited         chan Exit
 	done           chan struct{}
+	readDone       chan struct{}
+	runDone        chan struct{}
 	events         chan Event
 	notify         chan struct{}
+	writerNotify   chan struct{}
+	writes         [][]byte
+	starting       bool
 	lines          [][]byte
 	outgoing       []Outgoing
 	state          Snapshot
 	closed         bool
+	stopping       bool
 	compacting     bool
 	seq            int
 	pending        map[int]Outgoing
-	tools          map[string]string
+	tools          map[string]toolCall
+	currentToolID  string
 	interruptID    int
 	interruptPhase string
 	interruptMsg   Outgoing
@@ -46,7 +54,7 @@ type RPC struct {
 }
 
 func New(opts Options) Driver {
-	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]string)}
+	return &RPC{opts: opts, ready: make(chan struct{}), exited: make(chan Exit, 1), done: make(chan struct{}), readDone: make(chan struct{}), runDone: make(chan struct{}), events: make(chan Event, 256), notify: make(chan struct{}, 1), writerNotify: make(chan struct{}, 1), pending: make(map[int]Outgoing), tools: make(map[string]toolCall)}
 }
 func (d *RPC) Ready() <-chan struct{} { return d.ready }
 func (d *RPC) Exited() <-chan Exit    { return d.exited }
@@ -62,13 +70,18 @@ func (d *RPC) wake() {
 var versionRE = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
 
 func checkVersion(path string) error {
-	out, err := exec.Command(path, "--version").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("pi --version: %w: %s", err, out)
 	}
-	m := versionRE.FindStringSubmatch(string(out))
+	return validateVersion(string(out))
+}
+func validateVersion(version string) error {
+	m := versionRE.FindStringSubmatch(version)
 	if m == nil {
-		return fmt.Errorf("unrecognized pi version: %q", out)
+		return fmt.Errorf("unrecognized pi version: %q", version)
 	}
 	a, _ := strconv.Atoi(m[1])
 	b, _ := strconv.Atoi(m[2])
@@ -80,11 +93,13 @@ func checkVersion(path string) error {
 }
 func (d *RPC) Start(spec LaunchSpec) error {
 	d.mu.Lock()
-	if d.cmd != nil || d.closed {
+	if d.cmd != nil || d.closed || d.starting {
 		d.mu.Unlock()
 		return errors.New("driver already started or stopped")
 	}
+	d.starting = true
 	d.mu.Unlock()
+	defer func() { d.mu.Lock(); d.starting = false; d.mu.Unlock() }()
 	if spec.PiPath == "" {
 		spec.PiPath = "pi"
 	}
@@ -97,35 +112,51 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	}
 	args = append(args, spec.Args...)
 	cmd := exec.Command(spec.PiPath, args...)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = spec.WorkDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
 	}
-	stdout, err := cmd.StdoutPipe()
+	stdout, stdoutWriter, err := os.Pipe()
 	if err != nil {
 		return err
 	}
+	cmd.Stdout = stdoutWriter
 	cmd.Stderr = d.opts.Log
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
 	if err = cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutWriter.Close()
 		return err
 	}
+	_ = stdoutWriter.Close()
 	d.mu.Lock()
 	d.cmd = cmd
 	d.stdin = stdin
 	d.state.PID = cmd.Process.Pid
 	d.state.PGID = cmd.Process.Pid
 	d.state.StartTime = processStartTime(cmd.Process.Pid)
-	d.state.Cmdline = append([]string{spec.PiPath}, args...)
+	// Cmdline is informational only: node changes process.title after launch.
+	// Populate it from /proc when pi confirms readiness, never use it as a kill fence.
 	d.mu.Unlock()
-	go d.read(stdout)
+	go func() { defer stdout.Close(); d.read(stdout) }()
+	go d.write()
 	go d.run()
 	go func() {
 		err := cmd.Wait()
+		// A tool may have left descendants holding stdout open. Kill the group
+		// after the parent exits, then drain final records with a fixed bound.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		select {
+		case <-d.readDone:
+		case <-time.After(2 * time.Second):
+			_ = stdout.Close()
+			<-d.readDone
+		}
 		exit := Exit{Err: err}
 		if ps := cmd.ProcessState; ps != nil {
 			exit.Code = ps.ExitCode()
@@ -136,12 +167,34 @@ func (d *RPC) Start(spec LaunchSpec) error {
 		d.mu.Lock()
 		d.closed = true
 		d.mu.Unlock()
+		d.wake()
+		select {
+		case d.writerNotify <- struct{}{}:
+		default:
+		}
+		<-d.runDone
+		d.reportUndelivered()
 		d.exited <- exit
 		close(d.done)
-		d.wake()
 	}()
 	d.command("get_state", nil)
 	return nil
+}
+func processCmdline(pid int) []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return nil
+	}
+	data = bytes.TrimRight(data, "\x00")
+	if len(data) == 0 {
+		return nil
+	}
+	parts := bytes.Split(data, []byte{0})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		result = append(result, string(part))
+	}
+	return result
 }
 func processStartTime(pid int) string {
 	// Linux /proc stat field 22. comm may contain spaces and parentheses.
@@ -160,6 +213,7 @@ func processStartTime(pid int) string {
 	return fields[19]
 }
 func (d *RPC) read(r io.Reader) {
+	defer close(d.readDone)
 	br := bufio.NewReader(r)
 	for {
 		line, err := br.ReadBytes('\n')
@@ -186,23 +240,51 @@ func (d *RPC) command(kind string, fields map[string]any) int {
 		fields["id"] = strconv.Itoa(id)
 	}
 	data, _ := json.Marshal(fields)
-	if d.stdin != nil && !d.closed {
-		_, _ = d.stdin.Write(append(data, '\n'))
+	if !d.closed {
+		d.writes = append(d.writes, append(data, '\n'))
+		select {
+		case d.writerNotify <- struct{}{}:
+		default:
+		}
 	}
 	d.mu.Unlock()
 	return id
 }
+func (d *RPC) write() {
+	for range d.writerNotify {
+		for {
+			d.mu.Lock()
+			if len(d.writes) == 0 || d.closed {
+				done := d.closed
+				d.mu.Unlock()
+				if done {
+					return
+				}
+				break
+			}
+			data := d.writes[0]
+			d.writes[0] = nil
+			d.writes = d.writes[1:]
+			stdin := d.stdin
+			d.mu.Unlock()
+			if _, err := stdin.Write(data); err != nil {
+				return
+			}
+		}
+	}
+}
 func (d *RPC) Send(msg Outgoing) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.closed {
-		return errors.New("pi exited")
+	if d.closed || d.stopping {
+		return errors.New("pi exited or stopping")
 	}
 	d.outgoing = append(d.outgoing, msg)
 	d.wake()
 	return nil
 }
 func (d *RPC) run() {
+	defer close(d.runDone)
 	for range d.notify {
 		for {
 			d.mu.Lock()
@@ -257,6 +339,32 @@ func (d *RPC) dispatch(msg Outgoing) {
 	d.mu.Unlock()
 }
 func (d *RPC) advanceInterrupt(v map[string]any) {
+	if v["success"] != true {
+		d.mu.Lock()
+		restored := make([]Outgoing, 0, len(d.restore)+1)
+		reason, _ := v["error"].(string)
+		compact := strings.Contains(strings.ToLower(reason), "compact")
+		if compact {
+			restored = append(restored, d.interruptMsg)
+		}
+		for _, text := range d.restore {
+			restored = append(restored, Outgoing{Text: text, Kind: Regular})
+		}
+		d.outgoing = append(restored, d.outgoing...)
+		d.restore = nil
+		d.interruptPhase = ""
+		d.compacting = d.compacting || compact
+		clock := d.opts.Clock
+		if clock == nil {
+			clock = time.Now
+		}
+		d.mu.Unlock()
+		if !compact {
+			d.emit(Event{Kind: "rpc_error", Data: v, At: clock()})
+		}
+		d.wake()
+		return
+	}
 	d.mu.Lock()
 	phase := d.interruptPhase
 	msg := d.interruptMsg
@@ -286,14 +394,17 @@ func (d *RPC) advanceInterrupt(v map[string]any) {
 		}
 		id := d.command("prompt", map[string]any{"message": text, "streamingBehavior": "steer"})
 		d.mu.Lock()
+		d.pending[id] = msg
 		d.interruptID = id
 		d.interruptPhase = "prompt"
 		d.mu.Unlock()
 	case "prompt":
 		d.mu.Lock()
+		restored := make([]Outgoing, 0, len(d.restore))
 		for _, text := range d.restore {
-			d.outgoing = append(d.outgoing, Outgoing{Text: text, Kind: Regular})
+			restored = append(restored, Outgoing{Text: text, Kind: Regular})
 		}
+		d.outgoing = append(restored, d.outgoing...)
 		d.restore = nil
 		d.interruptPhase = ""
 		d.mu.Unlock()
@@ -306,13 +417,21 @@ func (d *RPC) handle(line []byte) {
 		return
 	}
 	typ, _ := v["type"].(string)
-	if idstr, ok := v["id"].(string); ok {
+	if idstr, ok := v["id"].(string); ok && typ == "response" {
 		id, _ := strconv.Atoi(idstr)
 		d.mu.Lock()
 		interruptResponse := d.interruptPhase != "" && id == d.interruptID
 		d.mu.Unlock()
 		if interruptResponse {
+			if v["success"] != true {
+				d.mu.Lock()
+				delete(d.pending, id)
+				d.mu.Unlock()
+			}
 			d.advanceInterrupt(v)
+			if v["success"] != true {
+				return
+			}
 		}
 		d.mu.Lock()
 		msg, found := d.pending[id]
@@ -330,6 +449,13 @@ func (d *RPC) handle(line []byte) {
 		if typ == "response" && v["command"] == "get_state" && v["success"] == true {
 			d.mu.Lock()
 			if !d.state.Ready {
+				d.state.Cmdline = processCmdline(d.state.PID)
+				if data, ok := v["data"].(map[string]any); ok {
+					if streaming, ok := data["isStreaming"].(bool); ok {
+						d.state.Streaming = streaming
+						d.state.Settled = !streaming
+					}
+				}
 				d.state.Ready = true
 				close(d.ready)
 			}
@@ -372,17 +498,31 @@ func (d *RPC) handle(line []byte) {
 	case "tool_execution_start":
 		id, _ := v["toolCallId"].(string)
 		name, _ := v["toolName"].(string)
-		d.tools[id] = name
+		parent, _ := v["parentToolCallId"].(string)
+		d.tools[id] = toolCall{name, parent}
+		d.currentToolID = id
 		d.state.CurrentTool = name
-		d.state.ParentToolCallID, _ = v["parentToolCallId"].(string)
+		d.state.ParentToolCallID = parent
 	case "tool_execution_end":
 		id, _ := v["toolCallId"].(string)
+		call := d.tools[id]
 		delete(d.tools, id)
-		d.state.CurrentTool = ""
-		d.state.ParentToolCallID = ""
+		if id == d.currentToolID {
+			d.currentToolID = call.parent
+			if parent, ok := d.tools[call.parent]; ok {
+				d.state.CurrentTool = parent.name
+				d.state.ParentToolCallID = parent.parent
+			} else {
+				d.state.CurrentTool = ""
+				d.state.ParentToolCallID = ""
+			}
+		}
 	}
 	d.mu.Unlock()
-	ev := Event{Kind: typ, Data: v, At: time.Now()}
+	ev := Event{Kind: typ, Data: v, At: now()}
+	d.emit(ev)
+}
+func (d *RPC) emit(ev Event) {
 	select {
 	case d.events <- ev:
 	default:
@@ -396,36 +536,64 @@ func (d *RPC) handle(line []byte) {
 		}
 	}
 }
+func (d *RPC) reportUndelivered() {
+	d.mu.Lock()
+	remaining := append([]Outgoing(nil), d.outgoing...)
+	for _, msg := range d.pending {
+		remaining = append(remaining, msg)
+	}
+	if d.interruptPhase != "" {
+		remaining = append(remaining, d.interruptMsg)
+	}
+	d.mu.Unlock()
+	clock := d.opts.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	for _, msg := range remaining {
+		d.emit(Event{Kind: "undelivered", Data: map[string]any{"text": msg.Text, "kind": msg.Kind, "source": msg.Source}, At: clock()})
+	}
+}
 func (d *RPC) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	cmd := d.cmd
 	stdin := d.stdin
+	d.stopping = true
 	d.mu.Unlock()
 	if cmd == nil {
 		return nil
 	}
 	_ = stdin.Close()
-	wait := func(grace time.Duration) bool {
+	wait := func(grace time.Duration, interruptible bool) bool {
 		timer := time.NewTimer(grace)
 		defer timer.Stop()
+		if interruptible {
+			select {
+			case <-d.done:
+				return true
+			case <-ctx.Done():
+				return false
+			case <-timer.C:
+				return false
+			}
+		}
 		select {
 		case <-d.done:
 			return true
-		case <-ctx.Done():
-			return false
 		case <-timer.C:
 			return false
 		}
 	}
-	if wait(5 * time.Second) {
+	if wait(5*time.Second, true) {
 		return nil
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-	if wait(3 * time.Second) {
+	// Even an already-cancelled caller cannot skip SIGTERM's grace period.
+	if wait(3*time.Second, false) {
 		return nil
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	if wait(2 * time.Second) {
+	if wait(2*time.Second, false) {
 		return nil
 	}
 	return errors.New("pi group did not exit after SIGKILL")
