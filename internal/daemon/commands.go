@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/AirCommand-AI/ac-cli/adapters/pi"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
@@ -65,6 +66,9 @@ func (c Commands) RunDaemon(arguments []string) error {
 		}
 		if c.NewSupervisor == nil {
 			return errors.New("daemon supervisor is unavailable")
+		}
+		if err := piadapter.Sync(c.Home); err != nil {
+			return fmt.Errorf("sync pi extension at daemon boot: %w", err)
 		}
 		supervisor, err := c.NewSupervisor(*tmux, *pi)
 		if err != nil {

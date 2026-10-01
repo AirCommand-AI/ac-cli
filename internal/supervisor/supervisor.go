@@ -287,6 +287,7 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	def.SessionMigrated = !a.legacySession
 	def.Desired = "running"
 	def.State = "starting"
+	def.Reason = ""
 	def.Crashes = nil
 	def.LastExit = nil
 	// Explicit start after Stop starts fresh; an already-running agent is adopted.
@@ -396,7 +397,7 @@ func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
 	defer m.mu.Unlock()
 	var list []AgentStatus
 	for _, a := range m.agents {
-		status := AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Mode: a.def.Mode, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll}
+		status := AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Reason: a.def.Reason, Mode: a.def.Mode, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll}
 		if a.driver != nil {
 			s := a.driver.State()
 			status.PID = s.PID

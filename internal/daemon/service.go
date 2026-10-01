@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/adapters/pi"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
@@ -96,6 +97,9 @@ func (s Service) envPath() string {
 	return os.Getenv("PATH")
 }
 func (s Service) Start(ctx context.Context) error {
+	if err := piadapter.Sync(s.Home); err != nil {
+		return fmt.Errorf("sync pi extension: %w", err)
+	}
 	aircom, tmux, pi, err := s.paths()
 	if err != nil {
 		return err

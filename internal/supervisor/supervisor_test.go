@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/adapters/pi"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
@@ -68,6 +69,9 @@ func (p *fakePoll) Spool(_ context.Context, _ AgentDefinition, n Notification) (
 func setup(t *testing.T) (*Manager, *fakeTmux, *fakePoll, *time.Time) {
 	t.Helper()
 	home := t.TempDir()
+	if err := piadapter.Sync(home); err != nil {
+		t.Fatal(err)
+	}
 	tm := &fakeTmux{panes: map[string]Pane{}}
 	poll := &fakePoll{feed: Feed{Cursor: "c1", PollAfter: time.Second}}
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)

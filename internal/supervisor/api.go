@@ -33,6 +33,7 @@ type AgentDefinition struct {
 	Mode             string      `json:"mode"`
 	Desired          string      `json:"desired"`
 	State            string      `json:"state"`
+	Reason           string      `json:"reason,omitempty"`
 	Crashes          []time.Time `json:"crashes,omitempty"`
 	LastExit         *Exit       `json:"lastExit,omitempty"`
 	Pi               *PiProcess  `json:"pi,omitempty"`
@@ -61,6 +62,7 @@ type AgentStatus struct {
 	Workstream string `json:"workstream"`
 	Desired    string `json:"desired"`
 	State      string `json:"state"`
+	Reason     string `json:"reason,omitempty"`
 	Mode       string `json:"mode"`
 	PiState    string `json:"piState,omitempty"`
 	PID        int    `json:"pid,omitempty"`

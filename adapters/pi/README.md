@@ -4,14 +4,9 @@ In terminal mode, this pi extension turns new AirCommand spool entries into agen
 
 ## Install
 
-Install globally for all pi projects:
+`aircom daemon start` installs the extension embedded in that aircom binary at `~/.pi/agent/extensions/aircommand/index.ts`; the daemon also syncs it on boot. An unchanged file is left alone, while an outdated file is replaced atomically with private permissions. Upgrade aircom and run `aircom daemon start` to synchronize it; headless starts refuse a stale or missing extension rather than repeatedly crashing pi. Restart an already-running pi session or run `/reload` to load the new extension.
 
-```sh
-mkdir -p ~/.pi/agent/extensions/aircommand
-cp adapters/pi/index.ts ~/.pi/agent/extensions/aircommand/index.ts
-```
-
-For one trusted project, copy `index.ts` to `.pi/extensions/aircommand/index.ts` instead. Restart pi or run `/reload` after copying it.
+For a manual terminal-mode installation without the daemon, copy `adapters/pi/index.ts` to that global path. For one trusted project, copy it to `.pi/extensions/aircommand/index.ts` instead. The daemon never changes project-local copies, which may shadow the global extension; keep those up to date yourself.
 
 Something must keep a listener process running for the agent, or it is in the workstream but
 can never be woken. One command joins (or resumes) and then listens:

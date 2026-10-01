@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/adapters/pi"
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 )
 
@@ -17,6 +18,14 @@ const startupPrompt = "Check your unread AirCommand messages with aircom inbox a
 // launchHeadless is called with m.mu held. The process start happens outside
 // the manager lock, so slow version checks and pi startup do not block wakes.
 func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
+	if err := piadapter.VerifyHeadless(m.Home); err != nil {
+		a.def.State = "crashed"
+		a.def.Reason = err.Error()
+		if saveErr := m.save(a); saveErr != nil {
+			return fmt.Errorf("%w (saving crashed state: %v)", err, saveErr)
+		}
+		return err
+	}
 	if m.NewDriver == nil {
 		return fmt.Errorf("headless pi driver is unavailable")
 	}
