@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -68,7 +69,10 @@ func (c Commands) RunDaemon(arguments []string) error {
 			return errors.New("daemon supervisor is unavailable")
 		}
 		if err := piadapter.Sync(c.Home); err != nil {
-			return fmt.Errorf("sync pi extension at daemon boot: %w", err)
+			warn := fmt.Sprintf("warning: sync pi extension at daemon boot: %v (headless launches will refuse a stale extension)", err)
+			if logErr := appendDaemonWarning(c.Home, warn); logErr != nil {
+				log.Printf("%s; daemon log: %v", warn, logErr)
+			}
 		}
 		supervisor, err := c.NewSupervisor(*tmux, *pi)
 		if err != nil {
@@ -88,6 +92,19 @@ func (c Commands) RunDaemon(arguments []string) error {
 		return fmt.Errorf("unknown daemon command %q", strings.TrimSpace(arguments[0]))
 	}
 }
+func appendDaemonWarning(home, warning string) error {
+	if err := os.MkdirAll(storagepath.DaemonDirectory(home), 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(storagepath.DaemonLog(home), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintln(f, warning)
+	return err
+}
+
 func (c Commands) print(data json.RawMessage) error {
 	out := c.Output
 	if out == nil {
