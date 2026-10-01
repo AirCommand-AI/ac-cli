@@ -3,6 +3,8 @@ package pidriver
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -102,6 +104,17 @@ func TestInterruptClearsBeforeAbortAndRestores(t *testing.T) {
 	d.handle([]byte(`{"type":"response","id":"3","command":"prompt","success":true}`))
 	if len(d.outgoing) != 2 || d.outgoing[0].Text != "first" || d.outgoing[1].Text != "second" {
 		t.Fatalf("lost queue: %+v", d.outgoing)
+	}
+}
+func TestProcSnapshot(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux procfs")
+	}
+	if got := processStartTime(os.Getpid()); got == "" {
+		t.Fatal("missing /proc starttime")
+	}
+	if got := processCmdline(os.Getpid()); len(got) == 0 {
+		t.Fatal("missing /proc cmdline")
 	}
 }
 func TestGuidance(t *testing.T) {

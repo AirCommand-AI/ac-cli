@@ -120,7 +120,8 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	d.state.PID = cmd.Process.Pid
 	d.state.PGID = cmd.Process.Pid
 	d.state.StartTime = processStartTime(cmd.Process.Pid)
-	d.state.Cmdline = append([]string{spec.PiPath}, args...)
+	// Cmdline is informational only: node changes process.title after launch.
+	// Populate it from /proc when pi confirms readiness, never use it as a kill fence.
 	d.mu.Unlock()
 	go d.read(stdout)
 	go d.run()
@@ -142,6 +143,22 @@ func (d *RPC) Start(spec LaunchSpec) error {
 	}()
 	d.command("get_state", nil)
 	return nil
+}
+func processCmdline(pid int) []string {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return nil
+	}
+	data = bytes.TrimRight(data, "\x00")
+	if len(data) == 0 {
+		return nil
+	}
+	parts := bytes.Split(data, []byte{0})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		result = append(result, string(part))
+	}
+	return result
 }
 func processStartTime(pid int) string {
 	// Linux /proc stat field 22. comm may contain spaces and parentheses.
@@ -330,6 +347,7 @@ func (d *RPC) handle(line []byte) {
 		if typ == "response" && v["command"] == "get_state" && v["success"] == true {
 			d.mu.Lock()
 			if !d.state.Ready {
+				d.state.Cmdline = processCmdline(d.state.PID)
 				d.state.Ready = true
 				close(d.ready)
 			}
