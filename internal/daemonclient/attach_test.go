@@ -63,6 +63,23 @@ func TestRenderDeliveryKindBanners(t *testing.T) {
 		}
 	}
 }
+func TestAttachSkipsToolOnlyAssistantRows(t *testing.T) {
+	out := new(bytes.Buffer)
+	renderMessage(out, map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "toolCall", "name": "bash"}}}, false)
+	text := false
+	renderEventWithState(out, "message_start", map[string]any{"message": map[string]any{"role": "assistant"}}, &text)
+	renderEventWithState(out, "tool_execution_start", map[string]any{"toolName": "bash"}, &text)
+	renderEventWithState(out, "message_end", map[string]any{"message": map[string]any{"role": "assistant"}}, &text)
+	if got := out.String(); got != "[tool] bash\n" {
+		t.Fatalf("tool-only output: %q", got)
+	}
+	renderEventWithState(out, "message_start", map[string]any{"message": map[string]any{"role": "assistant"}}, &text)
+	renderEventWithState(out, "message_update", map[string]any{"assistantMessageEvent": map[string]any{"type": "text_delta", "delta": "done"}}, &text)
+	renderEventWithState(out, "message_end", map[string]any{"message": map[string]any{"role": "assistant"}}, &text)
+	if got := out.String(); got != "[tool] bash\ndone\n" {
+		t.Fatalf("assistant text output: %q", got)
+	}
+}
 func TestRenderToolAndAssistantDelta(t *testing.T) {
 	out := new(bytes.Buffer)
 	renderEvent(out, "tool_execution_start", map[string]any{"toolName": "bash"})

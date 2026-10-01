@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -151,15 +152,7 @@ func (a *App) runAgent(args []string) error {
 		for _, agent := range agents {
 			if agent.Name == args[1] && agent.Mode == "headless" {
 				return client.Attach(ctx, args[1], a.inputReader(), a.outputWriter(), func(text string) error { return a.interruptAgent(args[1], text) }, func(text string) error {
-					machine, err := a.machineCredential()
-					if err != nil {
-						return err
-					}
-					label := machine.MachineName
-					if label == "" {
-						label = "machine"
-					}
-					return a.update([]string{"--workstream", agent.Workstream, "--agent", agent.AgentID, "--body", "Operator (attach on " + label + "): " + text})
+					return a.postAttachUpdate(agent.Workstream, agent.AgentID, text)
 				})
 			}
 		}
@@ -171,6 +164,31 @@ func (a *App) runAgent(args []string) error {
 	default:
 		return &publicError{message: agentUsage}
 	}
+}
+
+// postAttachUpdate keeps the normal update API and validation but only shows
+// the confirmation line in the shared attach view, not the full metadata block.
+func (a *App) postAttachUpdate(workstream, agentID, text string) error {
+	machine, err := a.machineCredential()
+	if err != nil {
+		return err
+	}
+	label := strings.TrimSpace(machine.MachineName)
+	if label == "" {
+		label = machineName()
+	}
+	if label == "" {
+		return &publicError{message: "Unable to determine this machine's name."}
+	}
+	var confirmation bytes.Buffer
+	local := *a
+	local.Stdout = &confirmation
+	if err := local.update([]string{"--workstream", workstream, "--agent", agentID, "--body", "Operator (attach on " + label + "): " + text}); err != nil {
+		return err
+	}
+	line, _, _ := strings.Cut(confirmation.String(), "\n")
+	_, err = fmt.Fprintf(a.outputWriter(), "[AirCommand] %s\n", line)
+	return err
 }
 
 func (a *App) interruptAgent(name, text string) error {

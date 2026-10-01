@@ -72,6 +72,7 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 		}
 		_ = enc.Encode(map[string]any{"op": "detach"})
 	}()
+	assistantText := false
 	for {
 		var item struct {
 			Type  string          `json:"type"`
@@ -97,7 +98,7 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 				renderMessage(output, entry.Message, false)
 			}
 		case "event":
-			renderEvent(output, item.Event.Kind, item.Event.Data)
+			renderEventWithState(output, item.Event.Kind, item.Event.Data, &assistantText)
 		case "banner":
 			fmt.Fprintf(output, "[AirCommand] %s\n", item.Text)
 		case "state":
@@ -106,18 +107,33 @@ func (c Client) Attach(ctx context.Context, name string, input io.Reader, output
 	}
 }
 func renderEvent(out io.Writer, kind string, data map[string]any) {
+	assistantText := false
+	renderEventWithState(out, kind, data, &assistantText)
+}
+func renderEventWithState(out io.Writer, kind string, data map[string]any, assistantText *bool) {
 	switch kind {
 	case "message_start":
-		if msg, ok := data["message"].(map[string]any); ok && msg["role"] == "user" {
-			renderMessage(out, msg, true)
+		if msg, ok := data["message"].(map[string]any); ok {
+			if msg["role"] == "assistant" {
+				*assistantText = false
+			}
+			if msg["role"] == "user" {
+				renderMessage(out, msg, true)
+			}
 		}
 	case "message_update":
 		if part, ok := data["assistantMessageEvent"].(map[string]any); ok && part["type"] == "text_delta" {
-			fmt.Fprint(out, part["delta"])
+			if delta, ok := part["delta"].(string); ok && delta != "" {
+				fmt.Fprint(out, delta)
+				*assistantText = true
+			}
 		}
 	case "message_end":
 		if msg, ok := data["message"].(map[string]any); ok && msg["role"] == "assistant" {
-			fmt.Fprintln(out)
+			if *assistantText {
+				fmt.Fprintln(out)
+			}
+			*assistantText = false
 		}
 	case "tool_execution_start":
 		fmt.Fprintf(out, "[tool] %s\n", eventSummary(data))
@@ -152,7 +168,7 @@ func renderMessage(out io.Writer, msg map[string]any, live bool) {
 			}
 		}
 	}
-	if !live || role == "user" {
+	if (!live || role == "user") && (role != "assistant" || text != "") {
 		fmt.Fprintf(out, "%s: %s\n", role, text)
 	}
 }
