@@ -57,5 +57,18 @@ func (c Client) Takeover(ctx context.Context, name string, input io.Reader, outp
 		_ = command.Wait()
 		return err
 	}
-	return command.Wait()
+	// Loss of the daemon's fence must not leave foreground pi writing a
+	// session that a restarted daemon may reopen headless.
+	finished := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, conn)
+		select {
+		case <-finished:
+		default:
+			_ = command.Process.Kill()
+		}
+	}()
+	err = command.Wait()
+	close(finished)
+	return err
 }
