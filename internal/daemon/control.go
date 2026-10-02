@@ -450,6 +450,16 @@ func serveTakeover(ctx context.Context, conn net.Conn, reader *bufio.Reader, m S
 	if recordErr != nil {
 		_ = encoder.Encode(map[string]any{"type": "error", "text": recordErr.Error()})
 	}
+	if notices, ok := m.(interface {
+		SetTakeoverNotice(string, func(string) error)
+	}); ok {
+		notices.SetTakeoverNotice(req.Name, func(text string) error {
+			_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+			defer conn.SetWriteDeadline(time.Time{})
+			return encoder.Encode(map[string]string{"type": "notice", "text": text})
+		})
+		defer notices.SetTakeoverNotice(req.Name, nil)
+	}
 	// Hold the lock/session fence while the CLI owns the foreground process.
 	for {
 		if _, err := reader.ReadByte(); err != nil {

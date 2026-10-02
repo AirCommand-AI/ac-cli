@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"syscall"
 	"time"
 )
 
@@ -82,10 +83,49 @@ func (m *Manager) AgentsStopped() bool {
 func (m *Manager) SetMachineState(ctx context.Context, state string) error {
 	switch state {
 	case "stopping":
+		type foreground struct {
+			name    string
+			process *TakeoverProcess
+			notice  func(string) error
+		}
 		m.mu.Lock()
 		m.stoppingHold = true
+		var active []foreground
+		for name, a := range m.agents {
+			if a.takenOver || a.def.Takeover != nil {
+				active = append(active, foreground{name, a.def.Takeover, a.takeoverNotice})
+			}
+		}
 		m.mu.Unlock()
-		return m.Shutdown(ctx, true) // keeps every agent's desired=running
+		var stopErr error
+		for _, item := range active {
+			if item.process == nil {
+				stopErr = fmt.Errorf("takeover %s has no recorded PID; cannot safely stop", item.name)
+				continue
+			}
+			if takeoverAlive(item.process) {
+				group, err := syscall.Getpgid(item.process.PID)
+				if err != nil || group != item.process.PID || !takeoverAlive(item.process) {
+					stopErr = fmt.Errorf("takeover %s has no safe process group", item.name)
+					continue
+				}
+				if item.notice != nil {
+					_ = item.notice("machine is stopping; your pi was closed")
+				}
+			}
+			if err := terminateTakeoverGroup(ctx, item.process, 20*time.Second); err != nil {
+				stopErr = fmt.Errorf("stop takeover %s: %w", item.name, err)
+				continue
+			}
+			if err := m.ResumeTakeover(item.name); err != nil {
+				stopErr = err
+			}
+		}
+		shutdownErr := m.Shutdown(ctx, true) // Stop other agents even if a takeover is unfenced.
+		if stopErr != nil {
+			return stopErr
+		}
+		return shutdownErr
 	case "online", "error":
 		m.mu.Lock()
 		m.stoppingHold = false

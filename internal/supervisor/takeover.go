@@ -24,6 +24,15 @@ func (m *Manager) takeoverAliveOutsideLock(a *managed) bool {
 	return alive
 }
 
+// SetTakeoverNotice installs the connected CLI's notice writer. nil clears it.
+func (m *Manager) SetTakeoverNotice(name string, notice func(string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if a := m.agents[name]; a != nil {
+		a.takeoverNotice = notice
+	}
+}
+
 // Takeover fences the headless process before the CLI may open the same
 // session in the foreground. The agent lock remains owned by the daemon.
 func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, error) {
@@ -99,6 +108,7 @@ func (m *Manager) ResumeTakeover(name string) error {
 	if m.takeoverAliveOutsideLock(a) {
 		return fmt.Errorf("foreground pi is still running")
 	}
+	a.takeoverNotice = nil
 	a.def.Takeover = nil
 	a.def.TakeoverSince = ""
 	a.takenOver = false

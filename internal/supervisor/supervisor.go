@@ -61,6 +61,7 @@ type managed struct {
 	driver                                                          pidriver.Driver
 	takenOver                                                       bool
 	takeoverConnected                                               bool
+	takeoverNotice                                                  func(string) error
 	logFile                                                         *os.File
 	startupSent                                                     bool
 	legacySession                                                   bool

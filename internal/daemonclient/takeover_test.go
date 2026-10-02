@@ -11,6 +11,33 @@ import (
 	"time"
 )
 
+func TestTakeoverPrintsMachineStoppingNotice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fake-pi")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 0.2\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	client, server := net.Pipe()
+	defer server.Close()
+	c := Client{Dial: func(context.Context, string, string) (net.Conn, error) { return client, nil }}
+	go func() {
+		defer server.Close()
+		dec := json.NewDecoder(server)
+		enc := json.NewEncoder(server)
+		var req map[string]any
+		_ = dec.Decode(&req)
+		_ = enc.Encode(map[string]any{"ok": true, "data": map[string]any{"piPath": path, "workDir": ".", "sessionId": "test", "args": []string{}}})
+		var pid map[string]any
+		_ = dec.Decode(&pid)
+		_ = enc.Encode(map[string]string{"type": "notice", "text": "machine is stopping; your pi was closed"})
+	}()
+	var stderr bytes.Buffer
+	if err := c.Takeover(context.Background(), "agent", bytes.NewBuffer(nil), &bytes.Buffer{}, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got := stderr.String(); !bytes.Contains([]byte(got), []byte("machine is stopping; your pi was closed")) || bytes.Contains([]byte(got), []byte("daemon connection lost")) {
+		t.Fatalf("notice %q", got)
+	}
+}
 func TestTakeoverKeepsForegroundWhenControlFenceLost(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fake-pi")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 1\n"), 0700); err != nil {

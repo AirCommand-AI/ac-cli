@@ -6,10 +6,77 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type noticeSupervisor struct {
+	*fakeSupervisor
+	muNotice   sync.Mutex
+	notice     func(string) error
+	registered chan struct{}
+}
+
+func (f *noticeSupervisor) SetTakeoverNotice(_ string, fn func(string) error) {
+	f.muNotice.Lock()
+	f.notice = fn
+	f.muNotice.Unlock()
+	if fn != nil {
+		select {
+		case f.registered <- struct{}{}:
+		default:
+		}
+	}
+}
+func TestTakeoverControlSendsMachineStoppingNotice(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	f := &noticeSupervisor{fakeSupervisor: &fakeSupervisor{}, registered: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveConnection(ctx, server, f, time.Now(), "dev", "", 0, func() {}, new(atomic.Bool), nil)
+	}()
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+	enc := json.NewEncoder(client)
+	dec := json.NewDecoder(client)
+	_ = enc.Encode(Request{Op: "agent.takeover", Name: "eng-1"})
+	var ready Response
+	if err := dec.Decode(&ready); err != nil || !ready.OK {
+		t.Fatalf("ready %+v %v", ready, err)
+	}
+	_ = enc.Encode(map[string]any{"type": "pid", "pid": os.Getpid()})
+	select {
+	case <-f.registered:
+	case <-time.After(time.Second):
+		t.Fatal("notice writer not installed")
+	}
+	f.muNotice.Lock()
+	notify := f.notice
+	f.muNotice.Unlock()
+	noticeDone := make(chan error, 1)
+	go func() { noticeDone <- notify("machine is stopping; your pi was closed") }()
+	var frame struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := dec.Decode(&frame); err != nil || frame.Type != "notice" || frame.Text != "machine is stopping; your pi was closed" {
+		t.Fatalf("notice %+v %v", frame, err)
+	}
+	if err := <-noticeDone; err != nil {
+		t.Fatal(err)
+	}
+	_ = client.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("takeover did not end")
+	}
+}
 
 type failingRecordSupervisor struct {
 	*fakeSupervisor

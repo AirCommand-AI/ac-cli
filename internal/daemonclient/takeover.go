@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -61,6 +64,17 @@ func (c Client) Takeover(ctx context.Context, name string, input io.Reader, outp
 	command := exec.CommandContext(ctx, spec.PiPath, spec.Args...)
 	command.Dir = spec.WorkDir
 	command.Stdin = input
+	// A distinct process group lets a machine stop terminate pi and its tool
+	// children without signalling the operator's shell or this CLI.
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	ttyFD := -1
+	if f, ok := input.(*os.File); ok {
+		if fd, ok := foregroundTTY(f); ok {
+			ttyFD = fd
+			command.SysProcAttr.Foreground = true
+			command.SysProcAttr.Ctty = fd
+		}
+	}
 	command.Stdout = output
 	safeStderr := &synchronizedWriter{writer: stderr}
 	command.Stderr = safeStderr
@@ -75,6 +89,7 @@ func (c Client) Takeover(ctx context.Context, name string, input io.Reader, outp
 	// A daemon restart can close the socket while the person is still using
 	// pi. The persisted takeover fences the restarted daemon; never kill pi.
 	lost := make(chan struct{})
+	var stopping atomic.Bool
 	waitResult := make(chan error, 1)
 	go func() {
 		defer close(lost)
@@ -90,23 +105,37 @@ func (c Client) Takeover(ctx context.Context, name string, input io.Reader, outp
 			if frame.Type == "error" {
 				fmt.Fprintf(safeStderr, "takeover daemon error: %s\n", frame.Text)
 			}
+			if frame.Type == "notice" {
+				stopping.Store(true)
+				fmt.Fprintln(safeStderr, frame.Text)
+			}
 		}
 	}()
-	go func() { waitResult <- command.Wait() }()
+	go func() {
+		err := command.Wait()
+		if ttyFD >= 0 {
+			restoreForeground(ttyFD)
+		}
+		waitResult <- err
+	}()
 	select {
 	case err = <-waitResult:
 		// If the peer closed at the same instant pi exited, report that loss
 		// before our own Close makes it indistinguishable from normal exit.
 		select {
 		case <-lost:
-			fmt.Fprintln(safeStderr, "daemon connection lost; your pi keeps running; headless resumes after you exit")
+			if !stopping.Load() {
+				fmt.Fprintln(safeStderr, "daemon connection lost; your pi keeps running; headless resumes after you exit")
+			}
 		case <-time.After(10 * time.Millisecond):
 		}
 		_ = conn.Close()
 		<-lost
 		return err
 	case <-lost:
-		fmt.Fprintln(safeStderr, "daemon connection lost; your pi keeps running; headless resumes after you exit")
+		if !stopping.Load() {
+			fmt.Fprintln(safeStderr, "daemon connection lost; your pi keeps running; headless resumes after you exit")
+		}
 		return <-waitResult
 	}
 }
