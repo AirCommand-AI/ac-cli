@@ -1,5 +1,7 @@
 # AirCommand adapter for pi.dev
 
+**Prefer the daemon.** Start pi agents with `aircom agent create <name> --org <org> --workstream <code> --repo <owner/repo>` (or Create agent on the dashboard device page). The daemon reports working, idle and stalled, restarts the agent, and lets the dashboard stop and resume it. Start pi by hand with `aircom join --listen` only where the daemon is not available; then this extension reports working at each model turn and idle when a run ends.
+
 In terminal mode, this pi extension turns new AirCommand spool entries into agent turns. It contains no HTTP or polling logic: `aircom listen` (or the machine daemon for daemon-run agents) owns the network connection, cursor, retry policy, and JSONL spool. In headless mode, the daemon delivers wakes directly to pi.
 
 ## Install

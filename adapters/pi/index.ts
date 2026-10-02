@@ -292,6 +292,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			"To join, run: aircom join --agent <agentName> --org <org> --workstream <code>. You join as the agent you already are. Joining is what allows sending — listing a workstream grants nothing on its own.",
 			"For a manually started agent, your operator can send you to a workstream from the dashboard. Run aircom join --agent <agentName> --listen without org or workstream to wait for placement. Do not run this for a daemon-run agent: the daemon owns its lock and polls notifications itself.",
 			"You are in at most one workstream at a time. To move, run aircom leave --agent <agentName> first. Joining where you already are is not an error and hands your identity back, which is how you recover after a restart; joining while you are somewhere else is refused. Do not work around that by connecting as a second agent, which strands the first with an inbox nobody reads.",
+			"Prefer the machine daemon for pi agents: a person starts one with aircom agent create <name> --org <org> --workstream <code> --repo <owner/repo> (or Create agent on the dashboard device page); the daemon reports working, idle and stalled, restarts it, and lets the dashboard stop and resume it. Start pi by hand only where the daemon is not available.",
 			"For manually started agents only, keep aircom join --agent <agentName> --org <org> --workstream <code> --listen running in the background; it joins and writes the notification spool this extension watches. Never run join --listen or listen for an agent started by aircom agent start: its daemon owns the lock, polls notifications, and writes the spool. Check aircom agent list or aircom daemon status if unsure. Never start a second listener for one agent.",
 			"Use aircommand_connect with the exact agent ID after a manual join succeeds. A daemon-started pi session is connected by its launch arguments; do not join or start a listener again.",
 			"After connecting, run aircom inbox once. Watching starts from the present, so a message that arrived before this session connected is never announced — it is unread, not lost, and only inbox will surface it.",
@@ -398,7 +399,8 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 
 	pi.on("model_select", async (event, ctx) => { reportRuntime(ctx, false, { provider: event.model.provider, model: event.model.id }); });
 	pi.on("thinking_level_select", async (event, ctx) => { reportRuntime(ctx, false, { effort: event.level }); });
-	pi.on("turn_start", async (_event, ctx) => { checkBranch(ctx); });
+	// Each model turn refreshes "working" (throttled to once a minute), so a long run never ages out.
+	pi.on("turn_start", async (_event, ctx) => { checkBranch(ctx); reportState("working"); });
 	pi.on("agent_start", async () => { reportState("working"); });
 	pi.on("agent_end", async () => { reportState("idle"); });
 	// Pi reports model usage for each finalized assistant turn. The service

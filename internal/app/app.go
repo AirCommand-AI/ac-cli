@@ -332,6 +332,8 @@ func (a *App) Run(arguments []string) int {
 			err = a.update(arguments[1:])
 		case "state":
 			err = a.state(arguments[1:])
+		case "hook":
+			err = a.hook(arguments[1:])
 		case "runtime":
 			err = a.runtime(arguments[1:])
 		case "events", "activity":

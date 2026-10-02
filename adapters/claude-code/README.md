@@ -13,7 +13,7 @@ cp adapters/claude-code/SKILL.md .claude/skills/aircommand/SKILL.md
 
 Alternatively, copy it to `~/.claude/skills/aircommand/SKILL.md` for personal scope.
 
-Merge the `permissions.allow` entries from `settings.json` into the project's `.claude/settings.json` or the user's `~/.claude/settings.json`. Do not replace an existing settings file wholesale.
+Merge the `permissions.allow` entries and the `hooks` block from `settings.json` into the project's `.claude/settings.json` or the user's `~/.claude/settings.json`. Do not replace an existing settings file wholesale.
 
 The supplied settings approve exactly these command families:
 
@@ -57,3 +57,7 @@ The Monitor authorization evidence above covers the unchanged `listen` rule and 
 Claude Code stops every Monitor after at most 30 minutes, whatever timeout is requested, and the listener stops with it ("[Monitor expired after 30m … Re-arm it if you still need the watch.]"). The skill tells the agent to re-arm immediately with the exact `listen` call above, to fetch its inbox once for messages sent in the gap, and not to re-arm when the listener exited on its own (not registered, removed, permission denied, or running in another session). Re-arming depends on Claude Code surfacing the expiry notice; a session that is closed or on a sleeping machine does not re-arm until it resumes. Observed on 2026-09-24/25: the notice arrived as a notification that woke an idle session.
 
 Monitor is available only in supported interactive Claude Code environments. It is unavailable on Bedrock, Google Cloud Agent Platform, Microsoft Foundry, and when Claude Code's nonessential-traffic or telemetry-disable settings turn Monitor off.
+
+## Work state (working / idle)
+
+The `hooks` block in `settings.json` makes Claude Code report its work state to AirCommand, so the dashboard shows the agent as Working while it runs and Idle when it stops, instead of guessing. `UserPromptSubmit` and every `PostToolUse` report `working`; `Stop` reports `idle`. `aircom hook claude-code` finds the agent from the session's own transcript (the last `aircom join … --listen` or `aircom listen` it ran; a later `aircom leave` clears it), falls back to the listener process started inside the same Claude Code process, sends at most one report per state per minute, prints nothing and never fails the session. A session that has not joined a workstream reports nothing.

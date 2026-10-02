@@ -8,5 +8,41 @@
       "Bash(~/.local/bin/aircom ack *)",
       "Bash(~/.local/bin/aircom listen *)"
     ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/aircom hook claude-code working",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/aircom hook claude-code working",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/aircom hook claude-code idle",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
