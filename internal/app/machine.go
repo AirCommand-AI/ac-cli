@@ -18,6 +18,7 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/enroll"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
@@ -63,19 +64,8 @@ type listWorkstreamsResponse struct {
 	NextCursor  string              `json:"nextCursor"`
 }
 
-// joinAgentRequest carries only the credentials the agent generated for itself.
-// The agent's name and identity come from its registration, not from the join.
-type joinAgentRequest struct {
-	APIToken      string `json:"apiToken"`
-	IdempotencyID string `json:"idempotencyId"`
-}
-
-type joinResponse struct {
-	AgentID        string `json:"agentId"`
-	AgentName      string `json:"agentName"`
-	WorkstreamCode string `json:"workstreamCode"`
-	SocketAddress  string `json:"socketAddress"`
-}
+// Kept for existing app test fixtures; join response is owned by enroll.
+type joinResponse = enroll.Joined
 
 // login binds this machine to the operator's organization. It is the only
 // command that needs a human, and it is needed once per machine.
@@ -1254,38 +1244,30 @@ func (a *App) join(arguments []string) error {
 	if err != nil {
 		return &publicError{message: "Unable to generate a join idempotency ID."}
 	}
-	payload, err := json.Marshal(joinAgentRequest{
-		APIToken:      apiToken,
-		IdempotencyID: idempotencyID,
-	})
-	if err != nil {
-		return &publicError{message: "Unable to prepare the join request."}
-	}
-
 	previousOrganization := a.Organization
 	a.Organization = organizationID
-	response, err := a.request(http.MethodPost, "/v1/agents/"+agent.AgentID+"/workstreams/"+workstreamCode, machine.APIToken, payload)
+	response, err := enroll.Join(a.enrollRequest, machine.APIToken, agent.AgentID, workstreamCode, apiToken, idempotencyID)
 	a.Organization = previousOrganization
 	if err != nil {
 		return err
 	}
 	switch {
-	case response.status == http.StatusUnauthorized:
+	case response.Status == http.StatusUnauthorized:
 		return &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
-	case response.status == http.StatusForbidden:
+	case response.Status == http.StatusForbidden:
 		return &publicError{message: "This machine is not allowed to act in that organization."}
-	case response.status == http.StatusNotFound:
+	case response.Status == http.StatusNotFound:
 		return &publicError{message: fmt.Sprintf("Workstream %s was not found in that organization.", workstreamCode)}
-	case response.status == http.StatusConflict:
-		return joinLifecycleError(response.status, response.body)
-	case response.status == http.StatusBadRequest:
-		return &publicError{message: joinRejectionMessage(response.body)}
-	case response.status < 200 || response.status >= 300:
+	case response.Status == http.StatusConflict:
+		return joinLifecycleError(response.Status, response.Body)
+	case response.Status == http.StatusBadRequest:
+		return &publicError{message: joinRejectionMessage(response.Body)}
+	case response.Status < 200 || response.Status >= 300:
 		return &publicError{message: "Unable to join that workstream."}
 	}
 
-	var joined joinResponse
-	if err := json.Unmarshal(response.body, &joined); err != nil || joined.AgentID == "" {
+	var joined enroll.Joined
+	if err := json.Unmarshal(response.Body, &joined); err != nil || joined.AgentID == "" {
 		return &publicError{message: "The AirCommand service returned an invalid join response."}
 	}
 	if err := a.Store.Save(credentials.Credential{

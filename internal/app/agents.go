@@ -7,16 +7,14 @@ import (
 	"io"
 	"net/http"
 	"sort"
+
+	"github.com/AirCommand-AI/ac-cli/internal/enroll"
 	"strings"
 )
 
 // This file owns the three-level registration the product describes: a machine
 // belongs to an account (aircom init), an agent belongs to a machine (connect),
 // and an agent joins one workstream at a time (join / leave).
-
-type registerAgentRequest struct {
-	Name string `json:"name"`
-}
 
 type agentSummary struct {
 	AgentID        string `json:"agentId"`
@@ -75,24 +73,20 @@ func (a *App) connect(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(registerAgentRequest{Name: name})
-	if err != nil {
-		return &publicError{message: "Unable to prepare the connect request."}
-	}
-	response, err := a.request(http.MethodPost, "/v1/agents", machine.APIToken, payload)
+	response, err := enroll.Register(a.enrollRequest, machine.APIToken, name)
 	if err != nil {
 		return err
 	}
 	switch {
-	case response.status == http.StatusConflict:
+	case response.Status == http.StatusConflict:
 		return &publicError{message: fmt.Sprintf("An agent on this machine is already called %q. Choose another name.", name)}
-	case response.status == http.StatusUnauthorized, response.status == http.StatusForbidden:
+	case response.Status == http.StatusUnauthorized, response.Status == http.StatusForbidden:
 		return &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
-	case response.status < 200 || response.status >= 300:
+	case response.Status < 200 || response.Status >= 300:
 		return &publicError{message: "Unable to connect this agent."}
 	}
 	var agent agentSummary
-	if err := json.Unmarshal(response.body, &agent); err != nil || agent.AgentID == "" {
+	if err := json.Unmarshal(response.Body, &agent); err != nil || agent.AgentID == "" {
 		return &publicError{message: "The AirCommand service returned an invalid connect response."}
 	}
 	fmt.Fprintf(a.outputWriter(), "Connected as %s (%s).\n\nThis agent is in no workstream yet. Join one with:\n    aircom join --agent %s --org <org> --workstream <code>\n",
@@ -214,46 +208,15 @@ func (a *App) resolveOrganization(reference string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, organization := range list {
-		if organization.OrganizationID == reference {
-			return organization.OrganizationID, nil
-		}
+	organizations := make([]enroll.Organization, len(list))
+	for i, org := range list {
+		organizations[i] = enroll.Organization{OrganizationID: org.OrganizationID, Name: org.Name}
 	}
-
-	var exact, folded []organizationSummary
-	for _, organization := range list {
-		switch {
-		case organization.Name == reference:
-			exact = append(exact, organization)
-		case strings.EqualFold(strings.TrimSpace(organization.Name), reference):
-			folded = append(folded, organization)
-		}
+	id, err := enroll.ResolveOrganization(organizations, reference)
+	if err != nil {
+		return "", &publicError{message: err.Error()}
 	}
-	matches := exact
-	if len(matches) == 0 {
-		matches = folded
-	}
-	switch len(matches) {
-	case 1:
-		return matches[0].OrganizationID, nil
-	case 0:
-		names := make([]string, 0, len(list))
-		for _, organization := range list {
-			names = append(names, organization.Name)
-		}
-		sort.Strings(names)
-		if len(names) == 0 {
-			return "", &publicError{message: "This machine can reach no organizations."}
-		}
-		return "", &publicError{message: fmt.Sprintf("No organization called %q. This machine can reach: %s", reference, strings.Join(names, ", "))}
-	default:
-		ids := make([]string, 0, len(matches))
-		for _, organization := range matches {
-			ids = append(ids, organization.OrganizationID)
-		}
-		sort.Strings(ids)
-		return "", &publicError{message: fmt.Sprintf("More than one organization is called %q. Use its identifier: %s", reference, strings.Join(ids, ", "))}
-	}
+	return id, nil
 }
 
 // resolveAgent turns --agent into an agent on this machine, by id or by name.

@@ -39,6 +39,7 @@ type TakeoverProcess struct {
 }
 type AgentDefinition struct {
 	Version          int              `json:"version"`
+	Revision         int64            `json:"revision,omitempty"`
 	AgentID          string           `json:"agentId"`
 	Name             string           `json:"name"`
 	Organization     string           `json:"organization"`
