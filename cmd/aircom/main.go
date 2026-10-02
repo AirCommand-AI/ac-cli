@@ -72,7 +72,9 @@ func main() {
 		if err != nil {
 			return nil, nil
 		} // offline polling still runs without a machine socket
-		return &daemon.SocketClient{URL: "wss://ac.aircommand.ai/machine", MachineID: machine.DeviceID, Sink: manager.(daemon.WakeSink), SecretLoader: func(ctx context.Context) (string, error) {
+		source := manager.(machinectl.StatusSource)
+		control := machinectl.New(nil, &machinectl.HTTPReporter{URL: dashboardURL, Token: machine.APIToken, Version: version, Client: httpClient, Source: source})
+		return &daemon.SocketClient{URL: "wss://ac.aircommand.ai/machine", MachineID: machine.DeviceID, Sink: manager.(daemon.WakeSink), Control: control, OnCheckIn: control.CheckIn, OnConnect: control.CheckIn, SecretLoader: func(ctx context.Context) (string, error) {
 			return daemon.MachineSecret(ctx, store, httpClient, dashboardURL)
 		}}, nil
 	}

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // CommandTmux uses a dedicated tmux socket. Args are never passed through a shell.
@@ -59,6 +60,43 @@ func parsePaneOutput(output string) (Pane, error) {
 		return Pane{}, fmt.Errorf("invalid tmux pane PID")
 	}
 	return Pane{Exists: true, Dead: dead, ExitCode: code, Signal: signal, PID: pid}, nil
+}
+
+// Activity reads only the dedicated aircom tmux socket. window_activity is
+// tmux's Unix timestamp of the most recent pane output in that window.
+func (t CommandTmux) Activity(ctx context.Context, names []string) (bool, time.Time, error) {
+	clients, err := t.command(ctx, "list-clients", "-F", "#{client_session}").CombinedOutput()
+	if err != nil && !tmuxMissing(string(clients)) {
+		return false, time.Time{}, fmt.Errorf("inspect tmux clients: %w: %s", err, clients)
+	}
+	attached := strings.TrimSpace(string(clients)) != "" && err == nil
+	var last time.Time
+	for _, name := range names {
+		if !validName(name) {
+			return false, time.Time{}, fmt.Errorf("invalid agent name")
+		}
+		out, err := t.command(ctx, "list-windows", "-t", "="+name, "-F", "#{window_activity}").CombinedOutput()
+		if err != nil {
+			if tmuxMissing(string(out)) {
+				continue
+			}
+			return false, time.Time{}, fmt.Errorf("inspect tmux activity: %w: %s", err, out)
+		}
+		for _, line := range strings.Fields(string(out)) {
+			seconds, err := strconv.ParseInt(line, 10, 64)
+			if err != nil || seconds < 0 {
+				return false, time.Time{}, fmt.Errorf("invalid tmux window_activity %q", line)
+			}
+			when := time.Unix(seconds, 0)
+			if when.After(last) {
+				last = when
+			}
+		}
+	}
+	return attached, last, nil
+}
+func tmuxMissing(output string) bool {
+	return strings.Contains(output, "no server running") || strings.Contains(output, "can't find session") || strings.Contains(output, "no sessions") || strings.Contains(output, "error connecting to")
 }
 func (t CommandTmux) Start(ctx context.Context, def AgentDefinition, args []string) error {
 	if !validName(def.Name) {

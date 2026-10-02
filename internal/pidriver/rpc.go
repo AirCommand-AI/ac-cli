@@ -81,7 +81,8 @@ func (d *RPC) wake() {
 var versionRE = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
 
 func checkVersion(path string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// A restored snapshot can make the first disk read unusually slow.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
 	if err != nil {

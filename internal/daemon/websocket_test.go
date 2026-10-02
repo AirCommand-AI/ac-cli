@@ -62,6 +62,8 @@ func TestMachineSocketFixtures(t *testing.T) {
 		}
 		defer c.Close()
 		_ = c.WriteMessage(websocket.TextMessage, fixture(t, "hello.json"))
+		_ = c.WriteJSON(map[string]any{"type": "future-content-free-signal", "notification": 42})
+		_ = c.WriteJSON(map[string]string{"type": "check-in"})
 		_ = c.WriteMessage(websocket.TextMessage, fixture(t, "wake.json"))
 		_ = c.WriteMessage(websocket.TextMessage, fixture(t, "wake-minimal.json"))
 		for {
@@ -73,7 +75,8 @@ func TestMachineSocketFixtures(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c := &SocketClient{URL: "ws" + strings.TrimPrefix(server.URL, "http") + "/machine", Secret: "secret", MachineID: "device_123", Sink: sink}
+	connected, checkin := make(chan struct{}, 1), make(chan struct{}, 1)
+	c := &SocketClient{URL: "ws" + strings.TrimPrefix(server.URL, "http") + "/machine", Secret: "secret", MachineID: "device_123", Sink: sink, OnConnect: func() { connected <- struct{}{} }, OnCheckIn: func() { checkin <- struct{}{} }}
 	done := make(chan error, 1)
 	go func() { done <- c.Run(ctx) }()
 	for i := 0; i < 2; i++ {
@@ -82,6 +85,16 @@ func TestMachineSocketFixtures(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("wake not received")
 		}
+	}
+	select {
+	case <-connected:
+	case <-time.After(time.Second):
+		t.Fatal("missing connect callback")
+	}
+	select {
+	case <-checkin:
+	case <-time.After(time.Second):
+		t.Fatal("missing check-in callback")
 	}
 	state := c.State()
 	if !state.Connected || state.Node != "node-1" || state.Generation != 7 || state.Since == "" {

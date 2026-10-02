@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
+	"github.com/AirCommand-AI/ac-cli/internal/machinectl"
 	"github.com/gorilla/websocket"
 )
 
@@ -29,6 +30,9 @@ type SocketClient struct {
 	URL, Secret, MachineID string
 	SecretLoader           func(context.Context) (string, error)
 	Sink                   WakeSink
+	Control                *machinectl.Control
+	OnCheckIn              func()
+	OnConnect              func()
 	Dialer                 *websocket.Dialer
 	// Log receives one line per failed connect attempt; nil disables it.
 	Log          func(string)
@@ -140,6 +144,9 @@ func (c *SocketClient) connect(ctx context.Context) error {
 	if err := c.Sink.CatchUp(ctx); err != nil {
 		return err
 	}
+	if c.OnConnect != nil {
+		c.OnConnect()
+	}
 	pingCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	interval := c.PingInterval
@@ -173,22 +180,32 @@ func (c *SocketClient) connect(ctx context.Context) error {
 		if kind != websocket.TextMessage {
 			continue
 		}
-		var frame struct {
-			Type         string                `json:"type"`
-			AgentID      string                `json:"agentId"`
-			Notification agentapi.Notification `json:"notification"`
+		var envelope struct {
+			Type string `json:"type"`
 		}
-		if err := json.Unmarshal(body, &frame); err != nil {
+		if err := json.Unmarshal(body, &envelope); err != nil {
 			return fmt.Errorf("invalid machine socket frame: %w", err)
 		}
-		if frame.Type == "pong" {
+		switch envelope.Type {
+		case "pong":
 			continue
-		}
-		if frame.Type != "wake" || frame.AgentID == "" {
-			return errors.New("invalid machine socket wake")
-		}
-		if err := c.Sink.Wake(ctx, frame.AgentID, frame.Notification); err != nil {
-			return err
+		case "check-in":
+			if c.OnCheckIn != nil {
+				c.OnCheckIn()
+			}
+		case "wake":
+			var frame struct {
+				AgentID      string                `json:"agentId"`
+				Notification agentapi.Notification `json:"notification"`
+			}
+			if err := json.Unmarshal(body, &frame); err != nil || frame.AgentID == "" {
+				return errors.New("invalid machine socket wake")
+			}
+			if err := c.Sink.Wake(ctx, frame.AgentID, frame.Notification); err != nil {
+				return err
+			}
+		default: // Future content-free signals must not disconnect older daemons.
+			continue
 		}
 	}
 }

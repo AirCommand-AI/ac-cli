@@ -44,6 +44,8 @@ type Manager struct {
 	mu             sync.Mutex
 	agents         map[string]*managed
 	booted         chan struct{}
+	stoppingHold   bool
+	lastBusy       time.Time
 }
 type managed struct {
 	def                                                             AgentDefinition
@@ -292,6 +294,9 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stoppingHold {
+		return fmt.Errorf("machine is stopping")
+	}
 	a := m.agents[def.Name]
 	if a != nil && (a.takenOver || a.def.Takeover != nil || a.def.State == "taken-over") {
 		return fmt.Errorf("agent is taken over")
@@ -609,6 +614,9 @@ func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 func (m *Manager) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stoppingHold {
+		return nil
+	}
 	agents := make([]*managed, 0, len(m.agents))
 	for _, a := range m.agents {
 		agents = append(agents, a)

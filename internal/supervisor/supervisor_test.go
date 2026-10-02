@@ -27,6 +27,8 @@ type fakeTmux struct {
 	kills      int
 	inspectErr map[string]error
 	inspected  map[string]int
+	attached   bool
+	activity   time.Time
 }
 
 func (f *fakeTmux) Inspect(_ context.Context, n string) (Pane, error) {
@@ -44,6 +46,9 @@ func (f *fakeTmux) Start(_ context.Context, d AgentDefinition, args []string) er
 	return nil
 }
 func (f *fakeTmux) Kill(_ context.Context, n string) error { delete(f.panes, n); f.kills++; return nil }
+func (f *fakeTmux) Activity(context.Context, []string) (bool, time.Time, error) {
+	return f.attached, f.activity, nil
+}
 
 type fakePoll struct {
 	feed   Feed

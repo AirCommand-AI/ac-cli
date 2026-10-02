@@ -240,6 +240,13 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 			ws.Log = func(line string) { _, _ = fmt.Fprintln(logFile, line) }
 		}
 	}
+	if ws != nil && ws.Control != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ws.Control.Run(running, func(err error) { _, _ = fmt.Fprintln(logFile, "machine control:", err) })
+		}()
+	}
 	if ws != nil {
 		wg.Add(1)
 		go func() {
