@@ -18,6 +18,7 @@ type fakeManager struct {
 	calls []string
 }
 
+func (m *fakeManager) FlushDesired(context.Context) error { return nil }
 func (m *fakeManager) Definitions() []supervisor.AgentDefinition {
 	out := make([]supervisor.AgentDefinition, 0, len(m.defs))
 	for _, d := range m.defs {
@@ -101,6 +102,10 @@ func TestReconcileSeedsWithoutRestartAndGatesByRevision(t *testing.T) {
 				t.Errorf("seed = %+v", body)
 			}
 		case req.URL.Path == "/agent/v1/machines/me/agents":
+			if seedCount == 0 {
+				_ = json.NewEncoder(w).Encode(Definitions{Agents: []Agent{}})
+				return
+			}
 			// A previously joined row can have empty assigned* fields;
 			// seeding must retain its local organization and workstream.
 			_ = json.NewEncoder(w).Encode(Definitions{Agents: []Agent{{AgentID: "agm_1", Name: "eng-1", Desired: "running", Mode: mode, WorkFolder: folder, JoinedOrganizationID: "org_from_credential", JoinedWorkstreamCode: "348", Revision: revision}}})
@@ -125,6 +130,9 @@ func TestReconcileSeedsWithoutRestartAndGatesByRevision(t *testing.T) {
 	if reports != 1 || seedCount != 1 {
 		t.Fatalf("unchanged revision applied: reports=%d seeds=%d", reports, seedCount)
 	}
+	d := manager.defs["agm_1"]
+	d.State = "running"
+	manager.defs["agm_1"] = d
 	revision = 2
 	mode = "headless"
 	if err := r.Reconcile(ctx); err != nil {
@@ -135,7 +143,7 @@ func TestReconcileSeedsWithoutRestartAndGatesByRevision(t *testing.T) {
 	}
 	// A later explicit revision resumes a parked agent even when desired
 	// remains running; the periodic check at the same revision did not.
-	d := manager.defs["agm_1"]
+	d = manager.defs["agm_1"]
 	d.State = "crashed"
 	manager.defs["agm_1"] = d
 	if err := r.Reconcile(ctx); err != nil {

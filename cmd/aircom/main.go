@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/app"
@@ -40,11 +41,22 @@ func main() {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	daemon.AircomVersion = version
 	commands := daemon.Commands{Home: home, Output: os.Stdout}
+	operationGate := &sync.Mutex{}
 	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
 		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		manager := supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll)
+		manager.OperationGate = operationGate
 		api := machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		manager.DesiredPost = func(ctx context.Context, d supervisor.AgentDefinition) (int64, error) {
+			if d.Revision == 0 {
+				cred, err := store.FindByAgent(d.Workstream, d.AgentID)
+				if err != nil {
+					return 0, err
+				}
+				if err := api.Seed(ctx, []machinectl.Seed{{AgentID: d.AgentID, Desired: d.Desired, Mode: d.Mode, Repos: d.Repos, WorkFolder: d.WorkFolder, AssignedOrganizationID: cred.OrganizationID, AssignedWorkstreamCode: d.Workstream}}); err != nil {
+					return 0, err
+				}
+			}
 			return api.Desired(ctx, d.AgentID, d.Desired, d.Mode)
 		}
 		return manager, nil
@@ -52,7 +64,7 @@ func main() {
 	commands.NewControl = func(manager daemon.Supervisor) *machinectl.Control {
 		return machinectl.New(&machinectl.AgentReconciler{
 			API:     machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store},
-			Manager: manager.(machinectl.Manager), Store: store, Home: home,
+			Manager: manager.(machinectl.Manager), Store: store, Home: home, Gate: operationGate,
 		}, nil)
 	}
 	commands.NewSocket = func(ctx context.Context, manager daemon.Supervisor) (*daemon.SocketClient, error) {

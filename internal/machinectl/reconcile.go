@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/enroll"
@@ -29,6 +32,7 @@ type Manager interface {
 	Stop(context.Context, string) error
 	Mode(context.Context, string, string) error
 	MarkRevision(string, int64) error
+	FlushDesired(context.Context) error
 }
 
 type AgentReconciler struct {
@@ -38,40 +42,79 @@ type AgentReconciler struct {
 	Home    string
 	// Join verifies/resumes a bearer. Tests replace it with a fake.
 	Join   func(context.Context, Agent) error
-	seeded bool
+	Gate   *sync.Mutex
+	Now    func() time.Time
+	failed map[string]retryFailure
+}
+
+type retryFailure struct {
+	revision int64
+	until    time.Time
+}
+
+func (r *AgentReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 	if r.API == nil || r.Manager == nil || r.Store == nil {
 		return fmt.Errorf("reconciler is not configured")
 	}
-	local := r.Manager.Definitions()
-	if !r.seeded {
-		seeds := make([]Seed, 0, len(local))
-		for _, d := range local {
-			cred, err := r.Store.FindByAgent(d.Workstream, d.AgentID)
-			if err != nil {
-				return fmt.Errorf("seed %s: %w", d.Name, err)
-			}
-			if cred.OrganizationID == "" {
-				return fmt.Errorf("seed %s: missing organization ID in credential", d.Name)
-			}
-			seeds = append(seeds, Seed{AgentID: d.AgentID, Name: d.Name, Desired: d.Desired, Mode: d.Mode, Repos: d.Repos, WorkFolder: d.WorkFolder, AssignedOrganizationID: cred.OrganizationID, AssignedWorkstreamCode: d.Workstream})
-		}
-		if err := r.API.Seed(ctx, seeds); err != nil {
-			return err
-		}
-		r.seeded = true
+	if r.Gate != nil {
+		r.Gate.Lock()
+		defer r.Gate.Unlock()
 	}
+	// A failed local desired post must be retried before fetching an older
+	// server revision that could undo the local operator's successful action.
+	if err := r.Manager.FlushDesired(ctx); err != nil {
+		return err
+	}
+	local := r.Manager.Definitions()
 	remote, err := r.API.Definitions(ctx)
 	if err != nil {
 		return err
+	}
+	var failures []string
+	present := make(map[string]bool, len(remote.Agents))
+	for _, d := range remote.Agents {
+		present[d.AgentID] = true
+	}
+	seeded := false
+	// Seed one agent per request. A missing credential or retired roster row
+	// must not strand every other agent. Each tick also sees locally created
+	// agents not present at the previous check-in.
+	for _, d := range local {
+		if present[d.AgentID] {
+			continue
+		}
+		cred, err := r.Store.FindByAgent(d.Workstream, d.AgentID)
+		if err == nil && cred.OrganizationID == "" {
+			err = fmt.Errorf("credential has no organization ID")
+		}
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("seed %s: %v", d.Name, err))
+			continue
+		}
+		seed := Seed{AgentID: d.AgentID, Desired: d.Desired, Mode: d.Mode, Repos: d.Repos, WorkFolder: d.WorkFolder, AssignedOrganizationID: cred.OrganizationID, AssignedWorkstreamCode: d.Workstream}
+		if err := r.API.Seed(ctx, []Seed{seed}); err != nil {
+			failures = append(failures, fmt.Sprintf("seed %s: %v", d.Name, err))
+			continue
+		}
+		seeded = true
+	}
+	if seeded {
+		remote, err = r.API.Definitions(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	current := make(map[string]supervisor.AgentDefinition, len(local))
 	for _, d := range local {
 		current[d.AgentID] = d
 	}
-	var failures []string
 	for _, target := range remote.Agents {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -83,13 +126,21 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		if target.Revision <= previous.Revision || target.Revision < 1 {
 			continue
 		}
+		if failure, ok := r.failed[target.AgentID]; ok && failure.revision == target.Revision && r.now().Before(failure.until) {
+			continue
+		}
 		if err := r.apply(ctx, target, previous, exists); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", target.AgentID, err))
-			if reportErr := r.API.Result(ctx, target.AgentID, target.Revision, "failed", err.Error()); reportErr != nil {
+			if r.failed == nil {
+				r.failed = make(map[string]retryFailure)
+			}
+			r.failed[target.AgentID] = retryFailure{revision: target.Revision, until: r.now().Add(5 * time.Minute)}
+			if reportErr := r.API.Result(ctx, target.AgentID, target.Revision, "failed", shortReason(err.Error())); reportErr != nil {
 				failures = append(failures, reportErr.Error())
 			}
 			continue
 		}
+		delete(r.failed, target.AgentID)
 		// Do not persist the applied revision until the result was accepted;
 		// a transient report failure is retried on the next check-in.
 		if err := r.API.Result(ctx, target.AgentID, target.Revision, "applied", ""); err != nil {
@@ -104,6 +155,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("reconcile: %s", strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func shortReason(reason string) string {
+	if len(reason) <= 500 {
+		return reason
+	}
+	reason = reason[:500]
+	for !utf8.ValidString(reason) {
+		reason = reason[:len(reason)-1]
+	}
+	return reason
 }
 
 // Legacy empty server fields preserve the local definition during seeding.
@@ -213,18 +275,29 @@ func prepareFolder(ctx context.Context, home string, agent Agent) error {
 			return fmt.Errorf("invalid repository %q", repo)
 		}
 		dest := filepath.Join(path, strings.Split(repo, "/")[1])
-		if _, err := os.Stat(dest); err == nil {
+		if _, err := os.Lstat(dest); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		cloneCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		cmd := exec.CommandContext(cloneCtx, "git", "clone", "--", "https://github.com/"+repo+".git", dest)
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		output, err := cmd.CombinedOutput()
-		cancel()
+		// A failed clone never leaves a partial repository that a later check
+		// might mistake for a completed checkout.
+		tmp, err := os.MkdirTemp(path, ".aircom-clone-*")
 		if err != nil {
-			return fmt.Errorf("clone %s: %w: %s", repo, err, strings.TrimSpace(string(output)))
+			return err
+		}
+		cloneCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		cmd := exec.CommandContext(cloneCtx, "git", "clone", "--", "https://github.com/"+repo+".git", tmp)
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		output, cloneErr := cmd.CombinedOutput()
+		cancel()
+		if cloneErr != nil {
+			_ = os.RemoveAll(tmp)
+			return fmt.Errorf("clone %s: %w: %s", repo, cloneErr, strings.TrimSpace(string(output)))
+		}
+		if err := os.Rename(tmp, dest); err != nil {
+			_ = os.RemoveAll(tmp)
+			return err
 		}
 	}
 	return nil
@@ -240,7 +313,7 @@ func (r *AgentReconciler) joinHTTP(ctx context.Context, target Agent) error {
 		return err
 	}
 	if credential, err := r.Store.FindByAgent(target.AssignedWorkstreamCode, target.AgentID); err == nil && credential.OrganizationID == target.AssignedOrganizationID {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(api.BaseURL, "/")+"/agent/v1/workstreams/"+target.AssignedWorkstreamCode, nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(api.BaseURL, "/")+"/agent/v1/workstreams/"+url.PathEscape(target.AssignedWorkstreamCode), nil)
 		if err != nil {
 			return err
 		}

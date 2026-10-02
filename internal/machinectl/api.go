@@ -37,7 +37,6 @@ type Definitions struct {
 
 type Seed struct {
 	AgentID                string   `json:"agentId"`
-	Name                   string   `json:"name"`
 	Desired                string   `json:"desired"`
 	Mode                   string   `json:"mode"`
 	Repos                  []string `json:"repos"`

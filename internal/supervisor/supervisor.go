@@ -36,10 +36,14 @@ type Manager struct {
 	// The production constructor is supplied by the daemon entrypoint.
 	NewDriver   func(io.Writer) pidriver.Driver
 	DesiredPost func(context.Context, AgentDefinition) (int64, error)
-	Now         func() time.Time
-	mu          sync.Mutex
-	agents      map[string]*managed
-	booted      chan struct{}
+	// OperationGate serializes dashboard reconciliation with local lifecycle
+	// changes, without holding Manager.mu across network or git operations.
+	OperationGate  *sync.Mutex
+	pendingDesired map[string]bool
+	Now            func() time.Time
+	mu             sync.Mutex
+	agents         map[string]*managed
+	booted         chan struct{}
 }
 type managed struct {
 	def                                                             AgentDefinition
@@ -316,6 +320,7 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 		return fmt.Errorf("agent must be stopped before changing mode")
 	}
 	def.Pi = old.Pi
+	def.Revision = old.Revision
 	def.Nudge = old.Nudge
 	def.SessionMigrated = !a.legacySession
 	def.Desired = "running"

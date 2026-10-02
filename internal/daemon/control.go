@@ -73,6 +73,12 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		}
 		return Response{Error: &APIError{Code: code, Message: err.Error()}}
 	}
+	if request.Op == "agent.start" || request.Op == "agent.stop" || request.Op == "agent.mode" {
+		if locker, ok := supervisor.(interface{ LockLocalChange() func() }); ok {
+			unlock := locker.LockLocalChange()
+			defer unlock()
+		}
+	}
 	switch request.Op {
 	case "status", "agent.list":
 		agents, err := supervisor.List(ctx)
