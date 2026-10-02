@@ -46,7 +46,10 @@ func TestPostDesiredFailureReturnsSuccessThenRetries(t *testing.T) {
 		}
 		return 4, nil
 	}
-	unlock := m.LockLocalChange()
+	unlock, err := m.LockLocalChange()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Stop(context.Background(), d.Name); err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +57,8 @@ func TestPostDesiredFailureReturnsSuccessThenRetries(t *testing.T) {
 		t.Fatalf("successful local stop reported failed: %v", err)
 	}
 	unlock()
-	if err := m.FlushDesired(context.Background()); err != nil {
-		t.Fatal(err)
+	if skip := m.FlushDesired(context.Background()); len(skip) != 0 {
+		t.Fatalf("unexpected skipped agents: %v", skip)
 	}
 	if attempts != 2 || m.Definitions()[0].Revision != 4 {
 		t.Fatalf("retry attempts=%d state=%+v", attempts, m.Definitions())

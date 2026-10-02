@@ -54,6 +54,18 @@ type API interface {
 
 // HTTPAPI authenticates every machine route with the device bearer. No machine
 // control instruction is accepted from a WebSocket frame.
+// HTTPStatusError lets the reconciler distinguish permanent roster conflicts
+// from temporary transport failures when retrying local desired updates.
+type HTTPStatusError struct {
+	Path   string
+	Status int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("machine API %s returned HTTP %d", e.Path, e.Status)
+}
+func (e *HTTPStatusError) HTTPStatus() int { return e.Status }
+
 type HTTPAPI struct {
 	BaseURL string
 	Client  *http.Client
@@ -90,7 +102,7 @@ func (a HTTPAPI) call(ctx context.Context, method, path string, payload any, res
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("machine API %s returned HTTP %d", path, response.StatusCode)
+		return &HTTPStatusError{Path: path, Status: response.StatusCode}
 	}
 	if result == nil {
 		return nil

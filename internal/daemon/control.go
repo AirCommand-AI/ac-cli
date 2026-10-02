@@ -17,14 +17,14 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
-	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
+	sup "github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
 // Use the supervisor contract directly: the control server and process
 // manager share types without copying state or diverging on the wire format.
-type Definition = supervisor.AgentDefinition
-type Status = supervisor.AgentStatus
-type Supervisor = supervisor.Supervisor
+type Definition = sup.AgentDefinition
+type Status = sup.AgentStatus
+type Supervisor = sup.Supervisor
 type Request struct {
 	Op           string   `json:"op"`
 	Name         string   `json:"name,omitempty"`
@@ -62,6 +62,8 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 			code = "locked"
 		case errors.Is(err, ErrAlreadyRunning):
 			code = "already_running"
+		case errors.Is(err, sup.ErrControlBusy):
+			code = "busy"
 		case errors.Is(err, ErrInvalid):
 			code = "invalid"
 		// The supervisor currently reports its validation and collision errors
@@ -73,9 +75,12 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		}
 		return Response{Error: &APIError{Code: code, Message: err.Error()}}
 	}
-	if request.Op == "agent.start" || request.Op == "agent.stop" || request.Op == "agent.mode" {
-		if locker, ok := supervisor.(interface{ LockLocalChange() func() }); ok {
-			unlock := locker.LockLocalChange()
+	if request.Op == "agent.start" || request.Op == "agent.stop" || request.Op == "agent.mode" || request.Op == "agent.remove" {
+		if locker, ok := supervisor.(interface{ LockLocalChange() (func(), error) }); ok {
+			unlock, err := locker.LockLocalChange()
+			if err != nil {
+				return fail(err)
+			}
 			defer unlock()
 		}
 	}

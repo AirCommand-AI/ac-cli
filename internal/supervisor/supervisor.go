@@ -434,6 +434,7 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 		}
 	}
 	delete(m.agents, name)
+	delete(m.pendingDesired, name)
 	return nil
 }
 func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {

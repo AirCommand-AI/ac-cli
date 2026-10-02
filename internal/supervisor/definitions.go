@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -60,14 +61,25 @@ func (m *Manager) MarkRevision(name string, revision int64) error {
 	return nil
 }
 
+// ErrControlBusy returns immediately instead of letting a 10-second CLI
+// socket deadline expire while reconciliation performs slow network/git work.
+var ErrControlBusy = errors.New("machine control busy; retry shortly")
+
 // LockLocalChange serializes the local action and its desired-state post with
 // reconciliation. The control socket calls it before changing local state.
-func (m *Manager) LockLocalChange() func() {
+func (m *Manager) LockLocalChange() (func(), error) {
 	if m.OperationGate == nil {
-		return func() {}
+		return func() {}, nil
 	}
-	m.OperationGate.Lock()
-	return m.OperationGate.Unlock
+	if !m.OperationGate.TryLock() {
+		return nil, ErrControlBusy
+	}
+	return m.OperationGate.Unlock, nil
+}
+
+func permanentDesiredError(err error) bool {
+	var status interface{ HTTPStatus() int }
+	return errors.As(err, &status) && (status.HTTPStatus() == 400 || status.HTTPStatus() == 404 || status.HTTPStatus() == 409)
 }
 
 // PostDesired retries transient server errors on the next check-in. The local
@@ -89,6 +101,10 @@ func (m *Manager) PostDesired(ctx context.Context, name string) error {
 	}
 	revision, err := post(ctx, def)
 	if err != nil {
+		if permanentDesiredError(err) {
+			log.Printf("supervisor: dropping rejected desired post for %s: %v", name, err)
+			return nil
+		}
 		m.mu.Lock()
 		if m.pendingDesired == nil {
 			m.pendingDesired = make(map[string]bool)
@@ -114,36 +130,55 @@ func (m *Manager) PostDesired(ctx context.Context, name string) error {
 	return nil
 }
 
-// FlushDesired runs before fetching remote definitions. On failure, do not
-// reconcile an older server revision over a newer local change.
-func (m *Manager) FlushDesired(ctx context.Context) error {
+// FlushDesired retries each pending local post independently. A transient
+// failure skips only that agent for this check; other agents still reconcile.
+// Callers hold OperationGate during the check, so no local action races a post.
+func (m *Manager) FlushDesired(ctx context.Context) map[string]bool {
 	m.mu.Lock()
 	names := make([]string, 0, len(m.pendingDesired))
 	for name := range m.pendingDesired {
 		names = append(names, name)
 	}
 	m.mu.Unlock()
+	skip := make(map[string]bool)
 	for _, name := range names {
 		m.mu.Lock()
 		a, post := m.agents[name], m.DesiredPost
 		var def AgentDefinition
 		if a != nil {
 			def = a.def
+		} else {
+			delete(m.pendingDesired, name)
 		}
 		m.mu.Unlock()
-		if a == nil || post == nil {
-			return fmt.Errorf("pending desired post unavailable for %s", name)
+		if a == nil {
+			continue
+		} // removed locally; no agent left to reconcile
+		if post == nil {
+			skip[def.AgentID] = true
+			continue
 		}
 		revision, err := post(ctx, def)
 		if err != nil {
-			return fmt.Errorf("pending desired post for %s: %w", name, err)
+			if permanentDesiredError(err) {
+				m.mu.Lock()
+				delete(m.pendingDesired, name)
+				m.mu.Unlock()
+				log.Printf("supervisor: dropping rejected desired post for %s: %v", name, err)
+			} else {
+				skip[def.AgentID] = true
+				log.Printf("supervisor: desired post for %s not delivered (retrying): %v", name, err)
+			}
+			continue
 		}
 		if err := m.MarkRevision(name, revision); err != nil {
-			return err
+			skip[def.AgentID] = true
+			log.Printf("supervisor: desired revision for %s not saved (retrying): %v", name, err)
+			continue
 		}
 		m.mu.Lock()
 		delete(m.pendingDesired, name)
 		m.mu.Unlock()
 	}
-	return nil
+	return skip
 }

@@ -14,11 +14,12 @@ import (
 )
 
 type fakeManager struct {
-	defs  map[string]supervisor.AgentDefinition
-	calls []string
+	defs        map[string]supervisor.AgentDefinition
+	calls       []string
+	pendingSkip map[string]bool
 }
 
-func (m *fakeManager) FlushDesired(context.Context) error { return nil }
+func (m *fakeManager) FlushDesired(context.Context) map[string]bool { return m.pendingSkip }
 func (m *fakeManager) Definitions() []supervisor.AgentDefinition {
 	out := make([]supervisor.AgentDefinition, 0, len(m.defs))
 	for _, d := range m.defs {

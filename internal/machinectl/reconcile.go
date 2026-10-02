@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,7 +33,7 @@ type Manager interface {
 	Stop(context.Context, string) error
 	Mode(context.Context, string, string) error
 	MarkRevision(string, int64) error
-	FlushDesired(context.Context) error
+	FlushDesired(context.Context) map[string]bool
 }
 
 type AgentReconciler struct {
@@ -41,10 +42,11 @@ type AgentReconciler struct {
 	Store   *credentials.Store
 	Home    string
 	// Join verifies/resumes a bearer. Tests replace it with a fake.
-	Join   func(context.Context, Agent) error
-	Gate   *sync.Mutex
-	Now    func() time.Time
-	failed map[string]retryFailure
+	Join         func(context.Context, Agent) error
+	Gate         *sync.Mutex
+	Now          func() time.Time
+	failed       map[string]retryFailure
+	seedRejected map[string]bool
 }
 
 type retryFailure struct {
@@ -69,7 +71,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 	}
 	// A failed local desired post must be retried before fetching an older
 	// server revision that could undo the local operator's successful action.
-	if err := r.Manager.FlushDesired(ctx); err != nil {
+	skip := r.Manager.FlushDesired(ctx)
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	local := r.Manager.Definitions()
@@ -87,7 +90,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 	// must not strand every other agent. Each tick also sees locally created
 	// agents not present at the previous check-in.
 	for _, d := range local {
-		if present[d.AgentID] {
+		if present[d.AgentID] || r.seedRejected[d.AgentID] {
 			continue
 		}
 		cred, err := r.Store.FindByAgent(d.Workstream, d.AgentID)
@@ -100,6 +103,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		}
 		seed := Seed{AgentID: d.AgentID, Desired: d.Desired, Mode: d.Mode, Repos: d.Repos, WorkFolder: d.WorkFolder, AssignedOrganizationID: cred.OrganizationID, AssignedWorkstreamCode: d.Workstream}
 		if err := r.API.Seed(ctx, []Seed{seed}); err != nil {
+			var status *HTTPStatusError
+			if errors.As(err, &status) && (status.Status == http.StatusNotFound || status.Status == http.StatusConflict) {
+				if r.seedRejected == nil {
+					r.seedRejected = make(map[string]bool)
+				}
+				r.seedRejected[d.AgentID] = true
+			}
 			failures = append(failures, fmt.Sprintf("seed %s: %v", d.Name, err))
 			continue
 		}
@@ -116,6 +126,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		current[d.AgentID] = d
 	}
 	for _, target := range remote.Agents {
+		if skip[target.AgentID] {
+			continue
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
