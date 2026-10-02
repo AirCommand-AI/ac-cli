@@ -91,14 +91,18 @@ func (c Commands) RunDaemon(arguments []string) error {
 		}
 		if c.NewControl != nil {
 			if control := c.NewControl(supervisor); control != nil {
-				go func() {
-					if ready, ok := supervisor.(interface{ WaitReady(context.Context) error }); ok {
-						if err := ready.WaitReady(runCtx); err != nil {
-							return
+				if socket != nil {
+					bindMachineControl(socket, control)
+				} else {
+					go func() {
+						if ready, ok := supervisor.(interface{ WaitReady(context.Context) error }); ok {
+							if err := ready.WaitReady(runCtx); err != nil {
+								return
+							}
 						}
-					}
-					control.Run(runCtx, func(err error) { log.Printf("machine control: %v", err) })
-				}()
+						control.Run(runCtx, func(err error) { log.Printf("machine control: %v", err) })
+					}()
+				}
 			}
 		}
 		return Serve(runCtx, c.Home, supervisor, socket)
@@ -106,6 +110,18 @@ func (c Commands) RunDaemon(arguments []string) error {
 		return fmt.Errorf("unknown daemon command %q", strings.TrimSpace(arguments[0]))
 	}
 }
+
+// One scheduler owns both the reconciler and reporter. The socket's
+// content-free signal must trigger both, not a separate status-only loop.
+func bindMachineControl(socket *SocketClient, control *machinectl.Control) {
+	if socket.Control != nil {
+		control.Reporter = socket.Control.Reporter
+	}
+	socket.Control = control
+	socket.OnConnect = control.CheckIn
+	socket.OnCheckIn = control.CheckIn
+}
+
 func appendDaemonWarning(home, warning string) error {
 	if err := os.MkdirAll(storagepath.DaemonDirectory(home), 0700); err != nil {
 		return err

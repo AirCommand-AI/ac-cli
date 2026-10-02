@@ -244,6 +244,11 @@ func Serve(ctx context.Context, home string, supervisor Supervisor, sockets ...*
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if ready, ok := supervisor.(interface{ WaitReady(context.Context) error }); ok {
+				if err := ready.WaitReady(running); err != nil {
+					return
+				}
+			}
 			ws.Control.Run(running, func(err error) { _, _ = fmt.Fprintln(logFile, "machine control:", err) })
 		}()
 	}
