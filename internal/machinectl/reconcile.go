@@ -90,11 +90,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := r.Manager.MarkRevision(target.Name, target.Revision); err != nil {
+		// Do not persist the applied revision until the result was accepted;
+		// a transient report failure is retried on the next check-in.
+		if err := r.API.Result(ctx, target.AgentID, target.Revision, "applied", ""); err != nil {
 			failures = append(failures, err.Error())
 			continue
 		}
-		if err := r.API.Result(ctx, target.AgentID, target.Revision, "applied", ""); err != nil {
+		if err := r.Manager.MarkRevision(target.Name, target.Revision); err != nil {
 			failures = append(failures, err.Error())
 		}
 	}
