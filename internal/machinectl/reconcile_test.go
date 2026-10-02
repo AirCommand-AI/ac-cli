@@ -101,7 +101,9 @@ func TestReconcileSeedsWithoutRestartAndGatesByRevision(t *testing.T) {
 				t.Errorf("seed = %+v", body)
 			}
 		case req.URL.Path == "/agent/v1/machines/me/agents":
-			_ = json.NewEncoder(w).Encode(Definitions{Agents: []Agent{{AgentID: "agm_1", Name: "eng-1", Desired: "running", Mode: mode, WorkFolder: folder, AssignedOrganizationID: "org_from_credential", AssignedWorkstreamCode: "348", Revision: revision}}})
+			// A previously joined row can have empty assigned* fields;
+			// seeding must retain its local organization and workstream.
+			_ = json.NewEncoder(w).Encode(Definitions{Agents: []Agent{{AgentID: "agm_1", Name: "eng-1", Desired: "running", Mode: mode, WorkFolder: folder, JoinedOrganizationID: "org_from_credential", JoinedWorkstreamCode: "348", Revision: revision}}})
 		case strings.HasSuffix(req.URL.Path, "/result"):
 			reports++
 		default:
