@@ -128,25 +128,52 @@ func TestFailedCloneLeavesNoPartialCheckout(t *testing.T) {
 
 func TestLocalOperationGateBlocksReconcileUntilPost(t *testing.T) {
 	gate := &sync.Mutex{}
-	gate.Lock()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	home := t.TempDir()
-	manager := &fakeManager{defs: map[string]supervisor.AgentDefinition{}}
 	store := credentials.NewStore(home)
-	r := &AgentReconciler{Manager: manager, Store: store, Gate: gate, API: HTTPAPI{}}
+	if err := store.SaveMachine(credentials.Machine{APIToken: "device", DeviceID: "dev_1"}); err != nil {
+		t.Fatal(err)
+	}
+	folder := filepath.Join(home, "work", "eng-1")
+	manager := &fakeManager{defs: map[string]supervisor.AgentDefinition{"agm_1": {AgentID: "agm_1", Name: "eng-1", Desired: "running", State: "running", Mode: "tmux", Workstream: "348", WorkFolder: folder, Revision: 1}}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/agents") {
+			_ = json.NewEncoder(w).Encode(Definitions{Agents: []Agent{{AgentID: "agm_1", Name: "eng-1", Desired: "running", Mode: "tmux", WorkFolder: folder, AssignedOrganizationID: "org_a", AssignedWorkstreamCode: "348", Revision: 2}}})
+		} else {
+			t.Errorf("unexpected route %s", req.URL.Path)
+		}
+	}))
+	defer server.Close()
+	r := &AgentReconciler{Manager: manager, Store: store, Gate: gate, API: HTTPAPI{BaseURL: server.URL, Client: server.Client(), Store: store}}
+	localReady, finishLocal := make(chan struct{}), make(chan struct{})
+	localDone := make(chan struct{})
+	go func() {
+		gate.Lock()
+		_ = manager.Stop(context.Background(), "eng-1")
+		close(localReady)
+		<-finishLocal // the local desired POST is still in flight
+		_ = manager.MarkRevision("eng-1", 3)
+		gate.Unlock()
+		close(localDone)
+	}()
+	<-localReady
 	done := make(chan error, 1)
-	go func() { done <- r.Reconcile(ctx) }()
+	go func() { done <- r.Reconcile(context.Background()) }()
 	select {
 	case <-done:
-		t.Fatal("reconcile passed local gate")
+		t.Fatal("reconcile passed unfinished local operation")
 	case <-time.After(15 * time.Millisecond):
 	}
-	cancel()
-	gate.Unlock()
+	close(finishLocal)
+	<-localDone
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("reconcile did not release gate")
+	}
+	if manager.defs["agm_1"].Desired != "stopped" || manager.defs["agm_1"].Revision != 3 || len(manager.calls) != 1 {
+		t.Fatalf("older server revision undid local stop: %+v calls=%v", manager.defs["agm_1"], manager.calls)
 	}
 }
