@@ -154,9 +154,12 @@ func (r *AgentReconciler) apply(ctx context.Context, target Agent, old superviso
 		}
 		return r.Manager.Start(ctx, definition(target))
 	}
-	// Seeding must not restart an already running agent. An unchanged revision
-	// also leaves crashed, dashboard-stopped and takeover states untouched.
-	if old.Desired == target.Desired && old.Mode == target.Mode && old.Workstream == target.AssignedWorkstreamCode && old.WorkFolder == target.WorkFolder {
+	// Initial seeding never revives parked agents. Later explicit revisions
+	// can resume a crashed or dashboard-stopped agent even if desired was
+	// already running. Periodic checks without a newer revision did not reach
+	// this method at all.
+	unchanged := old.Desired == target.Desired && old.Mode == target.Mode && old.Workstream == target.AssignedWorkstreamCode && old.WorkFolder == target.WorkFolder
+	if unchanged && (old.Revision == 0 || target.Desired != "running" || old.State == "running" || old.State == "starting") {
 		return nil
 	}
 	if old.Desired == "running" && (target.Desired == "stopped" || target.Mode != old.Mode) {

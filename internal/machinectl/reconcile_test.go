@@ -131,6 +131,24 @@ func TestReconcileSeedsWithoutRestartAndGatesByRevision(t *testing.T) {
 	if strings.Join(manager.calls, ",") != "stop:eng-1,mode:headless,start:eng-1" {
 		t.Fatalf("mode transition: %v", manager.calls)
 	}
+	// A later explicit revision resumes a parked agent even when desired
+	// remains running; the periodic check at the same revision did not.
+	d := manager.defs["agm_1"]
+	d.State = "crashed"
+	manager.defs["agm_1"] = d
+	if err := r.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.calls) != 3 {
+		t.Fatalf("parked state restarted without revision: %v", manager.calls)
+	}
+	revision = 3
+	if err := r.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(manager.calls, ",") != "stop:eng-1,mode:headless,start:eng-1,start:eng-1" {
+		t.Fatalf("explicit resume: %v", manager.calls)
+	}
 }
 
 func TestReconcileCreatesOnlyNewAgentAndReports(t *testing.T) {
