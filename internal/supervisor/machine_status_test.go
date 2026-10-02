@@ -27,6 +27,11 @@ func TestMachineStoppingHoldPreservesDesiredAndResumes(t *testing.T) {
 	if err := m.Start(ctx, d); err == nil {
 		t.Fatal("Start bypassed stopping hold")
 	}
+	m.agents[d.Name].takenOver = true
+	if m.AgentsStopped() {
+		t.Fatal("active foreground takeover reported stopped")
+	}
+	m.agents[d.Name].takenOver = false
 	if err := m.Tick(ctx); err != nil || m.agents[d.Name].driver != nil {
 		t.Fatalf("hold relaunched pi: %v", err)
 	}

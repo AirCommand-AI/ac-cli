@@ -70,7 +70,7 @@ func (m *Manager) AgentsStopped() bool {
 		return false
 	}
 	for _, a := range m.agents {
-		if a.driver != nil || a.def.State != "stopped" {
+		if a.driver != nil || a.takenOver || a.def.Takeover != nil || a.def.State != "stopped" {
 			return false
 		}
 	}
