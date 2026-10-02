@@ -223,6 +223,12 @@ func TestStopAlreadyCancelledContext(t *testing.T) {
 		t.Fatalf("cancelled-context Stop skipped SIGTERM grace: %v", elapsed)
 	}
 }
+func TestPiVersionAllowsColdDisk(t *testing.T) {
+	if piVersionTimeout != 60*time.Second {
+		t.Fatalf("pi --version timeout %s", piVersionTimeout)
+	}
+}
+
 func TestVersion(t *testing.T) {
 	for _, tc := range []struct {
 		version string

@@ -9,6 +9,91 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 )
 
+func TestMachineHoldPreservesParkedStates(t *testing.T) {
+	for _, state := range []string{"crashed", "stopped-by-dashboard"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			m, _, _, _ := setup(t)
+			d := definition(m.Home)
+			d.Mode = "headless"
+			m.NewDriver = func(io.Writer) pidriver.Driver { return pidriver.NewFake() }
+			if err := m.Start(ctx, d); err != nil {
+				t.Fatal(err)
+			}
+			m.agents[d.Name].def.State = state
+			if err := m.SetMachineState(ctx, "stopping"); err != nil {
+				t.Fatal(err)
+			}
+			if m.agents[d.Name].def.State != state || !m.AgentsStopped() {
+				t.Fatalf("parked state %q stopped %v", m.agents[d.Name].def.State, m.AgentsStopped())
+			}
+			if err := m.SetMachineState(ctx, "online"); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Tick(ctx); err != nil || m.agents[d.Name].driver != nil {
+				t.Fatalf("parked agent relaunched: %v", err)
+			}
+		})
+	}
+}
+func TestDeadTakeoverClearsDuringStoppingHold(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, now := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	m.NewDriver = func(io.Writer) pidriver.Driver { return pidriver.NewFake() }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Takeover(ctx, d.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetMachineState(ctx, "stopping"); err == nil || m.AgentsStopped() {
+		t.Fatalf("unfenced takeover marked stopped: %v", err)
+	}
+	m.agents[d.Name].takeoverConnected = false
+	*now = now.Add(31 * time.Second)
+	if err := m.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !m.AgentsStopped() || m.agents[d.Name].driver != nil {
+		t.Fatal("dead takeover cleanup did not finish hold")
+	}
+}
+func TestMachineStoppingHoldPersistsAcrossDaemonRestart(t *testing.T) {
+	ctx := context.Background()
+	m, tm, poll, now := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	m.NewDriver = func(io.Writer) pidriver.Driver { return pidriver.NewFake() }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetMachineState(ctx, "stopping"); err != nil {
+		t.Fatal(err)
+	}
+	next := New(m.Home, m.Pi, m.CLI, tm, poll)
+	next.Now = func() time.Time { return *now }
+	next.NewDriver = m.NewDriver
+	if !next.stoppingHold {
+		t.Fatal("machine hold marker lost")
+	}
+	next.mu.Lock()
+	err := next.bootAgent(ctx, m.definitionPath(d.AgentID))
+	next.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.agents[d.Name].driver != nil {
+		t.Fatal("boot relaunched while stopping")
+	}
+	if err := next.SetMachineState(ctx, "online"); err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Tick(ctx); err != nil || next.agents[d.Name].driver == nil {
+		t.Fatalf("online did not resume: %v", err)
+	}
+}
 func TestMachineStoppingHoldPreservesDesiredAndResumes(t *testing.T) {
 	ctx := context.Background()
 	m, _, _, _ := setup(t)
@@ -55,6 +140,41 @@ func TestMachineStoppingHoldPreservesDesiredAndResumes(t *testing.T) {
 	}
 }
 
+func TestIdleSinceRemembersStreamingTurnBetweenReports(t *testing.T) {
+	ctx := context.Background()
+	m, _, _, now := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	var f *pidriver.Fake
+	m.NewDriver = func(io.Writer) pidriver.Driver { f = pidriver.NewFake(); return f }
+	if err := m.Start(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	first, err := m.IdleSince(ctx)
+	if err != nil || first == nil {
+		t.Fatalf("initial idle %v %v", first, err)
+	}
+	*now = now.Add(5 * time.Minute)
+	f.EventCh <- pidriver.Event{Kind: "agent_settled"}
+	deadline := time.After(time.Second)
+	for {
+		m.mu.Lock()
+		updated := m.lastBusy.Equal(*now)
+		m.mu.Unlock()
+		if updated {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("settled event not consumed")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	idle, err := m.IdleSince(ctx)
+	if err != nil || idle == nil || !idle.Equal(*now) {
+		t.Fatalf("short streaming turn lost: %v %v", idle, err)
+	}
+}
 func TestIdleSinceUsesTmuxClientAndWindowActivity(t *testing.T) {
 	ctx := context.Background()
 	m, tm, _, now := setup(t)

@@ -29,7 +29,9 @@ type HTTPReporter struct {
 	Source              StatusSource
 }
 
-func (r *HTTPReporter) Report(ctx context.Context) error {
+func (r *HTTPReporter) Report(ctx context.Context) error { return r.report(ctx, true) }
+
+func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 	if r.Source == nil || r.URL == "" || r.Token == "" {
 		return fmt.Errorf("machine status reporter is not configured")
 	}
@@ -94,8 +96,14 @@ func (r *HTTPReporter) Report(ctx context.Context) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
 		return err
 	}
-	if result.Machine.State != "" {
-		return r.Source.SetMachineState(ctx, result.Machine.State)
+	if apply && result.Machine.State != "" {
+		before := r.Source.AgentsStopped()
+		if err := r.Source.SetMachineState(ctx, result.Machine.State); err != nil {
+			return err
+		}
+		if !before && r.Source.AgentsStopped() {
+			return r.report(ctx, false)
+		}
 	}
 	return nil
 }

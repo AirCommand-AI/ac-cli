@@ -11,6 +11,44 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 )
 
+type pausingStopDriver struct {
+	*pidriver.Fake
+	entered, release chan struct{}
+}
+
+func (d *pausingStopDriver) Stop(ctx context.Context) error {
+	close(d.entered)
+	select {
+	case <-d.release:
+		return d.Fake.Stop(ctx)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func TestTakeoverHidesDriverBeforeBlockingStop(t *testing.T) {
+	m, _, _, _ := setup(t)
+	d := definition(m.Home)
+	d.Mode = "headless"
+	driver := &pausingStopDriver{Fake: pidriver.NewFake(), entered: make(chan struct{}), release: make(chan struct{})}
+	m.NewDriver = func(io.Writer) pidriver.Driver { return driver }
+	if err := m.Start(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := m.Takeover(context.Background(), d.Name); done <- err }()
+	select {
+	case <-driver.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Stop not entered")
+	}
+	if _, ok := m.Driver(d.Name); ok {
+		t.Fatal("stopping driver still published")
+	}
+	close(driver.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
 func TestTakeoverPersistsPIDAndRefusesMutations(t *testing.T) {
 	ctx := context.Background()
 	m, _, _, _ := setup(t)

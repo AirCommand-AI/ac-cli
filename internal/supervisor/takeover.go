@@ -24,6 +24,24 @@ func (m *Manager) takeoverAliveOutsideLock(a *managed) bool {
 	return alive
 }
 
+// cleanupDeadTakeover is called under m.mu even during the stopping hold.
+// It never launches a replacement pi; Tick may do so after the hold releases.
+func (m *Manager) cleanupDeadTakeover(a *managed) error {
+	if a.def.Takeover != nil && m.takeoverAliveOutsideLock(a) || a.def.Takeover == nil && takeoverGraceActive(a.def.TakeoverSince, m.now()) {
+		return nil
+	}
+	a.takenOver = false
+	a.def.Takeover = nil
+	a.def.TakeoverSince = ""
+	if a.def.State == "taken-over" {
+		a.def.State = "starting"
+	}
+	if m.stoppingHold {
+		a.machineStopped = true
+	}
+	return m.save(a)
+}
+
 // SetTakeoverNotice installs the connected CLI's notice writer. nil clears it.
 func (m *Manager) SetTakeoverNotice(name string, notice func(string) error) {
 	m.mu.Lock()
@@ -45,10 +63,21 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 	a.takenOver = true
 	a.takeoverConnected = true
 	d := a.driver
+	a.driver = nil
+	m.stopEvents(a)
 	def := a.def
 	m.mu.Unlock()
 	if err := d.Stop(ctx); err != nil {
 		m.mu.Lock()
+		// Restore observation if pi refused to stop. Keep the old process
+		// instead of risking a second pi on the same session.
+		a.driver = d
+		a.eventsDone = make(chan struct{})
+		reportCtx, cancel := context.WithCancel(context.Background())
+		a.eventsCancel = cancel
+		states := make(chan string, 32)
+		go m.reportLoop(reportCtx, a.def, states)
+		go m.consumeEvents(a, d, a.eventsDone, states)
 		a.takenOver = false
 		a.takeoverConnected = false
 		m.mu.Unlock()
@@ -56,16 +85,13 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.closeAgentLog(a)
+	a.def.Pi = nil
 	if a.def.Desired != "running" {
 		a.takenOver = false
 		a.takeoverConnected = false
+		_ = m.save(a)
 		return TakeoverSpec{}, fmt.Errorf("agent stopped during takeover")
-	}
-	if a.driver == d {
-		a.driver = nil
-		m.stopEvents(a)
-		m.closeAgentLog(a)
-		a.def.Pi = nil
 	}
 	a.def.State = "taken-over"
 	a.def.TakeoverSince = m.now().Format(time.RFC3339Nano)
@@ -112,6 +138,10 @@ func (m *Manager) ResumeTakeover(name string) error {
 	a.def.Takeover = nil
 	a.def.TakeoverSince = ""
 	a.takenOver = false
+	m.lastBusy = m.now()
+	if m.stoppingHold {
+		a.machineStopped = true
+	}
 	if a.def.Desired == "running" && a.def.State == "taken-over" {
 		a.def.State = "starting"
 		a.nextStart = time.Time{}

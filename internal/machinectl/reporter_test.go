@@ -24,6 +24,9 @@ func (s *fakeStatusSource) IdleSince(context.Context) (*time.Time, error) { retu
 func (s *fakeStatusSource) AgentsStopped() bool                           { return s.stopped }
 func (s *fakeStatusSource) SetMachineState(_ context.Context, state string) error {
 	s.state = state
+	if state == "stopping" {
+		s.stopped = true
+	}
 	return nil
 }
 
@@ -49,7 +52,7 @@ func TestHTTPReporterSendsContractAndAppliesMachineState(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Version != "v0.19.0" || len(body.Capabilities) != 1 || body.Capabilities[0] != "check-in" || body.IdleSince == nil || !body.IdleSince.Equal(source.idle) || body.AgentsStopped != source.stopped || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" {
+		if body.Version != "v0.19.0" || len(body.Capabilities) != 1 || body.Capabilities[0] != "check-in" || body.IdleSince == nil || !body.IdleSince.Equal(source.idle) || body.AgentsStopped != (calls == 2) || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" {
 			t.Errorf("body %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"machine":{"state":"stopping","stateAt":"2026-10-02T00:00:00Z"}}`))
@@ -59,7 +62,7 @@ func TestHTTPReporterSendsContractAndAppliesMachineState(t *testing.T) {
 	if err := reporter.Report(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || source.state != "stopping" {
+	if calls != 2 || source.state != "stopping" {
 		t.Fatalf("calls %d state %q", calls, source.state)
 	}
 }

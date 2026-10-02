@@ -62,6 +62,7 @@ type managed struct {
 	takenOver                                                       bool
 	takeoverConnected                                               bool
 	takeoverNotice                                                  func(string) error
+	machineStopped                                                  bool
 	logFile                                                         *os.File
 	startupSent                                                     bool
 	legacySession                                                   bool
@@ -74,7 +75,11 @@ type managed struct {
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
-	return &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, NewDriver: func(log io.Writer) pidriver.Driver { return pidriver.New(pidriver.Options{Log: log}) }, agents: make(map[string]*managed), booted: make(chan struct{})}
+	m := &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, NewDriver: func(log io.Writer) pidriver.Driver { return pidriver.New(pidriver.Options{Log: log}) }, agents: make(map[string]*managed), booted: make(chan struct{})}
+	if _, err := os.Stat(m.machineHoldPath()); err == nil || !errors.Is(err, os.ErrNotExist) {
+		m.stoppingHold = true // fail closed when the hold marker cannot be read
+	}
+	return m
 }
 
 // Subscribe receives every pi event from the dedicated consumer. A slow
@@ -267,7 +272,7 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 		if err = m.acquire(a); err != nil {
 			return err
 		}
-		if !a.takenOver {
+		if !a.takenOver && !m.stoppingHold {
 			if err = m.watch(ctx, a); err != nil {
 				m.release(a)
 				return err
@@ -616,6 +621,13 @@ func (m *Manager) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.stoppingHold {
+		for _, a := range m.agents {
+			if a.takenOver && !a.takeoverConnected {
+				if err := m.cleanupDeadTakeover(a); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	}
 	agents := make([]*managed, 0, len(m.agents))
@@ -648,15 +660,13 @@ func (m *Manager) tickAgent(ctx context.Context, a *managed) error {
 	}
 	if a.def.Mode == "headless" {
 		if a.takenOver {
-			if !a.takeoverConnected && (a.def.Takeover != nil && !m.takeoverAliveOutsideLock(a) || a.def.Takeover == nil && !takeoverGraceActive(a.def.TakeoverSince, m.now())) {
-				a.takenOver = false
-				a.def.Takeover = nil
-				a.def.TakeoverSince = ""
-				a.def.State = "starting"
-				if err := m.save(a); err != nil {
+			if !a.takeoverConnected {
+				if err := m.cleanupDeadTakeover(a); err != nil {
 					return err
 				}
-				return nil
+				if !a.takenOver {
+					return nil
+				}
 			}
 			if m.Poll != nil && !m.now().Before(a.nextPoll) {
 				return m.poll(ctx, a)

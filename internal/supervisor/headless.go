@@ -228,6 +228,9 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				m.mu.Unlock()
 				return
 			}
+			if e.Kind == "agent_settled" {
+				m.lastBusy = m.now()
+			}
 			wasStalled := a.stalled
 			if wasStalled {
 				a.stalled = false

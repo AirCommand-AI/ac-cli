@@ -2,7 +2,12 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 	"syscall"
 	"time"
 )
@@ -71,11 +76,58 @@ func (m *Manager) AgentsStopped() bool {
 		return false
 	}
 	for _, a := range m.agents {
-		if a.driver != nil || a.takenOver || a.def.Takeover != nil || a.def.State != "stopped" {
+		if a.driver != nil || a.takenOver || a.def.Takeover != nil || !a.machineStopped {
 			return false
 		}
 	}
 	return true
+}
+
+func (m *Manager) machineHoldPath() string {
+	return filepath.Join(storagepath.DaemonDirectory(m.Home), "machine-stopping")
+}
+
+// StopForMachine stops processes but preserves desired and parked states. A
+// machine-stopping hold, unlike daemon shutdown, is not an agent state change.
+func (m *Manager) StopForMachine(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.agents {
+		if a.machineStopped {
+			continue
+		}
+		if a.driver != nil {
+			d := a.driver
+			a.driver = nil
+			m.stopEvents(a)
+			m.mu.Unlock()
+			err := d.Stop(ctx)
+			m.mu.Lock()
+			m.closeAgentLog(a)
+			if err != nil {
+				return err
+			}
+			a.def.Pi = nil
+			if err := m.save(a); err != nil {
+				return err
+			}
+		}
+		if a.def.Mode == "tmux" && a.def.Desired == "running" {
+			m.mu.Unlock()
+			err := m.Tmux.Kill(ctx, a.def.Name)
+			m.mu.Lock()
+			if err != nil {
+				return err
+			}
+		}
+		if !a.takenOver && a.def.Takeover == nil {
+			a.machineStopped = true
+		}
+		if !a.takenOver {
+			m.release(a)
+		}
+	}
+	return nil
 }
 
 // SetMachineState is driven only by an authenticated HTTPS status response.
@@ -90,6 +142,14 @@ func (m *Manager) SetMachineState(ctx context.Context, state string) error {
 		}
 		m.mu.Lock()
 		m.stoppingHold = true
+		if err := os.MkdirAll(storagepath.DaemonDirectory(m.Home), 0700); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		if err := os.WriteFile(m.machineHoldPath(), []byte("stopping\n"), 0600); err != nil {
+			m.mu.Unlock()
+			return err
+		}
 		var active []foreground
 		for name, a := range m.agents {
 			if a.takenOver || a.def.Takeover != nil {
@@ -121,7 +181,7 @@ func (m *Manager) SetMachineState(ctx context.Context, state string) error {
 				stopErr = err
 			}
 		}
-		shutdownErr := m.Shutdown(ctx, true) // Stop other agents even if a takeover is unfenced.
+		shutdownErr := m.StopForMachine(ctx) // Stop other agents even if a takeover is unfenced.
 		if stopErr != nil {
 			return stopErr
 		}
@@ -129,7 +189,13 @@ func (m *Manager) SetMachineState(ctx context.Context, state string) error {
 	case "online", "error":
 		m.mu.Lock()
 		m.stoppingHold = false
+		for _, a := range m.agents {
+			a.machineStopped = false
+		}
 		m.mu.Unlock()
+		if err := os.Remove(m.machineHoldPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }
