@@ -18,6 +18,9 @@ const (
 	hookStateRepeatAfter = 60 * time.Second
 )
 
+// hookDir holds per-agent throttle and per-session identity notes.
+func (a *App) hookDir() string { return filepath.Join(a.Store.Home(), ".aircommand", "hooks") }
+
 type hookProcess struct {
 	pid, ppid int
 	command   string
@@ -176,7 +179,7 @@ func (a *App) onlyWorkstreamOf(agent string) string {
 // hookStateDue throttles per agent: a hook fires on every tool call, but the
 // server only needs a change or a refresh once a minute.
 func (a *App) hookStateDue(agent, code, state string) bool {
-	path := filepath.Join(a.Store.Home(), "hooks", strings.NewReplacer("/", "_", "..", "_").Replace(code+"-"+agent)+".json")
+	path := filepath.Join(a.hookDir(), strings.NewReplacer("/", "_", "..", "_").Replace(code+"-"+agent)+".json")
 	var last struct {
 		State string    `json:"state"`
 		At    time.Time `json:"at"`
@@ -207,7 +210,7 @@ func (a *App) hookAgentFromTranscript(stdin io.Reader) (agent, code string, ok b
 	if json.NewDecoder(io.LimitReader(stdin, 1<<20)).Decode(&input) != nil || input.SessionID == "" || input.TranscriptPath == "" {
 		return "", "", false
 	}
-	cachePath := filepath.Join(a.Store.Home(), "hooks", "session-"+strings.NewReplacer("/", "_", "..", "_").Replace(input.SessionID)+".json")
+	cachePath := filepath.Join(a.hookDir(), "session-"+strings.NewReplacer("/", "_", "..", "_").Replace(input.SessionID)+".json")
 	var cached struct {
 		Agent     string    `json:"agent"`
 		Code      string    `json:"code"`

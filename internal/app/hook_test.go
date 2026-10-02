@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
 func TestHookListenerFindsTheListenerInTheSameClaudeSession(t *testing.T) {
@@ -101,5 +103,22 @@ func TestLastTranscriptListenerUsesTheLatestJoinAndHonoursLeave(t *testing.T) {
 				t.Fatalf("got %q %q, want %q %q", agent, code, test.agent, test.code)
 			}
 		})
+	}
+}
+
+func TestHookNotesLiveUnderDotAircommand(t *testing.T) {
+	home := t.TempDir()
+	a := &App{Store: credentials.NewStore(home)}
+	if !a.hookStateDue("agm_a", "883", "working") || a.hookStateDue("agm_a", "883", "working") {
+		t.Fatal("a repeated state within a minute must be throttled")
+	}
+	if !a.hookStateDue("agm_a", "883", "idle") {
+		t.Fatal("a changed state must be sent")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".aircommand", "hooks", "883-agm_a.json")); err != nil {
+		t.Fatalf("throttle note not under ~/.aircommand/hooks: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "hooks")); !os.IsNotExist(err) {
+		t.Fatal("hook notes must not be written to the home folder itself")
 	}
 }
