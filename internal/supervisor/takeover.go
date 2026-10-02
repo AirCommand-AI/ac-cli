@@ -55,6 +55,10 @@ func (m *Manager) SetTakeoverNotice(name string, notice func(string) error) {
 // session in the foreground. The agent lock remains owned by the daemon.
 func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, error) {
 	m.mu.Lock()
+	if m.stoppingHold {
+		m.mu.Unlock()
+		return TakeoverSpec{}, fmt.Errorf("machine is stopping")
+	}
 	a := m.agents[name]
 	if a == nil || a.def.Mode != "headless" || a.def.Desired != "running" || a.driver == nil || a.takenOver {
 		m.mu.Unlock()

@@ -21,9 +21,11 @@ func TestCheckInCoalescesAndChecksOnStartup(t *testing.T) {
 	defer cancel()
 	var reconciles, reports atomic.Int32
 	seen := make(chan struct{}, 3)
-	c := New(reconcileFunc(func(context.Context) error { reconciles.Add(1); seen <- struct{}{}; return errors.New("retry") }), reportFunc(func(context.Context) error { reports.Add(1); return nil }))
+	c := New(reconcileFunc(func(context.Context) error { reconciles.Add(1); return errors.New("retry") }), reportFunc(func(context.Context) error { reports.Add(1); seen <- struct{}{}; return nil }))
 	var failures atomic.Int32
 	done := make(chan struct{})
+	c.CheckIn()
+	c.CheckIn() // both signals queue only one check while startup is pending
 	go func() { c.Run(ctx, func(error) { failures.Add(1) }); close(done) }()
 	wait := func() {
 		t.Helper()
@@ -34,7 +36,6 @@ func TestCheckInCoalescesAndChecksOnStartup(t *testing.T) {
 		}
 	}
 	wait()
-	c.CheckIn()
 	wait()
 	if reconciles.Load() != 2 || reports.Load() != 2 || failures.Load() != 2 {
 		t.Fatalf("reconcile=%d report=%d errors=%d", reconciles.Load(), reports.Load(), failures.Load())

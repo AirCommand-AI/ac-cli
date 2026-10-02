@@ -454,6 +454,11 @@ func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
 	var list []AgentStatus
 	for _, a := range m.agents {
 		status := AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Reason: a.def.Reason, Mode: a.def.Mode, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll}
+		if m.stoppingHold && a.machineStopped {
+			status.State = "stopped"
+			status.PID = 0
+			status.PiState = ""
+		}
 		if a.driver != nil {
 			s := a.driver.State()
 			status.PID = s.PID

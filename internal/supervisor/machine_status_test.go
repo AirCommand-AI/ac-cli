@@ -27,11 +27,19 @@ func TestMachineHoldPreservesParkedStates(t *testing.T) {
 			if m.agents[d.Name].def.State != state || !m.AgentsStopped() {
 				t.Fatalf("parked state %q stopped %v", m.agents[d.Name].def.State, m.AgentsStopped())
 			}
+			statuses, err := m.List(ctx)
+			if err != nil || len(statuses) != 1 || statuses[0].State != "stopped" {
+				t.Fatalf("hold status %+v %v", statuses, err)
+			}
 			if err := m.SetMachineState(ctx, "online"); err != nil {
 				t.Fatal(err)
 			}
 			if err := m.Tick(ctx); err != nil || m.agents[d.Name].driver != nil {
 				t.Fatalf("parked agent relaunched: %v", err)
+			}
+			statuses, err = m.List(ctx)
+			if err != nil || statuses[0].State != state {
+				t.Fatalf("parked status after hold %+v %v", statuses, err)
 			}
 		})
 	}
@@ -111,6 +119,9 @@ func TestMachineStoppingHoldPreservesDesiredAndResumes(t *testing.T) {
 	}
 	if err := m.Start(ctx, d); err == nil {
 		t.Fatal("Start bypassed stopping hold")
+	}
+	if _, err := m.Takeover(ctx, d.Name); err == nil {
+		t.Fatal("Takeover bypassed stopping hold")
 	}
 	m.agents[d.Name].takenOver = true
 	if m.AgentsStopped() {
