@@ -34,11 +34,12 @@ type Manager struct {
 	Poll          Poller
 	// NewDriver constructs an isolated RPC driver for each headless launch.
 	// The production constructor is supplied by the daemon entrypoint.
-	NewDriver func(io.Writer) pidriver.Driver
-	Now       func() time.Time
-	mu        sync.Mutex
-	agents    map[string]*managed
-	booted    chan struct{}
+	NewDriver   func(io.Writer) pidriver.Driver
+	DesiredPost func(context.Context, AgentDefinition) (int64, error)
+	Now         func() time.Time
+	mu          sync.Mutex
+	agents      map[string]*managed
+	booted      chan struct{}
 }
 type managed struct {
 	def                                                             AgentDefinition

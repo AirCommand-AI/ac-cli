@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/AirCommand-AI/ac-cli/adapters/pi"
+	"github.com/AirCommand-AI/ac-cli/internal/machinectl"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
@@ -25,6 +26,7 @@ type Commands struct {
 	Service       Service
 	NewSupervisor func(tmux, pi string) (Supervisor, error)
 	NewSocket     func(context.Context, Supervisor) (*SocketClient, error)
+	NewControl    func(Supervisor) *machinectl.Control
 }
 
 func (c Commands) RunDaemon(arguments []string) error {
@@ -85,6 +87,18 @@ func (c Commands) RunDaemon(arguments []string) error {
 			socket, err = c.NewSocket(runCtx, supervisor)
 			if err != nil {
 				return err
+			}
+		}
+		if c.NewControl != nil {
+			if control := c.NewControl(supervisor); control != nil {
+				go func() {
+					if ready, ok := supervisor.(interface{ WaitReady(context.Context) error }); ok {
+						if err := ready.WaitReady(runCtx); err != nil {
+							return
+						}
+					}
+					control.Run(runCtx, func(err error) { log.Printf("machine control: %v", err) })
+				}()
 			}
 		}
 		return Serve(runCtx, c.Home, supervisor, socket)

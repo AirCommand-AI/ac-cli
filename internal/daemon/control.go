@@ -97,6 +97,9 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		if err := supervisor.Start(ctx, Definition{Version: 1, Name: request.Name, AgentID: request.AgentID, Organization: request.Organization, Workstream: request.Workstream, Repos: request.Repos, WorkFolder: request.WorkFolder, Mode: request.Mode}); err != nil {
 			return fail(err)
 		}
+		if err := postDesired(ctx, supervisor, request.Name); err != nil {
+			return fail(err)
+		}
 	case "agent.mode":
 		if request.Name == "" || request.Mode == "" {
 			return fail(ErrInvalid)
@@ -104,11 +107,17 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		if err := supervisor.Mode(ctx, request.Name, request.Mode); err != nil {
 			return fail(err)
 		}
+		if err := postDesired(ctx, supervisor, request.Name); err != nil {
+			return fail(err)
+		}
 	case "agent.stop":
 		if request.Name == "" {
 			return fail(ErrInvalid)
 		}
 		if err := supervisor.Stop(ctx, request.Name); err != nil {
+			return fail(err)
+		}
+		if err := postDesired(ctx, supervisor, request.Name); err != nil {
 			return fail(err)
 		}
 	case "agent.remove":
@@ -126,6 +135,17 @@ func dispatch(ctx context.Context, supervisor Supervisor, request Request, start
 		return fail(ErrInvalid)
 	}
 	return Response{OK: true, Data: map[string]any{}}
+}
+
+// Local lifecycle changes are mirrored to the server; reconciler operations
+// call Manager directly and never echo their own changes back.
+func postDesired(ctx context.Context, supervisor Supervisor, name string) error {
+	if poster, ok := supervisor.(interface {
+		PostDesired(context.Context, string) error
+	}); ok {
+		return poster.PostDesired(ctx, name)
+	}
+	return nil
 }
 
 var (

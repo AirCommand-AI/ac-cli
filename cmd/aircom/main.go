@@ -10,6 +10,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/daemon"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
+	"github.com/AirCommand-AI/ac-cli/internal/machinectl"
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
@@ -41,7 +42,18 @@ func main() {
 	commands := daemon.Commands{Home: home, Output: os.Stdout}
 	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
 		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}
-		return supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll), nil
+		manager := supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll)
+		api := machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store}
+		manager.DesiredPost = func(ctx context.Context, d supervisor.AgentDefinition) (int64, error) {
+			return api.Desired(ctx, d.AgentID, d.Desired, d.Mode)
+		}
+		return manager, nil
+	}
+	commands.NewControl = func(manager daemon.Supervisor) *machinectl.Control {
+		return machinectl.New(&machinectl.AgentReconciler{
+			API:     machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store},
+			Manager: manager.(machinectl.Manager), Store: store, Home: home,
+		}, nil)
 	}
 	commands.NewSocket = func(ctx context.Context, manager daemon.Supervisor) (*daemon.SocketClient, error) {
 		machine, err := store.LoadMachine()
