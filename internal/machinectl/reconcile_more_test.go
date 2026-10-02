@@ -35,6 +35,7 @@ func TestPartialSeedDoesNotBlockHealthyAgent(t *testing.T) {
 		switch {
 		case strings.HasSuffix(req.URL.Path, "/seed"):
 			seeds++
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{{"agentId": "agm_good", "status": "seeded"}}})
 		case strings.HasSuffix(req.URL.Path, "/agents"):
 			if seeds == 0 {
 				_ = json.NewEncoder(w).Encode(Definitions{Agents: []Agent{}})

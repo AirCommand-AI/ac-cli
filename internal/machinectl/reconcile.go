@@ -104,7 +104,12 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		seed := Seed{AgentID: d.AgentID, Desired: d.Desired, Mode: d.Mode, Repos: d.Repos, WorkFolder: d.WorkFolder, AssignedOrganizationID: cred.OrganizationID, AssignedWorkstreamCode: d.Workstream}
 		if err := r.API.Seed(ctx, []Seed{seed}); err != nil {
 			var status *HTTPStatusError
+			var result *SeedResultError
+			permanent := errors.As(err, &result) && result.AgentID == d.AgentID && result.Permanent()
 			if errors.As(err, &status) && (status.Status == http.StatusNotFound || status.Status == http.StatusConflict) {
+				permanent = true
+			}
+			if permanent {
 				if r.seedRejected == nil {
 					r.seedRejected = make(map[string]bool)
 				}

@@ -102,6 +102,7 @@ func TestReconcileSeedsWithoutRestartAndGatesByRevision(t *testing.T) {
 			if len(body.Agents) != 1 || body.Agents[0].AssignedOrganizationID != "org_from_credential" {
 				t.Errorf("seed = %+v", body)
 			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]string{{"agentId": "agm_1", "status": "seeded"}}})
 		case req.URL.Path == "/agent/v1/machines/me/agents":
 			if seedCount == 0 {
 				_ = json.NewEncoder(w).Encode(Definitions{Agents: []Agent{}})
