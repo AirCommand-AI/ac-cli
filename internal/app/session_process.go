@@ -70,7 +70,7 @@ func discoverSession(pid int, snapshot ProcessSnapshot) (daemonclient.SessionAtt
 		if len(parts) > 0 {
 			executable := strings.ToLower(filepath.Base(parts[0]))
 			lower := strings.ToLower(command)
-			if (executable == "node" || executable == "bun" || executable == "pi") && strings.Contains(lower, "pi-coding-agent/") {
+			if executable == "pi" || ((executable == "node" || executable == "bun") && strings.Contains(lower, "pi-coding-agent/")) {
 				return daemonclient.SessionAttach{SessionPID: pid, SessionStart: start, Program: "pi"}, nil
 			}
 			if executable == "claude" || executable == "codex" {

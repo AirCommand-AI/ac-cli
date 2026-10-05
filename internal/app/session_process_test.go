@@ -22,6 +22,16 @@ func TestDiscoverSessionWalksAncestorProcessTable(t *testing.T) {
 		t.Fatalf("session: %+v %v", session, err)
 	}
 }
+func TestDiscoverSessionAcceptsPiProcessTitle(t *testing.T) {
+	for _, cmd := range []string{"pi", "pi --continue"} {
+		t.Run(cmd, func(t *testing.T) {
+			session, err := discoverSession(99, func(pid int) (int, string, string, error) { return 1, cmd, "start", nil })
+			if err != nil || session.Program != "pi" || session.SessionPID != 99 {
+				t.Fatalf("session: %+v %v", session, err)
+			}
+		})
+	}
+}
 func TestDiscoverSessionRefusesStandaloneShell(t *testing.T) {
 	_, err := discoverSession(99, func(pid int) (int, string, string, error) { return 1, "/bin/bash", "start", nil })
 	if err == nil {

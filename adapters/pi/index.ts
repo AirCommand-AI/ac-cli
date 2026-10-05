@@ -1,18 +1,8 @@
-import {
-	chmodSync,
-	closeSync,
-	fstatSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	readSync,
-	watch,
-	type FSWatcher,
-} from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { daemonCall,subscribeDaemon,processStart,retryDelay,type SessionMessage } from "./daemon";
@@ -98,22 +88,8 @@ interface CredentialFile {
 	agents?: unknown;
 }
 
-interface MessagePointer {
-	type?: string;
-	messageId: string;
-	senderId: string;
-	priority?: "normal" | "urgent";
-	summary: string;
-}
-
-interface TailHandle {
-	close(): void;
-	drain?():void;
-}
-
 interface ActiveConnection {
 	enrollment: Enrollment;
-	tail: TailHandle;
 	token: object;
 }
 
@@ -208,7 +184,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		activeConnection = undefined;
 		lastRuntime = "";
 		branchCheckSequence++;
-		connection?.tail.close();
+
 		return connection?.enrollment;
 	};
 
@@ -216,63 +192,19 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	// a freshly connected agent how to check its inbox.
 	const cliPath = expandHome(readStringFlag(pi, CLI_FLAG) ?? join(homedir(), ".local", "bin", "aircom"));
 
-	const connect = (enrollment: Enrollment, ctx: ExtensionContext, offset?:number): "connected" | "already-connected" => {
+	const connect = (enrollment: Enrollment, ctx: ExtensionContext): "connected" | "already-connected" => {
 		if (!sessionActive) {
 			throw new Error("AirCommand cannot connect before the pi session starts.");
 		}
-		if (offset===undefined &&
-			activeConnection?.enrollment.agentId === enrollment.agentId &&
+		if (activeConnection?.enrollment.agentId === enrollment.agentId &&
 			activeConnection.enrollment.workstreamCode === enrollment.workstreamCode
 		) {
 			return "already-connected";
 		}
 
-		const token = {};
-		const newTail:TailHandle = headless ? { close() {} } : tailSpool(
-			spoolPath(enrollment.agentId),
-			(notification) => {
-				if (!sessionActive || activeConnection?.token !== token) return;
-				const urgent = notification.priority === "urgent";
-				pi.sendMessage(
-					{
-						customType: "aircommand-notification",
-						content: formatMessageGuidance(
-							cliPath,
-							enrollment,
-							notification.summary,
-							notification.messageId,
-							notification.senderId,
-						),
-						display: true,
-						details: {
-							workstreamCode: enrollment.workstreamCode,
-							agentId: enrollment.agentId,
-							type: notification.type,
-							messageId: notification.messageId,
-							senderId: notification.senderId,
-							priority: notification.priority,
-						},
-					},
-					{ deliverAs: urgent ? "steer" : "followUp", triggerTurn: true },
-				);
-			},
-			(message) => {
-				if (sessionActive && activeConnection?.token === token) notify(ctx, message, "warning");
-			},
-			offset,
-			(consumed)=>{ackQueue=ackQueue.then(async()=>{if(sessionActive&&activeConnection?.token===token)await daemonCall(daemonSocket,{op:"session.ack",sessionPid:process.pid,offset:consumed})}).catch(()=>{})},
-		);
-
-		const previous = activeConnection;
-		activeConnection = { enrollment, tail: newTail, token };
-		newTail.drain?.();
+		activeConnection = { enrollment, token: {} };
 		lastRuntime = "";
 		reportRuntime(ctx, true);
-		try {
-			previous?.tail.close();
-		} catch {
-			notify(ctx, "AirCommand could not close the previous notification spool watcher.", "warning");
-		}
 		return "connected";
 	};
 
@@ -315,7 +247,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			// session connected is never announced. It is unread rather than lost,
 			// and only an explicit inbox fetch surfaces it — say so here, where the
 			// agent is already mid-turn and can act without being woken again.
-			const checkInbox = `Now run ${formatAgentCommand(cliPath, "inbox", enrollment)} once: messages that arrived before connecting are unread but will not be announced.`;
+			const checkInbox = `Now run ${formatAgentCommand(cliPath, "inbox", enrollment)} once: messages may still be unread.`;
 			const message =
 				result === "already-connected"
 					? `AirCommand is already connected to agent ${enrollment.agentId} in workstream ${enrollment.workstreamCode}.`
@@ -339,7 +271,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 						ctx,
 						result === "already-connected"
 							? `AirCommand is already watching workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}.`
-							: `AirCommand is connected to workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}. ${headless ? "The daemon delivers wakes" : "The extension watches the spool"}; anything that arrived before now is unread but will not be announced — run aircom inbox once to see it.`,
+							: `AirCommand is connected to workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}. The daemon owns delivery; run aircom inbox once to confirm unread messages.`,
 						"info",
 					);
 				} catch (error) {
@@ -384,16 +316,24 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			});
 			return;
 		}
-		stopSubscription=subscribeDaemon(daemonSocket,process.pid,(message:SessionMessage)=>{
+		stopSubscription=subscribeDaemon(daemonSocket,process.pid,conversationID,(message:SessionMessage)=>{
 			subscriptionAttempt=0;
 			switch(message.type){
 			case "connect":
 				if(message.agentId && message.workstream){
-					try{connect(validateEnrollment({agentId:message.agentId,workstreamCode:message.workstream}),ctx,message.offset??0)}catch(error){notify(ctx,errorMessage(error),"warning")}
+					try{connect(validateEnrollment({agentId:message.agentId,workstreamCode:message.workstream}),ctx)}catch(error){notify(ctx,errorMessage(error),"warning")}
 					if(conversationID)void daemonCall(daemonSocket,{op:"session.attach",agentId:message.agentId,name:storedAgentName(message.agentId),workstream:message.workstream,sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId:conversationID}).catch(()=>notify(ctx,"AirCommand could not bind this pi conversation for resume.","warning"));
 				}
 				break;
-			case "wake":activeConnection?.tail.drain?.();break;
+			case "wake":{
+				const current=activeConnection;
+				if(headless||!current||!message.line)break;
+				const urgent=message.line.startsWith("URGENT ");
+				try{pi.sendMessage({customType:"aircommand-notification",content:`${safeDisplay(message.line)}\nFetch the matching message with ${shellQuote(cliPath)} inbox --workstream ${shellQuote(current.enrollment.workstreamCode)} --agent ${shellQuote(current.enrollment.agentId)} before acting.`,display:true,details:{workstreamCode:current.enrollment.workstreamCode,agentId:current.enrollment.agentId}},{deliverAs:urgent?"steer":"followUp",triggerTurn:true});
+				if(typeof message.offset==="number")ackQueue=ackQueue.then(async()=>{if(sessionActive&&activeConnection?.token===current.token)await daemonCall(daemonSocket,{op:"session.ack",sessionPid:process.pid,offset:message.offset})}).catch(()=>{});
+				}catch{notify(ctx,"AirCommand could not deliver a daemon wake line.","warning")}
+				break;
+			}
 			case "nudge":if(message.text)void pi.sendUserMessage(message.text,{deliverAs:"followUp"});break;
 			case "interrupt":if(message.text){ctx.abort();void pi.sendUserMessage(message.text,{deliverAs:"steer"})}break;
 			case "detached":disconnect();break;
@@ -436,7 +376,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			connect(enrollment, ctx);
 			notify(
 				ctx,
-				`AirCommand is connected to workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}. ${headless ? "The daemon delivers wakes." : "The extension watches the spool."}`,
+				`AirCommand is connected to workstream ${enrollment.workstreamCode} for agent ${enrollment.agentId}. The daemon owns delivery.`,
 				"info",
 			);
 		} catch (error) {
@@ -530,10 +470,6 @@ function agentDirectory(agentId: string): string {
 	return join(homedir(), ".aircommand", "agents", filenameComponent(agentId));
 }
 
-function spoolPath(agentId: string): string {
-	return join(agentDirectory(agentId), "spool.jsonl");
-}
-
 function filenameComponent(value: string): string {
 	if (
 		value !== "." &&
@@ -563,39 +499,6 @@ function expandHome(path: string): string {
 	return path;
 }
 
-function formatMessageGuidance(
-	cliPath: string,
-	enrollment: Enrollment,
-	summary: string,
-	messageId: string,
-	senderId: string,
-): string {
-	const inboxCommand = formatAgentCommand(cliPath, "inbox", enrollment);
-	const sendCommand = [
-		formatAgentCommand(cliPath, "send", enrollment),
-		"--to",
-		shellQuote(senderId),
-		"--body <shell-quoted-reply>",
-	].join(" ");
-	const ackCommand = [
-		formatAgentCommand(cliPath, "ack", enrollment),
-		"--message",
-		shellQuote(messageId),
-	].join(" ");
-
-	// Deliberately terse: this is injected on EVERY wake, so anything restated
-	// here is context paid for again per notification. The rules and their
-	// reasoning live once in the connect tool's promptGuidelines; this carries
-	// only what is specific to this message.
-	return [
-		`[AirCommand] ${summary}`,
-		`Pointer only, no body. messageId=${JSON.stringify(messageId)} senderId=${JSON.stringify(senderId)}`,
-		`Fetch: ${inboxCommand}`,
-		`Reply: ${sendCommand}`,
-		`Then ack, only after the action and reply both succeed: ${ackCommand}`,
-	].join("\n");
-}
-
 function formatAgentCommand(cliPath: string, command: string, enrollment: Enrollment): string {
 	return [
 		shellQuote(cliPath),
@@ -617,114 +520,6 @@ function safeDisplay(value: string): string {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : "AirCommand adapter setup failed.";
-}
-
-function tailSpool(
-	path: string,
-	onNotification: (notification: MessagePointer) => void,
-	onDiagnostic: (message: string) => void,
-	startOffset?:number,
-	onAdvance?:(offset:number)=>void,
-): TailHandle {
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-	chmodSync(dirname(path), 0o700);
-	const descriptor = openSync(path, "a+", 0o600);
-	chmodSync(path, 0o600);
-	let position = startOffset===undefined?fstatSync(descriptor).size:Math.min(Math.max(0,startOffset),fstatSync(descriptor).size);
-	let consumed=position;
-	let pending = Buffer.alloc(0);
-	let closed = false;
-
-	const drain = () => {
-		if (closed) return;
-		try {
-			const size = fstatSync(descriptor).size;
-			if (size < position) {
-				position = size;
-				consumed=size;
-				pending = Buffer.alloc(0);
-				return;
-			}
-			while (position < size) {
-				const chunk = Buffer.alloc(Math.min(size - position, 64 * 1024));
-				const bytesRead = readSync(descriptor, chunk, 0, chunk.length, position);
-				if (bytesRead === 0) break;
-				position += bytesRead;
-				pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)]);
-			}
-
-			let newline = pending.indexOf(0x0a);
-			while (newline >= 0) {
-				const line = pending.subarray(0, newline).toString("utf8").trim();
-				pending = pending.subarray(newline + 1);
-				consumed+=newline+1;
-				if (line) deliverSpoolLine(line, onNotification, onDiagnostic);
-				onAdvance?.(consumed);
-				newline = pending.indexOf(0x0a);
-			}
-		} catch {
-			onDiagnostic("AirCommand could not read the notification spool.");
-		}
-	};
-
-	let watcher: FSWatcher;
-	try {
-		watcher = watch(path, drain);
-	} catch (error) {
-		closeSync(descriptor);
-		throw error;
-	}
-	watcher.on("error", () => {
-		onDiagnostic("AirCommand notification spool watch failed.");
-	});
-
-	return {
-		drain,
-		close() {
-			if (closed) return;
-			closed = true;
-			watcher.close();
-			closeSync(descriptor);
-		},
-	};
-}
-
-function deliverSpoolLine(
-	line: string,
-	onNotification: (notification: MessagePointer) => void,
-	onDiagnostic: (message: string) => void,
-) {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(line) as unknown;
-	} catch {
-		onDiagnostic("AirCommand ignored a malformed notification spool entry.");
-		return;
-	}
-	if (!isRecord(parsed)) {
-		onDiagnostic("AirCommand ignored a malformed notification spool entry.");
-		return;
-	}
-	if (typeof parsed.summary !== "string" || !parsed.summary) {
-		onDiagnostic("AirCommand ignored a notification without a summary.");
-		return;
-	}
-	if (typeof parsed.messageId !== "string" || !parsed.messageId) {
-		onDiagnostic("AirCommand ignored a notification without a message ID.");
-		return;
-	}
-	if (typeof parsed.senderId !== "string" || !parsed.senderId) {
-		onDiagnostic("AirCommand ignored a notification without a sender ID.");
-		return;
-	}
-	const priority = parsed.priority === "urgent" || parsed.priority === "normal" ? parsed.priority : undefined;
-	onNotification({
-		type: typeof parsed.type === "string" ? parsed.type : undefined,
-		messageId: parsed.messageId,
-		senderId: parsed.senderId,
-		priority,
-		summary: parsed.summary,
-	});
 }
 
 function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error") {

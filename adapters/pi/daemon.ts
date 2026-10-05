@@ -43,10 +43,10 @@ export function daemonCall<T = unknown>(path: string, request: Record<string, un
  });
 }
 
-export function subscribeDaemon(path:string,pid:number,onMessage:(message:SessionMessage)=>void,onError:(error:Error)=>void):()=>void {
+export function subscribeDaemon(path:string,pid:number,sessionId:string,onMessage:(message:SessionMessage)=>void,onError:(error:Error)=>void):()=>void {
  const socket:Socket=createConnection(path);let buffer="";let ready=false;let closed=false;
  const fail=(error:Error)=>{if(closed)return;closed=true;socket.destroy();onError(error)};
- socket.on("connect",()=>socket.write(JSON.stringify({op:"session.subscribe",sessionPid:pid})+"\n"));
+ socket.on("connect",()=>socket.write(JSON.stringify({op:"session.subscribe",sessionPid:pid,sessionId})+"\n"));
  socket.on("data",chunk=>{buffer+=chunk.toString("utf8");if(buffer.length>1024*1024){fail(new Error("AirCommand daemon sent an oversized frame"));return}
   let end=buffer.indexOf("\n");while(end>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);
    try{const value=JSON.parse(line) as Record<string,unknown>;
