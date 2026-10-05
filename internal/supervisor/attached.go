@@ -294,6 +294,12 @@ func (m *Manager) Detach(agentID, reason string) error {
 		if err := m.save(a); err != nil {
 			return err
 		}
+		for ch := range a.wakes {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
 		m.emitAttached(a, "session_exited", "", reason)
 		return nil
 	}

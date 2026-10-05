@@ -135,7 +135,7 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 			sessionFailure(conn, "invalid", fmt.Errorf("socket peer is not a descendant of sessionPid"))
 			return
 		}
-		servePendingSubscribe(ctx, conn, m, req.SessionPID)
+		servePendingSubscribe(ctx, conn, m, req.SessionPID, req.SessionID)
 		return
 	}
 	if req.AgentID == "" {
@@ -145,7 +145,7 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 	d, found := m.Attached(req.AgentID)
 	if !found {
 		if req.Op == "session.subscribe" && req.SessionPID > 0 && peercred.Descendant(peer, req.SessionPID) {
-			servePendingSubscribe(ctx, conn, m, req.SessionPID)
+			servePendingSubscribe(ctx, conn, m, req.SessionPID, req.SessionID)
 			return
 		}
 		sessionFailure(conn, "not_found", os.ErrNotExist)
@@ -153,6 +153,10 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 	}
 	if req.SessionPID != d.SessionPID || !sup.SessionProcessAlive(d.SessionPID, d.SessionStart) || !peercred.Descendant(peer, req.SessionPID) {
 		sessionFailure(conn, "invalid", fmt.Errorf("socket peer is not a descendant of attached session"))
+		return
+	}
+	if req.Op == "session.subscribe" && (d.State == "stopped" && d.Reason == "pi conversation changed" || req.SessionID != "" && req.SessionID != d.SessionID) {
+		servePendingSubscribe(ctx, conn, m, req.SessionPID, req.SessionID)
 		return
 	}
 	if req.SessionID != "" && req.SessionID != d.SessionID {
@@ -166,6 +170,9 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 		reason := "pi closed"
 		if d.Program == "other" {
 			reason = "no listener"
+		}
+		if req.Reason == "conversation changed" {
+			reason = "pi conversation changed"
 		}
 		if err = m.Detach(req.AgentID, reason); err != nil {
 			sessionFailure(conn, "invalid", err)
@@ -212,7 +219,7 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 
 // The byte offset advances only when the client explicitly acks. A reconnect
 // starts at that durable offset; no wake is consumed merely by disconnecting.
-func servePendingSubscribe(ctx context.Context, conn net.Conn, m sessionManager, pid int) {
+func servePendingSubscribe(ctx context.Context, conn net.Conn, m sessionManager, pid int, sessionID string) {
 	start := sup.SessionProcessStart(pid)
 	if start == "" {
 		sessionFailure(conn, "invalid", fmt.Errorf("session process is not alive"))
@@ -228,7 +235,7 @@ func servePendingSubscribe(ctx context.Context, conn net.Conn, m sessionManager,
 	find := func() (sup.AgentDefinition, bool) {
 		list, _ := mListAttached(m)
 		for _, d := range list {
-			if d.SessionPID == pid && d.SessionStart == start {
+			if d.SessionPID == pid && d.SessionStart == start && d.State == "running" && (sessionID == "" || sessionID == d.SessionID) {
 				return d, true
 			}
 		}

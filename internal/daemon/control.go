@@ -44,6 +44,7 @@ type Request struct {
 	Kind         string   `json:"kind,omitempty"`
 	Logical      string   `json:"logical,omitempty"`
 	At           string   `json:"at,omitempty"`
+	Reason       string   `json:"reason,omitempty"`
 }
 type APIError struct {
 	Code    string `json:"code"`

@@ -158,13 +158,43 @@ func TestSessionClaimAttachSubscribeAndAck(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("event not exposed to state engine")
 	}
+	active, activeReader := open()
+	send(active, Request{Op: "session.subscribe", SessionPID: os.Getpid(), SessionID: "new-session"})
+	_ = read(activeReader)
+	if got := read(activeReader)["type"]; got != "connect" {
+		t.Fatalf("active stream: %v", got)
+	}
 	detach, dr := open()
-	send(detach, Request{Op: "session.detach", SessionPID: os.Getpid()})
+	send(detach, Request{Op: "session.detach", SessionPID: os.Getpid(), Reason: "conversation changed"})
 	if result := read(dr)["ok"]; result != true {
 		t.Fatalf("detach rejected: %v", result)
 	}
 	detach.Close()
-	if d, _ := m.Attached("agm_person"); d.State != "stopped" || d.Reason != "pi closed" {
-		t.Fatalf("detach state: %+v", d)
+	if d, _ := m.Attached("agm_person"); d.State != "stopped" || d.Reason != "pi conversation changed" || d.SessionID != "new-session" || d.Offset != offset {
+		t.Fatalf("detach discarded conversation/offset: %+v", d)
 	}
+	if got := read(activeReader)["type"]; got != "detached" {
+		t.Fatalf("active stream not detached: %v", got)
+	}
+	active.Close()
+	pending, pr = open()
+	send(pending, Request{Op: "session.subscribe", SessionPID: os.Getpid(), SessionID: "later-session"})
+	if got := read(pr)["ok"]; got != true {
+		t.Fatalf("pending stream rejected: %v", got)
+	}
+	_ = pending.SetReadDeadline(time.Now().Add(80 * time.Millisecond))
+	if _, err := pr.ReadBytes('\n'); err == nil {
+		t.Fatal("old conversation auto-connected to new session")
+	}
+	_ = pending.SetReadDeadline(time.Now().Add(3 * time.Second))
+	fresh, fr := open()
+	send(fresh, Request{Op: "session.attach", AgentID: "agm_person", Name: "", Workstream: "478", Program: "pi", SessionPID: os.Getpid(), SessionStart: sup.SessionProcessStart(os.Getpid()), SessionID: "later-session"})
+	if result := read(fr)["ok"]; result != true {
+		t.Fatalf("reattach rejected: %v", result)
+	}
+	fresh.Close()
+	if got := read(pr)["type"]; got != "connect" {
+		t.Fatalf("pending stream did not connect after attach: %v", got)
+	}
+	pending.Close()
 }
