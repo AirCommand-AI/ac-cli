@@ -239,3 +239,37 @@ func TestNewAttachmentStartsAtEndOfExistingHistory(t *testing.T) {
 		t.Fatalf("re-attach offset = %d, want %d", def.Offset, info.Size())
 	}
 }
+
+func TestClaimAllowsTheHoldingSessionToJoinAgain(t *testing.T) {
+	m, _, _, _ := setup(t)
+	if err := credentials.NewStore(m.Home).Save(credentials.Credential{AgentID: "agm_again", WorkstreamCode: "478", APIToken: "token", SocketKey: "key", SocketAddress: "ac:agm_again"}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := m.Claim("agm_again", "478", os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Attach(claim, Attachment{AgentID: "agm_again", Name: "again", Workstream: "478", Program: "other", SessionPID: os.Getpid(), SessionStart: SessionProcessStart(os.Getpid())}); err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseClaim(claim)
+	tests := []struct {
+		name string
+		peer int
+		want bool
+	}{
+		{name: "same session joins again", peer: os.Getpid(), want: true},
+		{name: "unrelated process is refused", peer: os.Getppid(), want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			again, err := m.Claim("agm_again", "478", test.peer)
+			if got := err == nil; got != test.want {
+				t.Fatalf("claim from %d admitted=%v, want %v (err %v)", test.peer, got, test.want, err)
+			}
+			if again != nil {
+				m.ReleaseClaim(again)
+			}
+		})
+	}
+}

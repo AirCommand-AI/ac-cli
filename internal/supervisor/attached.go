@@ -100,17 +100,17 @@ func (m *Manager) Claim(agentID, workstream string, peerPID int) (*Claim, error)
 			}
 			return nil, fmt.Errorf("%w by daemon session %d (pi)", ErrSessionHeld, pid)
 		}
-		if a.def.State == "running" {
-			return nil, fmt.Errorf("%w by daemon session %d (%s)", ErrSessionHeld, a.def.SessionPID, a.def.Program)
-		}
 		prior := a.def
 		m.mu.Unlock()
-		alive := SessionProcessAlive(prior.SessionPID, prior.SessionStart)
+		// The session that already holds the agent may join again (a second
+		// aircom join from the same pi or Claude Code session).
+		own := prior.SessionPID > 0 && peercred.Descendant(peerPID, prior.SessionPID)
+		alive := !own && SessionProcessAlive(prior.SessionPID, prior.SessionStart)
 		m.mu.Lock()
 		if a.def.SessionPID != prior.SessionPID || a.def.SessionStart != prior.SessionStart || m.claims[agentID] != nil {
 			return nil, ErrSessionHeld
 		}
-		if alive {
+		if !own && (a.def.State == "running" || alive) {
 			return nil, fmt.Errorf("%w by daemon session %d (%s)", ErrSessionHeld, prior.SessionPID, prior.Program)
 		}
 		claim := &Claim{AgentID: agentID, Workstream: workstream, PeerPID: peerPID, reused: true, expires: m.now().Add(time.Minute)}
