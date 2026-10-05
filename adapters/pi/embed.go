@@ -14,15 +14,24 @@ import (
 //go:embed index.ts
 var Source []byte
 
+//go:embed daemon.ts
+var DaemonSource []byte
+
 func Path(home string) string {
 	return filepath.Join(home, ".pi", "agent", "extensions", "aircommand", "index.ts")
 }
 
 // Sync replaces only the global extension. A project-local extension is deliberately untouched.
 func Sync(home string) error {
-	path := Path(home)
+	if err := syncFile(Path(home), Source); err != nil {
+		return err
+	}
+	return syncFile(filepath.Join(filepath.Dir(Path(home)), "daemon.ts"), DaemonSource)
+}
+
+func syncFile(path string, source []byte) error {
 	old, err := os.ReadFile(path)
-	if err == nil && bytes.Equal(old, Source) {
+	if err == nil && bytes.Equal(old, source) {
 		return nil
 	}
 	if err != nil && !os.IsNotExist(err) {
@@ -40,7 +49,7 @@ func Sync(home string) error {
 		f.Close()
 		return err
 	}
-	if _, err := f.Write(Source); err != nil {
+	if _, err := f.Write(source); err != nil {
 		f.Close()
 		return err
 	}
@@ -66,6 +75,9 @@ func VerifyHeadless(home string) error {
 	}
 	if !strings.Contains(string(data), `"aircommand-headless"`) || !strings.Contains(string(data), "registerFlag(HEADLESS_FLAG") {
 		return fmt.Errorf("pi extension at %s does not register --aircommand-headless; run aircom daemon start to sync it", path)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), "daemon.ts")); err != nil {
+		return fmt.Errorf("pi daemon add-on unavailable: %w; run aircom daemon start to sync it", err)
 	}
 	return nil
 }

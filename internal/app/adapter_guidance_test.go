@@ -24,7 +24,7 @@ func TestPiHeadlessFlagDisablesExtensionDeliveryAndReporting(t *testing.T) {
 		`pi.registerFlag(HEADLESS_FLAG, {`, `type: "boolean"`,
 		`const headless = pi.getFlag(HEADLESS_FLAG) === true`,
 		`headless ? { close() {} } : tailSpool(`,
-		`if (headless || !sessionActive || !enrollment) return;`,
+		`reportEvent("run_start")`,
 		`if (headless || !sessionActive || !connection || event.message.role !== "assistant") return;`,
 	} {
 		if !strings.Contains(extension, part) {

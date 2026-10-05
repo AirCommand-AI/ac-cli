@@ -18,7 +18,6 @@ import (
 	"unicode"
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
-	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
@@ -1103,157 +1102,11 @@ func (a *App) listen(arguments []string) error {
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
 	}
-	if _, err := a.credentialFor(workstreamCode, agentID); err != nil {
-		return err
-	}
-	return a.listenDaemon(workstreamCode, agentID)
-}
-
-// claimAgent takes the agent's lock: one live process per agent on this
-// machine. Two would share the stored cursor, so whichever polled first would
-// consume a notification and advance past it while the other never learned the
-// message existed; and two joins racing for one agent would each save a
-// credential over the other's.
-func (a *App) claimAgent(agentID string) (*agentlock.Lock, error) {
-	lock, err := agentlock.Acquire(a.Store.Home(), agentID)
-	if err != nil {
-		if errors.Is(err, agentlock.ErrHeld) {
-			return nil, &publicError{message: fmt.Sprintf(
-				"Agent %s is already running in another session on this machine. Stop that one before starting another.",
-				agentID)}
-		}
-		return nil, storageError(err, "Unable to claim this agent.")
-	}
-	return lock, nil
-}
-
-// listenAs runs the listener. A caller that already holds the agent's lock
-// passes it, and keeps ownership of it; otherwise the listener takes its own.
-func (a *App) listenAs(workstreamCode string, agentID string, held *agentlock.Lock) error {
 	credential, err := a.credentialFor(workstreamCode, agentID)
 	if err != nil {
 		return err
 	}
-	if a.ListenStore == nil {
-		return &publicError{message: "Listener state storage is unavailable."}
-	}
-	if held == nil {
-		lock, err := a.claimAgent(credential.AgentID)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = lock.Release() }()
-	}
-
-	cursor, hasStoredCursor, err := agentapi.LoadCursor(a.ListenStore, credential.AgentID, credential.WorkstreamKey())
-	if err != nil {
-		return storageError(err, "Unable to read the listener cursor state.")
-	}
-
-	var outage listenOutage
-	networkFailures := 0
-	senderNamesLoaded := false
-	var senderNames map[senderIdentity]string
-	for poll := 1; ; poll++ {
-		path := agentapi.NotificationsPath(workstreamCode, cursor, hasStoredCursor)
-		response, requestErr := a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
-		if response.status == http.StatusUnauthorized {
-			// A dashboard Stop may race a successful rejoin which atomically
-			// replaces credentials.json. Re-read once and retry only when the
-			// bearer actually changed; repeating a known-revoked token cannot
-			// recover access and would turn a clear lifecycle answer into a loop.
-			if refreshed, err := a.Store.FindByAgent(workstreamCode, credential.AgentID); err == nil && refreshed.APIToken != credential.APIToken {
-				credential = refreshed
-				response, requestErr = a.singleRequest(http.MethodGet, path, credential.APIToken, nil)
-			}
-		}
-		if terminalErr := a.notificationTerminalError(response.status, response.body, credential); terminalErr != nil {
-			return terminalErr
-		}
-		if requestErr != nil {
-			if response.status >= 300 && !notificationStatusRetryable(response.status) {
-				return notificationStatusError(response.status, response.body)
-			}
-
-			reason := ""
-			if notificationStatusRetryable(response.status) {
-				reason = notificationFailureReason(response.status, response.body)
-			} else {
-				var transport *transportFailure
-				if !errors.As(requestErr, &transport) {
-					return requestErr
-				}
-				reason = redact(singleLine(transport.reason), credential.APIToken, credential.SocketKey, cursor)
-				if reason == "" {
-					reason = "network error"
-				}
-			}
-			if err := a.noteListenFailure(&outage, reason); err != nil {
-				return err
-			}
-			networkFailures++
-			if a.listenLimitReached(poll) {
-				return nil
-			}
-			a.sleepForListen(networkBackoff(networkFailures))
-			continue
-		}
-		if notificationStatusRetryable(response.status) {
-			if err := a.noteListenFailure(&outage, notificationFailureReason(response.status, response.body)); err != nil {
-				return err
-			}
-			networkFailures++
-			if a.listenLimitReached(poll) {
-				return nil
-			}
-			a.sleepForListen(networkBackoff(networkFailures))
-			continue
-		}
-		if response.status != http.StatusOK {
-			return notificationStatusError(response.status, response.body)
-		}
-
-		feed, err := decodeNotificationFeedResponse(response.body)
-		if err != nil {
-			return &publicError{message: "The notification service returned an invalid response."}
-		}
-		if outage.recovered() {
-			if err := a.writeActionLine("Connection restored."); err != nil {
-				return err
-			}
-		}
-		networkFailures = 0
-
-		if hasStoredCursor {
-			if len(feed.Notifications) > 0 && !senderNamesLoaded {
-				senderNames = a.loadSenderNames(workstreamCode, credential)
-				senderNamesLoaded = true
-			}
-			for _, notification := range feed.Notifications {
-				summary := agentapi.ComposeSummary(notification, workstreamCode, senderNames)
-				spooled := agentapi.Spool(notification, summary)
-				if err := a.ListenStore.AppendNotification(credential.AgentID, spooled); err != nil {
-					return storageError(err, "Unable to append the AirCommand notification spool.")
-				}
-				if err := a.writeActionLine(summary); err != nil {
-					return err
-				}
-			}
-		}
-
-		nextCursor := *feed.Cursor
-		if !hasStoredCursor || nextCursor != cursor {
-			if err := agentapi.SaveCursor(a.ListenStore, credential.AgentID, credential.WorkstreamKey(), nextCursor); err != nil {
-				return storageError(err, "Unable to persist the listener cursor.")
-			}
-			cursor = nextCursor
-			hasStoredCursor = true
-		}
-		if a.listenLimitReached(poll) {
-			return nil
-		}
-		a.sleepForListen(pollDelay(feed.PollAfterSeconds))
-	}
+	return a.listenDaemon(workstreamCode, credential.AgentID)
 }
 
 func decodeNotificationFeedResponse(body []byte) (notificationFeedResponse, error) {

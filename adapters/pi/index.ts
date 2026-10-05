@@ -141,6 +141,8 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	let stopSubscription:(()=>void)|undefined;
 	let retryTimer:ReturnType<typeof setTimeout>|undefined;
 	let subscriptionAttempt=0;
+	let conversationID="";
+	let ackQueue=Promise.resolve();
 	const daemonSocket=join(homedir(),".aircommand","daemon","daemon.sock");
 	let sessionStartedAt = new Date().toISOString();
 	let lastBranch = "";
@@ -256,7 +258,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 				if (sessionActive && activeConnection?.token === token) notify(ctx, message, "warning");
 			},
 			offset,
-			(consumed)=>{void daemonCall(daemonSocket,{op:"session.ack",sessionPid:process.pid,offset:consumed}).catch(()=>{})},
+			(consumed)=>{ackQueue=ackQueue.then(async()=>{if(sessionActive&&activeConnection?.token===token)await daemonCall(daemonSocket,{op:"session.ack",sessionPid:process.pid,offset:consumed})}).catch(()=>{})},
 		);
 
 		const previous = activeConnection;
@@ -368,7 +370,10 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			subscriptionAttempt=0;
 			switch(message.type){
 			case "connect":
-				if(message.agentId && message.workstream){try{connect(validateEnrollment({agentId:message.agentId,workstreamCode:message.workstream}),ctx,message.offset??0)}catch(error){notify(ctx,errorMessage(error),"warning")}}
+				if(message.agentId && message.workstream){
+					try{connect(validateEnrollment({agentId:message.agentId,workstreamCode:message.workstream}),ctx,message.offset??0)}catch(error){notify(ctx,errorMessage(error),"warning")}
+					if(conversationID)void daemonCall(daemonSocket,{op:"session.attach",agentId:message.agentId,name:"",workstream:message.workstream,sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId:conversationID}).catch(()=>notify(ctx,"AirCommand could not bind this pi conversation for resume.","warning"));
+				}
 				break;
 			case "wake":activeConnection?.tail.drain?.();break;
 			case "nudge":if(message.text)void pi.sendUserMessage(message.text,{deliverAs:"followUp"});break;
@@ -394,6 +399,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		const requestedWorkstream = readStringFlag(pi, WORKSTREAM_FLAG);
 		const requestedAgent = readStringFlag(pi, AGENT_FLAG);
 		const sessionId=ctx.sessionManager.getSessionId();
+		conversationID=sessionId;
 		try {
 			const prior=await daemonCall<{agentId?:string;workstream?:string;name?:string}>(daemonSocket,{op:"session.lookup",sessionId});
 			if(prior?.agentId){

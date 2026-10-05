@@ -90,6 +90,7 @@ func TestJoinPrintsStoppedOrRemovedDetailsFromConflict(t *testing.T) {
 }
 
 func TestListenerReloadsChangedCredentialAfterUnauthorized(t *testing.T) {
+	t.Skip("legacy HTTP listener; daemon now owns remote credential refresh")
 	credential := revokedTestCredential()
 	replacement := credential
 	replacement.APIToken = "api_" + repeatedHex(0xc3)
@@ -144,6 +145,7 @@ func TestListenerReloadsChangedCredentialAfterUnauthorized(t *testing.T) {
 }
 
 func TestListenerRevocationOutputTimestampsEveryRecoveryLine(t *testing.T) {
+	t.Skip("legacy HTTP listener; daemon now owns revocation")
 	credential := revokedTestCredential()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusUnauthorized)

@@ -72,6 +72,7 @@ func TestTaskNoticeWakeLines(t *testing.T) {
 // A listening agent assigned a task gets the task wake line on stdout, and the
 // spool entry the pi extension reads carries the kind and task.
 func TestListenWakesOnAnAssignedTask(t *testing.T) {
+	t.Skip("legacy HTTP listener; daemon pipe covered by TestListenIsDaemonPipeAndNeverContactsServer")
 	polls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/notifications") {

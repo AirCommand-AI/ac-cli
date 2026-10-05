@@ -23,7 +23,6 @@ var agentCommandFamilies = map[string][]string{
 	"tasks":  {"tasks", "--workstream", "694"},
 	"inbox":  {"inbox", "--workstream", "694"},
 	"ack":    {"ack", "--workstream", "694", "--message", "1111111111111111"},
-	"listen": {"listen", "--workstream", "694"},
 }
 
 type tokenRecorder struct {

@@ -12,6 +12,7 @@ type fakeSessionControl struct {
 	kind, logical string
 	events        int
 	claims        int
+	claimErr      error
 	attaches      []daemonclient.SessionAttach
 	messages      []daemonclient.SessionMessage
 }
@@ -29,6 +30,9 @@ func (c *fakeClaim) AttachSession(s daemonclient.SessionAttach) error {
 }
 func (f *fakeSessionControl) ClaimSession(context.Context, string, string) (daemonclient.SessionClaim, error) {
 	f.claims++
+	if f.claimErr != nil {
+		return nil, f.claimErr
+	}
 	return &fakeClaim{parent: f}, nil
 }
 func (f *fakeSessionControl) AttachSession(_ context.Context, s daemonclient.SessionAttach) error {
