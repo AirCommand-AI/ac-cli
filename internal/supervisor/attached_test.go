@@ -198,3 +198,44 @@ func TestClaimReleasedWithoutAttachment(t *testing.T) {
 		t.Fatal("claim lock leaked")
 	}
 }
+
+func TestNewAttachmentStartsAtEndOfExistingHistory(t *testing.T) {
+	m, _, _, _ := setup(t)
+	if err := credentials.NewStore(m.Home).Save(credentials.Credential{AgentID: "agm_history", WorkstreamCode: "478", APIToken: "token", SocketKey: "key", SocketAddress: "ac:agm_history"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, summary := range []string{"old wake in 610", "old wake in 478"} {
+		if err := listenstore.NewStore(m.Home).AppendNotification("agm_history", map[string]string{"summary": summary}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	info, err := os.Stat(m.SpoolPath("agm_history"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := m.Claim("agm_history", "478", os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Attach(claim, Attachment{AgentID: "agm_history", Name: "historian", Workstream: "478", Program: "pi", SessionPID: os.Getpid(), SessionStart: SessionProcessStart(os.Getpid()), SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseClaim(claim)
+	def, ok := m.Attached("agm_history")
+	if !ok {
+		t.Fatal("not attached")
+	}
+	if def.Offset != info.Size() {
+		t.Fatalf("new attachment offset = %d, want end of history %d (no stale replay)", def.Offset, info.Size())
+	}
+	// Re-attaching the same session keeps its position.
+	if err = m.SessionAck("agm_history", info.Size()); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Attach(nil, Attachment{AgentID: "agm_history", Name: "historian", Workstream: "478", Program: "pi", SessionPID: os.Getpid(), SessionStart: SessionProcessStart(os.Getpid()), SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if def, _ = m.Attached("agm_history"); def.Offset != info.Size() {
+		t.Fatalf("re-attach offset = %d, want %d", def.Offset, info.Size())
+	}
+}

@@ -212,14 +212,14 @@ func (m *Manager) Attach(claim *Claim, p Attachment) error {
 		a = &managed{}
 	}
 	previous := a.def
+	// Replay only what this attachment has not seen: a resumed record (same
+	// workstream) keeps its stored offset; a new record or another workstream
+	// starts at the end of the existing notification history.
 	offset := previous.Offset
-	if previous.Workstream != p.Workstream {
+	if old == nil || previous.Workstream != p.Workstream {
 		offset = 0
-		// A cursor from another workstream cannot replay that stream's wakes.
-		if previous.Workstream != "" {
-			if info, err := os.Stat(m.SpoolPath(p.AgentID)); err == nil {
-				offset = info.Size()
-			}
+		if info, err := os.Stat(m.SpoolPath(p.AgentID)); err == nil {
+			offset = info.Size()
 		}
 	}
 	a.def = AgentDefinition{Version: 1, Kind: "attached", AgentID: p.AgentID, Name: name, Workstream: p.Workstream, Desired: "running", State: "running", Mode: "attached", SessionPID: p.SessionPID, SessionStart: p.SessionStart, Program: p.Program, SessionID: p.SessionID, Offset: offset}
