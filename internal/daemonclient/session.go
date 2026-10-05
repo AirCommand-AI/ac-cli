@@ -40,6 +40,44 @@ type SessionLookup struct {
 func (c Client) Claim(ctx context.Context, agentID, workstream string) error {
 	return c.call(ctx, map[string]any{"op": "agent.claim", "agentId": agentID, "workstream": workstream}, nil)
 }
+
+// ClaimSession keeps the claiming connection alive across the remote Join and
+// local Attach. The daemon releases an un-attached claim when this closes.
+func (c Client) ClaimSession(ctx context.Context, agentID, workstream string) (io.Closer, error) {
+	if c.SocketPath == "" {
+		return nil, errors.New("daemon socket path is empty")
+	}
+	dial := c.Dial
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	conn, err := dial(ctx, "unix", c.SocketPath)
+	if err != nil {
+		return nil, fmt.Errorf("connect to daemon: %w", err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := json.NewEncoder(conn).Encode(map[string]any{"op": "agent.claim", "agentId": agentID, "workstream": workstream}); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	var response struct {
+		OK    bool         `json:"ok"`
+		Error *RemoteError `json:"error"`
+	}
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if !response.OK {
+		_ = conn.Close()
+		if response.Error != nil {
+			return nil, response.Error
+		}
+		return nil, errors.New("daemon returned invalid claim response")
+	}
+	_ = conn.SetDeadline(time.Time{})
+	return conn, nil
+}
 func (c Client) AttachSession(ctx context.Context, r SessionAttach) error {
 	return c.call(ctx, struct {
 		Op string `json:"op"`

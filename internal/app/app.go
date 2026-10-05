@@ -63,9 +63,11 @@ type App struct {
 	// Organization is sent on requests made with the device credential, which
 	// carries no organization of its own. Set per command from --org; empty for
 	// agent credentials, which are already bound to one workstream.
-	Organization   string
-	DaemonCommands DaemonCommands
-	AgentCommands  AgentCommands
+	Organization    string
+	DaemonCommands  DaemonCommands
+	AgentCommands   AgentCommands
+	SessionClient   SessionControl
+	ProcessSnapshot ProcessSnapshot
 }
 
 // Command implementations are installed by the daemon and agent packages.
