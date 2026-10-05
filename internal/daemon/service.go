@@ -20,7 +20,7 @@ import (
 )
 
 func SystemdUnit(aircom, tmux, pi, path string) string {
-	return fmt.Sprintf("[Unit]\nDescription=AirCommand agent daemon\n\n[Service]\nType=simple\nExecStart=%s daemon run --tmux %s --pi %s\nEnvironment=PATH=%s\nKillMode=process\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n", systemdEscape(aircom), systemdEscape(tmux), systemdEscape(pi), systemdEscape(path))
+	return fmt.Sprintf("[Unit]\nDescription=AirCommand agent daemon\n\n[Service]\nType=simple\nExecStart=%s daemon run\nEnvironment=PATH=%s\nKillMode=process\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n", systemdEscape(aircom), systemdEscape(path))
 }
 func systemdEscape(value string) string {
 	// systemd requires quoting whitespace, literal percent signs and backslashes.
@@ -35,7 +35,7 @@ func LaunchdPlist(aircom, tmux, pi, path, log string) string {
 		return out.String()
 	}
 	b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>ai.aircommand.daemon</string>\n<key>ProgramArguments</key><array>\n")
-	for _, arg := range []string{aircom, "daemon", "run", "--tmux", tmux, "--pi", pi} {
+	for _, arg := range []string{aircom, "daemon", "run"} {
 		fmt.Fprintf(&b, "<string>%s</string>\n", esc(arg))
 	}
 	fmt.Fprintf(&b, "</array>\n<key>EnvironmentVariables</key><dict><key>PATH</key><string>%s</string></dict>\n<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>StandardOutPath</key><string>%s</string>\n<key>StandardErrorPath</key><string>%s</string>\n</dict></plist>\n", esc(path), esc(log), esc(log))
@@ -72,23 +72,21 @@ func (s Service) runner() Runner {
 	return execRunner
 }
 func (s Service) paths() (string, string, string, error) {
-	paths := []string{s.Aircom, s.Tmux, s.Pi}
-	names := []string{"aircom", "tmux", "pi"}
-	for i, p := range paths {
-		if p == "" {
-			var err error
-			p, err = exec.LookPath(names[i])
-			if err != nil {
-				return "", "", "", err
-			}
-		}
-		abs, err := filepath.Abs(p)
+	aircom := s.Aircom
+	if aircom == "" {
+		var err error
+		aircom, err = exec.LookPath("aircom")
 		if err != nil {
 			return "", "", "", err
 		}
-		paths[i] = abs
 	}
-	return paths[0], paths[1], paths[2], nil
+	abs, err := filepath.Abs(aircom)
+	if err != nil {
+		return "", "", "", err
+	}
+	// tmux/pi are only needed when a daemon-started agent launches. Neither
+	// is a prerequisite for an attached foreground session.
+	return abs, "", "", nil
 }
 func (s Service) envPath() string {
 	if s.Path != "" {
@@ -114,7 +112,7 @@ func (s Service) Start(ctx context.Context) error {
 		}
 		output, err := run(ctx, "loginctl", "show-user", current.Username, "--property=Linger", "--value")
 		if err != nil || strings.TrimSpace(string(output)) != "yes" {
-			return fmt.Errorf("enable user lingering with loginctl enable-linger before starting the daemon")
+			return fmt.Errorf("ask a person to run: loginctl enable-linger %s", current.Username)
 		}
 		file := filepath.Join(s.Home, ".config/systemd/user/aircom-daemon.service")
 		if err := writeService(file, SystemdUnit(aircom, tmux, pi, s.envPath())); err != nil {
@@ -156,7 +154,10 @@ func (s Service) Start(ctx context.Context) error {
 		_, _ = run(ctx, "launchctl", "bootout", domain, file)
 		// RunAtLoad starts the daemon on bootstrap; -k would kill a healthy daemon.
 		_, err = run(ctx, "launchctl", "bootstrap", domain, file)
-		return err
+		if err != nil {
+			return fmt.Errorf("log in to this Mac's desktop once, then retry: %w", err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("daemon service is unsupported on %s", s.platform())
 	}

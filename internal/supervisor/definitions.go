@@ -15,6 +15,9 @@ func (m *Manager) Definitions() []AgentDefinition {
 	defer m.mu.Unlock()
 	out := make([]AgentDefinition, 0, len(m.agents))
 	for _, a := range m.agents {
+		if a.def.Kind == "attached" {
+			continue
+		}
 		d := a.def
 		d.Repos = append([]string(nil), d.Repos...)
 		out = append(out, d)
@@ -24,7 +27,7 @@ func (m *Manager) Definitions() []AgentDefinition {
 
 // Stage saves a new stopped definition without launching a pi session.
 func (m *Manager) Stage(def AgentDefinition) error {
-	def.Version, def.Harness, def.Desired, def.State = 1, "pi", "stopped", "stopped"
+	def.Version, def.Kind, def.Harness, def.Desired, def.State = 1, "started", "pi", "stopped", "stopped"
 	if err := validate(def); err != nil {
 		return err
 	}
@@ -32,6 +35,11 @@ func (m *Manager) Stage(def AgentDefinition) error {
 	defer m.mu.Unlock()
 	if m.agents[def.Name] != nil {
 		return fmt.Errorf("agent already exists")
+	}
+	for _, existing := range m.agents {
+		if existing.def.AgentID == def.AgentID {
+			return fmt.Errorf("agent identity already held")
+		}
 	}
 	a := &managed{def: def}
 	if err := m.save(a); err != nil {
@@ -48,6 +56,9 @@ func (m *Manager) MarkRevision(name string, revision int64) error {
 	a := m.agents[name]
 	if a == nil {
 		return os.ErrNotExist
+	}
+	if a.def.Kind == "attached" {
+		return fmt.Errorf("attached agents have no server definition revision")
 	}
 	if revision <= a.def.Revision {
 		return nil
@@ -95,6 +106,9 @@ func (m *Manager) PostDesired(ctx context.Context, name string) error {
 	m.mu.Unlock()
 	if a == nil {
 		return os.ErrNotExist
+	}
+	if def.Kind == "attached" {
+		return nil
 	}
 	if post == nil {
 		return nil
@@ -154,6 +168,12 @@ func (m *Manager) FlushDesired(ctx context.Context) map[string]bool {
 		if a == nil {
 			continue
 		} // removed locally; no agent left to reconcile
+		if def.Kind == "attached" {
+			m.mu.Lock()
+			delete(m.pendingDesired, name)
+			m.mu.Unlock()
+			continue
+		}
 		if post == nil {
 			skip[def.AgentID] = true
 			continue

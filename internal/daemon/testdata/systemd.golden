@@ -3,7 +3,7 @@ Description=AirCommand agent daemon
 
 [Service]
 Type=simple
-ExecStart="/opt/aircom" daemon run --tmux "/usr/bin/tmux" --pi "/opt/pi"
+ExecStart="/opt/aircom" daemon run
 Environment=PATH="/usr/bin:/opt"
 KillMode=process
 Restart=on-failure

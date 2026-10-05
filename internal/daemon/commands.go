@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/AirCommand-AI/ac-cli/adapters/pi"
+	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/machinectl"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
@@ -41,6 +42,9 @@ func (c Commands) RunDaemon(arguments []string) error {
 		if len(arguments) != 1 {
 			return errors.New("Usage: aircom daemon start")
 		}
+		if _, err := credentials.NewStore(c.Home).LoadMachine(); err != nil {
+			return fmt.Errorf("machine is not registered; ask a person to run aircom init: %w", err)
+		}
 		return service.Start(ctx)
 	case "stop":
 		if len(arguments) != 1 {
@@ -64,8 +68,8 @@ func (c Commands) RunDaemon(arguments []string) error {
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
-		if *tmux == "" || *pi == "" || len(flags.Args()) != 0 {
-			return errors.New("Usage: aircom daemon run --tmux <absolute-path> --pi <absolute-path>")
+		if len(flags.Args()) != 0 {
+			return errors.New("Usage: aircom daemon run")
 		}
 		if c.NewSupervisor == nil {
 			return errors.New("daemon supervisor is unavailable")

@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -13,7 +14,11 @@ import (
 type CommandTmux struct{ Path string }
 
 func (t CommandTmux) command(ctx context.Context, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, t.Path, append([]string{"-L", "aircom"}, args...)...)
+	path := t.Path
+	if path == "" {
+		path = "tmux"
+	}
+	return exec.CommandContext(ctx, path, append([]string{"-L", "aircom"}, args...)...)
 }
 func (t CommandTmux) Inspect(ctx context.Context, name string) (Pane, error) {
 	if !validName(name) {
@@ -21,6 +26,9 @@ func (t CommandTmux) Inspect(ctx context.Context, name string) (Pane, error) {
 	}
 	out, err := t.command(ctx, "list-panes", "-t", name+":0", "-F", "#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}:#{pane_pid}").CombinedOutput()
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return Pane{}, fmt.Errorf("tmux is required to launch a daemon-started agent; install tmux: %w", err)
+		}
 		// No tmux server or session is not an error; other failures are.
 		text := string(out)
 		if strings.Contains(text, "no server running") || strings.Contains(text, "can't find session") || strings.Contains(text, "no sessions") || strings.Contains(text, "error connecting to") {

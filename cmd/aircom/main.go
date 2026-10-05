@@ -43,10 +43,35 @@ func main() {
 	commands := daemon.Commands{Home: home, Output: os.Stdout}
 	operationGate := &sync.Mutex{}
 	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
+		if tmux == "" {
+			tmux = "tmux"
+		}
+		if pi == "" {
+			pi = "pi"
+		}
 		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		manager := supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll)
 		manager.OperationGate = operationGate
 		api := machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store}
+		manager.PlaceAttached = func(ctx context.Context, d supervisor.AgentDefinition) (string, string, error) {
+			defs, err := api.Definitions(ctx)
+			if err != nil {
+				return "", "", err
+			}
+			for _, agent := range defs.Agents {
+				if agent.AgentID == d.AgentID {
+					if agent.AssignedOrganizationID == "" || agent.AssignedWorkstreamCode == "" {
+						return "", "", nil
+					}
+					r := machinectl.AgentReconciler{API: api, Store: store, Home: home}
+					if err := r.JoinAssignment(ctx, agent); err != nil {
+						return "", "", err
+					}
+					return agent.AssignedOrganizationID, agent.AssignedWorkstreamCode, nil
+				}
+			}
+			return "", "", nil
+		}
 		manager.DesiredPost = func(ctx context.Context, d supervisor.AgentDefinition) (int64, error) {
 			if d.Revision == 0 {
 				cred, err := store.FindByAgent(d.Workstream, d.AgentID)

@@ -83,7 +83,7 @@ func TestMacServiceStartSkipsRunningUnchangedPlist(t *testing.T) {
 
 func TestLaunchdEscapesPathStrings(t *testing.T) {
 	plist := LaunchdPlist("/opt/a&b", "/opt/t<mux", "/opt/pi", "/opt/a&b", "/tmp/l<g")
-	for _, want := range []string{"/opt/a&amp;b", "/opt/t&lt;mux", "/tmp/l&lt;g", "<key>RunAtLoad</key><true/>"} {
+	for _, want := range []string{"/opt/a&amp;b", "/tmp/l&lt;g", "<key>RunAtLoad</key><true/>"} {
 		if !strings.Contains(plist, want) {
 			t.Fatalf("plist missing %q: %s", want, plist)
 		}
