@@ -1,46 +1,64 @@
 package app
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"context"
+	"io"
+	"strings"
 	"testing"
-	"time"
+
+	"github.com/AirCommand-AI/ac-cli/internal/daemonclient"
 )
 
-func TestStateAdapterTransport(t *testing.T) {
-	credential := testCredential()
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if r.Method != http.MethodPut || r.URL.Path != "/agent/v1/workstreams/694/agents/me/state" {
-			t.Errorf("wrong route: %s %s", r.Method, r.URL.Path)
+type fakeSessionControl struct {
+	pid           int
+	kind, logical string
+	events        int
+	claims        int
+	attaches      []daemonclient.SessionAttach
+	messages      []daemonclient.SessionMessage
+}
+
+func (*fakeSessionControl) Status(context.Context) (daemonclient.Status, error) {
+	return daemonclient.Status{}, nil
+}
+func (f *fakeSessionControl) ClaimSession(context.Context, string, string) (io.Closer, error) {
+	f.claims++
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (f *fakeSessionControl) AttachSession(_ context.Context, s daemonclient.SessionAttach) error {
+	f.attaches = append(f.attaches, s)
+	return nil
+}
+func (f *fakeSessionControl) SubscribeSession(_ context.Context, _ int, handle func(daemonclient.SessionMessage) error) error {
+	for _, m := range f.messages {
+		if err := handle(m); err != nil {
+			return err
 		}
-		if r.Header.Get("Authorization") != "Bearer "+credential.APIToken {
-			t.Error("missing agent authorization")
-		}
-		var body struct{ State, Source, At string }
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		if body.State != "working" || body.Source != "pi" {
-			t.Errorf("unexpected state: %+v", body)
-		}
-		if _, err := time.Parse(time.RFC3339Nano, body.At); err != nil {
-			t.Error(err)
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	client, _, stderr := testApp(t, server.URL, "", nil)
-	saveTestCredential(t, client, credential)
-	if code := client.Run([]string{"state", "--workstream", "694", "--agent", credential.AgentID, "--source", "pi", "working"}); code != 0 {
+	}
+	return nil
+}
+func (f *fakeSessionControl) SessionEvent(_ context.Context, pid int, kind, logical string) error {
+	f.pid = pid
+	f.kind = kind
+	f.logical = logical
+	f.events++
+	return nil
+}
+
+func TestStateReportsOnlyToDaemon(t *testing.T) {
+	client, _, stderr := testApp(t, "http://127.0.0.1:1", "", nil)
+	daemon := &fakeSessionControl{}
+	client.SessionClient = daemon
+	client.ProcessSnapshot = func(pid int) (int, string, string, error) {
+		return 1, "node /opt/pi-coding-agent/dist/cli.js", "start", nil
+	}
+	if code := client.Run([]string{"state", "--source", "other", "working"}); code != 0 {
 		t.Fatalf("state failed: %s", stderr.String())
 	}
-	if calls != 1 {
-		t.Fatalf("got %d calls, want one", calls)
+	if daemon.events != 1 || daemon.kind != "state" || daemon.logical != "working" || daemon.pid <= 0 {
+		t.Fatalf("event: %+v", daemon)
 	}
-	if code := client.Run([]string{"state", "--workstream", "694", "--agent", credential.AgentID, "--source", "pi", "unknown"}); code == 0 || calls != 1 {
-		t.Fatal("invalid state reached transport")
+	if code := client.Run([]string{"state", "stalled"}); code == 0 || daemon.events != 1 {
+		t.Fatal("invalid state reached daemon")
 	}
 }
