@@ -16,13 +16,22 @@ import (
 	sup "github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "acd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 func TestSessionClaimAttachSubscribeAndAck(t *testing.T) {
 	home := t.TempDir()
 	m := sup.New(home, "pi", "aircom", nil, nil)
 	if err := credentials.NewStore(home).Save(credentials.Credential{AgentID: "agm_person", WorkstreamCode: "478", APIToken: "token", SocketKey: "key", SocketAddress: "ac:agm_person"}); err != nil {
 		t.Fatal(err)
 	}
-	l, err := net.Listen("unix", filepath.Join(home, "session.sock"))
+	l, err := net.Listen("unix", filepath.Join(shortSocketDir(t), "s.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}

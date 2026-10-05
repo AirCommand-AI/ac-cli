@@ -17,7 +17,7 @@ import (
 func TestClaimConnectionCloseReleasesLock(t *testing.T) {
 	home := t.TempDir()
 	m := sup.New(home, "pi", "aircom", nil, nil)
-	l, err := net.Listen("unix", filepath.Join(home, "claims.sock"))
+	l, err := net.Listen("unix", filepath.Join(shortSocketDir(t), "c.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestClaimConnectionCloseReleasesLock(t *testing.T) {
 func TestOtherStreamCloseMarksNoListener(t *testing.T) {
 	home := t.TempDir()
 	m := sup.New(home, "pi", "aircom", nil, nil)
-	l, err := net.Listen("unix", filepath.Join(home, "other.sock"))
+	l, err := net.Listen("unix", filepath.Join(shortSocketDir(t), "o.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
