@@ -31,3 +31,20 @@ func TestListenIsDaemonPipeAndNeverContactsServer(t *testing.T) {
 		t.Fatalf("wake missing: %q", out.String())
 	}
 }
+
+func TestListenAcksEachPrintedWake(t *testing.T) {
+	client, out, errOut := listenerApp("http://127.0.0.1:1", t.TempDir())
+	credential := testCredential()
+	saveTestCredential(t, client, credential)
+	fake := client.SessionClient.(*fakeSessionControl)
+	fake.messages = []daemonclient.SessionMessage{{Type: "connect", AgentID: credential.AgentID, Workstream: credential.WorkstreamCode}, {Type: "wake", Line: "first", Offset: 40}, {Type: "wake", Line: "second", Offset: 85}, {Type: "detached"}}
+	if code := client.Run([]string{"listen", "--workstream", credential.WorkstreamCode, "--agent", credential.AgentID}); code != 0 {
+		t.Fatalf("listen failed: %s", errOut.String())
+	}
+	if !strings.Contains(out.String(), "first") || !strings.Contains(out.String(), "second") {
+		t.Fatalf("wakes missing: %q", out.String())
+	}
+	if len(fake.acks) != 2 || fake.acks[0] != 40 || fake.acks[1] != 85 {
+		t.Fatalf("acks = %v, want [40 85]", fake.acks)
+	}
+}

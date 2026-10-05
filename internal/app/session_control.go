@@ -16,6 +16,7 @@ type SessionControl interface {
 	AttachSession(context.Context, daemonclient.SessionAttach) error
 	SubscribeSession(context.Context, int, func(daemonclient.SessionMessage) error) error
 	SessionEvent(context.Context, int, string, string) error
+	AckSession(context.Context, int, int64) error
 }
 
 func (a *App) sessionControl() SessionControl {

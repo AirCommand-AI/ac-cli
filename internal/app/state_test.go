@@ -15,6 +15,7 @@ type fakeSessionControl struct {
 	claimErr      error
 	attaches      []daemonclient.SessionAttach
 	messages      []daemonclient.SessionMessage
+	acks          []int64
 }
 
 func (*fakeSessionControl) Status(context.Context) (daemonclient.Status, error) {
@@ -71,4 +72,9 @@ func TestStateReportsOnlyToDaemon(t *testing.T) {
 	if code := client.Run([]string{"state", "stalled"}); code == 0 || daemon.events != 1 {
 		t.Fatal("invalid state reached daemon")
 	}
+}
+
+func (f *fakeSessionControl) AckSession(_ context.Context, _ int, offset int64) error {
+	f.acks = append(f.acks, offset)
+	return nil
 }

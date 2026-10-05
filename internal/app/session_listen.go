@@ -34,6 +34,10 @@ func (a *App) listenDaemon(workstream, agentID string) error {
 				if _, err := fmt.Fprintln(a.outputWriter(), msg.Line); err != nil {
 					return err
 				}
+				// Record what was printed so a restarted listener does not replay it.
+				if err := client.AckSession(context.Background(), process.SessionPID, msg.Offset); err != nil {
+					fmt.Fprintf(a.errorWriter(), "Could not record delivery with the daemon: %v\n", err)
+				}
 			case "nudge", "interrupt":
 				if _, err := fmt.Fprintln(a.outputWriter(), msg.Text); err != nil {
 					return err
