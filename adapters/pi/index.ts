@@ -208,6 +208,16 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		return "connected";
 	};
 
+	// Manual recovery must go through the daemon like aircom join: the daemon
+	// refuses this pi when another live session holds the agent (D5).
+	const attachThroughDaemon = async (enrollment: Enrollment) => {
+		try {
+			await daemonCall(daemonSocket, { op: "session.attach", agentId: enrollment.agentId, name: storedAgentName(enrollment.agentId), workstream: enrollment.workstreamCode, sessionPid: process.pid, sessionStart: processStart(process.pid), program: "pi", sessionId: conversationID || undefined });
+		} catch (error) {
+			throw new Error(`AirCommand did not connect ${enrollment.agentId}: ${errorMessage(error)}. Run aircom join --agent <name> --workstream <code> from this pi; if another session holds the agent, do not work around it.`);
+		}
+	};
+
 	pi.registerTool({
 		name: CONNECT_TOOL_NAME,
 		label: "Connect AirCommand",
@@ -242,6 +252,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const enrollment = enrollmentFromCredential(params.agentId);
+			await attachThroughDaemon(enrollment);
 			const result = connect(enrollment, ctx);
 			// Watching begins at the present, so anything that arrived before this
 			// session connected is never announced. It is unread rather than lost,
@@ -266,6 +277,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			if (parts[0] === "connect" && parts.length === 2) {
 				try {
 					const enrollment = enrollmentFromCredential(parts[1]);
+					await attachThroughDaemon(enrollment);
 					const result = connect(enrollment, ctx);
 					notify(
 						ctx,
