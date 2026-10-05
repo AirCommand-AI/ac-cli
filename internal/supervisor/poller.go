@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
+	"github.com/AirCommand-AI/ac-cli/internal/agentstate"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
@@ -81,6 +82,19 @@ func (p *HTTPPoller) Fetch(ctx context.Context, d AgentDefinition, cursor string
 		return Feed{}, fmt.Errorf("%s", agentapi.FailureReason(status, service.Code))
 	}
 	return Feed{Notifications: feed.Notifications, Cursor: *feed.Cursor, PollAfter: agentapi.PollDelay(feed.PollAfterSeconds)}, nil
+}
+
+// ReportState sends the K1 snapshot through this agent's credential. T5 will
+// replace the legacy State/StateReason callers with the state engine.
+func (p *HTTPPoller) ReportState(ctx context.Context, d AgentDefinition, state agentstate.State, at time.Time) error {
+	if p.Store == nil || p.Client == nil {
+		return fmt.Errorf("state API is not configured")
+	}
+	cred, err := p.Store.FindByAgent(d.Workstream, d.AgentID)
+	if err != nil {
+		return err
+	}
+	return (agentstate.Reporter{BaseURL: p.BaseURL, Client: p.Client, Token: cred.APIToken}).Report(ctx, d.Workstream, state, at)
 }
 
 // State reports headless pi event-derived state through the agent credential.
