@@ -15,6 +15,25 @@ import (
 // keeps later wakes from being blocked behind it.
 func (m *Manager) deliver(ctx context.Context, a *managed, n agentapi.Notification) error {
 	if a.def.Kind == "attached" {
+		if n.Kind == "nudge" || n.Kind == "interrupt" {
+			text := pidriver.FormatMessageGuidance(m.CLI, a.def.Workstream, a.def.AgentID, agentapi.ComposeSummary(n, a.def.Workstream, nil), n.MessageID, n.SenderID)
+			if n.Kind == "interrupt" {
+				if reader, ok := m.Poll.(interface {
+					MessageBody(context.Context, AgentDefinition, string) (string, error)
+				}); ok {
+					def := a.def
+					m.mu.Unlock()
+					body, err := reader.MessageBody(ctx, def, n.MessageID)
+					m.mu.Lock()
+					if err == nil {
+						text += "\nInterrupt body: " + body
+					}
+				}
+			}
+			if m.agents[a.def.Name] == a && a.def.State != "stopped-by-dashboard" {
+				m.sendAttachedSignal(a, n.Kind, text)
+			}
+		}
 		for ch := range a.wakes {
 			select {
 			case ch <- struct{}{}:

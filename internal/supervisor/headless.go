@@ -90,7 +90,9 @@ func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
 	reportCtx, cancel := context.WithCancel(context.Background())
 	a.eventsCancel = cancel
 	states := make(chan string, 32)
-	go m.reportLoop(reportCtx, a.def, states)
+	if m.StateReport == nil {
+		go m.reportLoop(reportCtx, a.def, states)
+	}
 	go m.consumeEvents(a, d, a.eventsDone, states)
 	// Send queues until Ready; it is the first RPC prompt (R6). Never call
 	// driver methods that can write to pi under the supervisor mutex.
@@ -166,7 +168,9 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	if err := m.drainPending(ctx, a); err != nil {
 		return err
 	}
-	m.checkStall(ctx, a)
+	if m.StateReport == nil {
+		m.checkStall(ctx, a)
+	}
 	if m.Poll != nil && !m.now().Before(a.nextPoll) {
 		return m.poll(ctx, a)
 	}
@@ -242,6 +246,22 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				a.stalled = false
 				a.stallReason = ""
 			}
+			if m.StateReport != nil {
+				kind := "rpc"
+				switch e.Kind {
+				case "agent_start":
+					kind = "run_start"
+				case "agent_settled":
+					kind = "run_end"
+				case "tool_execution_start":
+					kind = "tool_start"
+				case "tool_execution_end":
+					kind = "tool_end"
+				case "message_start":
+					kind = "turn"
+				}
+				m.emitAgentEvent(a, AgentEvent{AgentID: a.def.AgentID, Kind: kind, At: m.now()})
+			}
 			for ch := range a.subscribers {
 				select {
 				case ch <- e:
@@ -251,6 +271,9 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				}
 			}
 			m.mu.Unlock()
+			if m.StateReport != nil {
+				continue
+			}
 			if !wasStalled && e.Kind != "agent_start" && e.Kind != "agent_settled" {
 				continue
 			}

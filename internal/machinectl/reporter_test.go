@@ -47,12 +47,13 @@ func TestHTTPReporterSendsContractAndAppliesMachineState(t *testing.T) {
 				AgentID string `json:"agentId"`
 				State   string `json:"state"`
 				Mode    string `json:"mode"`
+				Kind    string `json:"kind"`
 			} `json:"agents"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Version != "v0.19.0" || len(body.Capabilities) != 1 || body.Capabilities[0] != "check-in" || body.IdleSince == nil || !body.IdleSince.Equal(source.idle) || body.AgentsStopped != (calls == 2) || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" {
+		if body.Version != "v0.19.0" || len(body.Capabilities) != 1 || body.Capabilities[0] != "check-in" || body.IdleSince == nil || !body.IdleSince.Equal(source.idle) || body.AgentsStopped != (calls == 2) || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" || body.Agents[0].Kind != "started" {
 			t.Errorf("body %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"machine":{"state":"stopping","stateAt":"2026-10-02T00:00:00Z"}}`))

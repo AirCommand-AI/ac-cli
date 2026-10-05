@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -304,6 +305,67 @@ func (p *HTTPPoller) InFlight(ctx context.Context, d AgentDefinition) (InFlightT
 		return InFlightTask{}, false, false, err
 	}
 	return selected, found, len(pending.Requests) > 0, nil
+}
+
+// PresenceTasks provides K4's waiting precedence from agent-authenticated
+// workstream data. Unlike the legacy stall probe, it checks pending approvals
+// even when there is no in-flight task.
+func (p *HTTPPoller) PresenceTasks(ctx context.Context, d AgentDefinition) (approval, blocked, inFlight string, err error) {
+	base := "/agent/v1/workstreams/" + url.PathEscape(d.Workstream)
+	body, err := p.apiCall(ctx, d, http.MethodGet, base, nil)
+	if err != nil {
+		return "", "", "", err
+	}
+	var detail struct {
+		Tasks []stallTaskRow `json:"tasks"`
+	}
+	if err = json.Unmarshal(body, &detail); err != nil {
+		return "", "", "", err
+	}
+	label := func(t stallTaskRow) string {
+		if t.Number > 0 {
+			return strconv.Itoa(t.Number)
+		}
+		return t.ID
+	}
+	for _, task := range detail.Tasks {
+		if task.Assignee != d.AgentID {
+			continue
+		}
+		switch task.Status {
+		case "blocked":
+			if blocked == "" {
+				blocked = label(task)
+			}
+		case "in_flight":
+			if inFlight == "" {
+				inFlight = label(task)
+			}
+		}
+	}
+	approvalBody, err := p.apiCall(ctx, d, http.MethodGet, base+"/approvals/requests?mine=pending", nil)
+	if err != nil {
+		return "", "", "", err
+	}
+	var pending struct {
+		Requests []struct {
+			TaskID     string `json:"taskId"`
+			TaskNumber int    `json:"taskNumber"`
+		} `json:"requests"`
+	}
+	if err = json.Unmarshal(approvalBody, &pending); err != nil {
+		return "", "", "", err
+	}
+	if len(pending.Requests) > 0 {
+		approval = inFlight
+		if pending.Requests[0].TaskNumber > 0 {
+			approval = strconv.Itoa(pending.Requests[0].TaskNumber)
+		}
+		if approval == "" {
+			approval = pending.Requests[0].TaskID
+		}
+	}
+	return approval, blocked, inFlight, nil
 }
 func (p *HTTPPoller) StateReason(ctx context.Context, d AgentDefinition, state, reason string) error {
 	payload := map[string]string{"state": state, "reason": reason, "source": "daemon", "at": time.Now().UTC().Format(time.RFC3339Nano)}

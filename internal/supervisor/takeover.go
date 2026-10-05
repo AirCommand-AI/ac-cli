@@ -80,7 +80,9 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 		reportCtx, cancel := context.WithCancel(context.Background())
 		a.eventsCancel = cancel
 		states := make(chan string, 32)
-		go m.reportLoop(reportCtx, a.def, states)
+		if m.StateReport == nil {
+			go m.reportLoop(reportCtx, a.def, states)
+		}
 		go m.consumeEvents(a, d, a.eventsDone, states)
 		a.takenOver = false
 		a.takeoverConnected = false

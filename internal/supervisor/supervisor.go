@@ -16,6 +16,7 @@ import (
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
+	"github.com/AirCommand-AI/ac-cli/internal/agentstate"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
@@ -39,6 +40,7 @@ type Manager struct {
 	// PlaceAttached checks machine assignment and joins using the machine bearer.
 	// Empty workstream means the person has not placed the agent yet.
 	PlaceAttached func(context.Context, AgentDefinition) (organization, workstream string, err error)
+	StateReport   func(context.Context, AgentDefinition, agentstate.State, time.Time) error
 	// OperationGate serializes dashboard reconciliation with local lifecycle
 	// changes, without holding Manager.mu across network or git operations.
 	OperationGate  *sync.Mutex
@@ -79,8 +81,15 @@ type managed struct {
 	interruptFailures                                               map[string]int
 	delivered                                                       []string
 	wakes                                                           map[chan struct{}]struct{}
+	signals                                                         map[chan SessionSignal]struct{}
 	attachedConnected                                               bool
 	nextPlacement                                                   time.Time
+	presence                                                        agentstate.Snapshot
+	presenceReported                                                agentstate.State
+	lastPresenceReport                                              time.Time
+	nextPresenceRetry                                               time.Time
+	pendingPresenceNudges                                           []agentstate.Nudge
+	nextTaskCheck                                                   time.Time
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
@@ -691,12 +700,17 @@ func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 func (m *Manager) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	agents := make([]*managed, 0, len(m.agents))
+	for _, a := range m.agents {
+		agents = append(agents, a)
+	}
 	if m.stoppingHold {
-		for _, a := range m.agents {
+		for _, a := range agents {
 			if a.def.Kind == "attached" {
 				if err := m.tickAttached(ctx, a); err != nil {
 					log.Printf("supervisor: attached %s: %v", a.def.Name, err)
 				}
+				m.progressPresence(ctx, a)
 				continue
 			}
 			if a.takenOver && !a.takeoverConnected {
@@ -704,21 +718,20 @@ func (m *Manager) Tick(ctx context.Context) error {
 					return err
 				}
 			}
+			m.progressPresence(ctx, a)
 		}
 		return nil
-	}
-	agents := make([]*managed, 0, len(m.agents))
-	for _, a := range m.agents {
-		agents = append(agents, a)
 	}
 	for _, a := range agents {
 		if a.def.Kind == "attached" {
 			if err := m.tickAttached(ctx, a); err != nil {
 				log.Printf("supervisor: attached %s: %v", a.def.Name, err)
 			}
+			m.progressPresence(ctx, a)
 			continue
 		}
 		if a.def.Desired != "running" || a.def.State == "crashed" || a.def.State == "stopped-by-dashboard" || m.now().Before(a.nextRetry) {
+			m.progressPresence(ctx, a)
 			continue
 		}
 		if err := m.tickAgent(ctx, a); err != nil {
@@ -732,6 +745,7 @@ func (m *Manager) Tick(ctx context.Context) error {
 		}
 		a.inspectFailures = 0
 		a.nextRetry = time.Time{}
+		m.progressPresence(ctx, a)
 	}
 	return nil
 }

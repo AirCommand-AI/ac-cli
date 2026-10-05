@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentstate"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 	"syscall"
 	"time"
@@ -23,16 +24,17 @@ type tmuxActivity interface {
 func (m *Manager) IdleSince(ctx context.Context) (*time.Time, error) {
 	m.mu.Lock()
 	now := m.now()
-	busy := false
 	names := []string{}
+	tmuxAttached := false
+	agents := make([]agentstate.MachineAgent, 0, len(m.agents))
 	for _, a := range m.agents {
-		if a.def.Desired != "running" {
-			continue
+		kind := a.def.Kind
+		if kind == "" {
+			kind = "started"
 		}
-		if a.takenOver || a.driver != nil && a.driver.State().Streaming {
-			busy = true
-		}
-		if a.def.Mode == "tmux" {
+		streaming := a.driver != nil && a.driver.State().Streaming
+		agents = append(agents, agentstate.MachineAgent{Kind: kind, Physical: a.presence.State.Physical, InRun: a.presence.InRun, Streaming: streaming, Takeover: a.takenOver, DesiredRunning: a.def.Desired == "running", MachineStopped: a.machineStopped})
+		if kind != "attached" && a.def.Desired == "running" && a.def.Mode == "tmux" {
 			names = append(names, a.def.Name)
 		}
 	}
@@ -47,26 +49,14 @@ func (m *Manager) IdleSince(ctx context.Context) (*time.Time, error) {
 		if err != nil {
 			return nil, err
 		}
-		busy = busy || attached
+		tmuxAttached = attached
 		output = last
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if busy {
-		m.lastBusy = now
-		return nil, nil
-	}
-	if output.After(now) {
-		output = now
-	}
-	if output.After(m.lastBusy) {
-		m.lastBusy = output
-	}
-	if m.lastBusy.IsZero() {
-		m.lastBusy = now
-	}
-	idle := m.lastBusy.UTC()
-	return &idle, nil
+	idle, last := agentstate.MachineIdle(now, m.lastBusy, output, agents, tmuxAttached)
+	m.lastBusy = last
+	return idle, nil
 }
 
 func (m *Manager) AgentsStopped() bool {

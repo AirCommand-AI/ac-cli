@@ -52,13 +52,19 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 		AgentID string `json:"agentId"`
 		State   string `json:"state"`
 		Mode    string `json:"mode"`
+		Kind    string `json:"kind"`
 	}, 0, len(agents))
 	for _, a := range agents {
+		kind := a.Kind
+		if kind == "" {
+			kind = "started"
+		}
 		rows = append(rows, struct {
 			AgentID string `json:"agentId"`
 			State   string `json:"state"`
 			Mode    string `json:"mode"`
-		}{a.AgentID, a.State, a.Mode})
+			Kind    string `json:"kind"`
+		}{a.AgentID, a.State, a.Mode, kind})
 	}
 	body, err := json.Marshal(struct {
 		Version       string     `json:"aircomVersion"`

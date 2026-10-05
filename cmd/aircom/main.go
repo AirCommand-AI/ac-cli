@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/agentstate"
 	"github.com/AirCommand-AI/ac-cli/internal/app"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/daemon"
@@ -51,6 +52,13 @@ func main() {
 		}
 		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		manager := supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll)
+		manager.StateReport = func(ctx context.Context, d supervisor.AgentDefinition, state agentstate.State, at time.Time) error {
+			cred, err := store.FindByAgent(d.Workstream, d.AgentID)
+			if err != nil {
+				return err
+			}
+			return (agentstate.Reporter{BaseURL: dashboardURL, Client: httpClient, Token: cred.APIToken}).Report(ctx, d.Workstream, state, at)
+		}
 		manager.OperationGate = operationGate
 		api := machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		manager.PlaceAttached = func(ctx context.Context, d supervisor.AgentDefinition) (string, string, error) {

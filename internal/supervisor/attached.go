@@ -23,11 +23,12 @@ func SessionProcessAlive(pid int, start string) bool {
 // AgentEvent is the daemon-local input to the state engine. A notification
 // carries no message body, only an activity/lifecycle signal.
 type AgentEvent struct {
-	AgentID string
-	Kind    string
-	Logical string
-	At      time.Time
-	Reason  string
+	AgentID    string
+	Kind       string
+	Logical    string
+	TaskNumber string
+	At         time.Time
+	Reason     string
 }
 type AgentEvents interface {
 	SubscribeAgentEvents() (<-chan AgentEvent, func())
@@ -51,7 +52,10 @@ func (m *Manager) SubscribeAgentEvents() (<-chan AgentEvent, func()) {
 	}
 }
 func (m *Manager) emitAttached(a *managed, kind, logical, reason string) {
-	e := AgentEvent{AgentID: a.def.AgentID, Kind: kind, Logical: logical, Reason: reason, At: m.now()}
+	m.emitAgentEvent(a, AgentEvent{AgentID: a.def.AgentID, Kind: kind, Logical: logical, Reason: reason, At: m.now()})
+}
+func (m *Manager) emitAgentEvent(a *managed, e AgentEvent) {
+	m.stepPresence(a, e)
 	for ch := range m.agentEvents {
 		select {
 		case ch <- e:
@@ -365,20 +369,14 @@ func (m *Manager) tickAttached(ctx context.Context, a *managed) error {
 }
 
 func (m *Manager) SessionEvent(agentID, kind, logical string, at time.Time) error {
-	if at.IsZero() {
-		at = m.now()
-	}
+	// Client timestamps are observational; local receipt is the liveness clock.
+	at = m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.agents {
 		if a.def.AgentID == agentID && a.def.Kind == "attached" && a.def.State == "running" {
 			e := AgentEvent{AgentID: a.def.AgentID, Kind: kind, Logical: logical, At: at}
-			for ch := range m.agentEvents {
-				select {
-				case ch <- e:
-				default:
-				}
-			}
+			m.emitAgentEvent(a, e)
 			return nil
 		}
 	}
@@ -472,6 +470,42 @@ func (m *Manager) SubscribeWakes(agentID string) (<-chan struct{}, func(), error
 		}
 	}
 	return nil, nil, os.ErrNotExist
+}
+
+type SessionSignal struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+func (m *Manager) SubscribeSignals(agentID string) (<-chan SessionSignal, func(), error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.agents {
+		if a.def.AgentID == agentID && a.def.Kind == "attached" {
+			if a.signals == nil {
+				a.signals = make(map[chan SessionSignal]struct{})
+			}
+			ch := make(chan SessionSignal, 16)
+			a.signals[ch] = struct{}{}
+			return ch, func() {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+				if _, ok := a.signals[ch]; ok {
+					delete(a.signals, ch)
+					close(ch)
+				}
+			}, nil
+		}
+	}
+	return nil, nil, os.ErrNotExist
+}
+func (m *Manager) sendAttachedSignal(a *managed, kind, text string) {
+	for ch := range a.signals {
+		select {
+		case ch <- SessionSignal{Type: kind, Text: text}:
+		default:
+		}
+	}
 }
 func (m *Manager) Attached(agentID string) (AgentDefinition, bool) {
 	m.mu.Lock()
