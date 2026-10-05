@@ -23,7 +23,6 @@ type sessionManager interface {
 	Attached(string) (sup.AgentDefinition, bool)
 	SessionLookup(string) (sup.AgentDefinition, bool)
 	SubscribeWakes(string) (<-chan struct{}, func(), error)
-	SubscribeSignals(string) (<-chan sup.SessionSignal, func(), error)
 	SessionAck(string, int64) error
 	SessionEvent(string, string, string, time.Time) error
 	Detach(string, string) error
@@ -156,11 +155,11 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 		sessionFailure(conn, "invalid", fmt.Errorf("socket peer is not a descendant of attached session"))
 		return
 	}
-	if req.Op == "session.subscribe" && (d.State == "stopped" && d.Reason == "pi conversation changed" || req.SessionID != "" && d.SessionID != "" && req.SessionID != d.SessionID) {
+	if req.Op == "session.subscribe" && (d.State == "stopped" && d.Reason == "pi conversation changed" || req.SessionID != "" && req.SessionID != d.SessionID) {
 		servePendingSubscribe(ctx, conn, m, req.SessionPID, req.SessionID)
 		return
 	}
-	if req.SessionID != "" && d.SessionID != "" && req.SessionID != d.SessionID {
+	if req.SessionID != "" && req.SessionID != d.SessionID {
 		sessionFailure(conn, "invalid", fmt.Errorf("sessionId does not match attached session"))
 		return
 	}
@@ -236,7 +235,7 @@ func servePendingSubscribe(ctx context.Context, conn net.Conn, m sessionManager,
 	find := func() (sup.AgentDefinition, bool) {
 		list, _ := mListAttached(m)
 		for _, d := range list {
-			if d.SessionPID == pid && d.SessionStart == start && d.State == "running" && (sessionID == "" || d.SessionID == "" || sessionID == d.SessionID) {
+			if d.SessionPID == pid && d.SessionStart == start && d.State == "running" && (sessionID == "" || sessionID == d.SessionID) {
 				return d, true
 			}
 		}
@@ -302,12 +301,6 @@ func serveWakeStream(ctx context.Context, conn net.Conn, m sessionManager, d sup
 		return
 	}
 	defer unsubscribe()
-	signals, stopSignals, err := m.SubscribeSignals(d.AgentID)
-	if err != nil {
-		sessionFailure(conn, "not_found", err)
-		return
-	}
-	defer stopSignals()
 	enc := json.NewEncoder(conn)
 	if err = enc.Encode(map[string]any{"type": "connect", "agentId": d.AgentID, "workstream": d.Workstream, "offset": d.Offset}); err != nil {
 		return
@@ -365,10 +358,6 @@ func serveWakeStream(ctx context.Context, conn net.Conn, m sessionManager, d sup
 		case <-gone:
 			return
 		case <-wakes:
-		case signal := <-signals:
-			if err = enc.Encode(signal); err != nil {
-				return
-			}
 		case <-time.After(time.Second):
 		}
 		current, ok := m.Attached(d.AgentID)

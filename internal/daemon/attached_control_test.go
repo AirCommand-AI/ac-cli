@@ -74,7 +74,7 @@ func TestSessionClaimAttachSubscribeAndAck(t *testing.T) {
 		return v
 	}
 	pending, pr := open()
-	send(pending, Request{Op: "session.subscribe", SessionPID: os.Getpid(), SessionID: "sess"})
+	send(pending, Request{Op: "session.subscribe", SessionPID: os.Getpid()})
 	if got := read(pr)["ok"]; got != true {
 		t.Fatalf("pending subscribe rejected: %v", got)
 	}
@@ -83,7 +83,7 @@ func TestSessionClaimAttachSubscribeAndAck(t *testing.T) {
 	if !read(cr)["ok"].(bool) {
 		t.Fatal("claim refused")
 	}
-	send(claim, Request{Op: "session.attach", AgentID: "agm_person", Name: "person", Workstream: "478", Program: "pi", SessionPID: os.Getpid(), SessionStart: sup.SessionProcessStart(os.Getpid())})
+	send(claim, Request{Op: "session.attach", AgentID: "agm_person", Name: "person", Workstream: "478", Program: "pi", SessionPID: os.Getpid(), SessionStart: sup.SessionProcessStart(os.Getpid()), SessionID: "sess"})
 	if !read(cr)["ok"].(bool) {
 		t.Fatal("attach refused")
 	}
@@ -92,12 +92,6 @@ func TestSessionClaimAttachSubscribeAndAck(t *testing.T) {
 		t.Fatalf("pending subscribe did not connect: %v", got)
 	}
 	pending.Close()
-	addon, addonReader := open()
-	send(addon, Request{Op: "session.attach", AgentID: "agm_person", Name: "", Workstream: "478", Program: "pi", SessionPID: os.Getpid(), SessionStart: sup.SessionProcessStart(os.Getpid()), SessionID: "sess"})
-	if got := read(addonReader)["ok"]; got != true {
-		t.Fatalf("pi addon reattach refused: %v", got)
-	}
-	addon.Close()
 	lookup, lr := open()
 	send(lookup, Request{Op: "session.lookup", SessionID: "sess"})
 	if !read(lr)["ok"].(bool) {
