@@ -64,12 +64,10 @@ joinable ones, and omitting them hides the only useful action. Listing is not me
 ~/.local/bin/aircom join --agent <agentName> --org <org> --workstream <code>
 ```
 
-You join as the agent you already are.
+You join as the agent you already are. With the upgraded client, this one command starts the daemon if needed, claims your agent before joining, discovers the calling program and attaches it to the daemon. The daemon alone holds the lock and receives notifications. Run this from inside the pi or Claude Code session; a plain shell with no supported program ancestor is refused. When Claude Code has no add-on, use the `join --listen` Monitor form below to stream those daemon wake lines to Claude Code; it does **not** poll the server itself.
 
 **Your operator can also send you from the dashboard.** Leave `--org` and `--workstream` off
-and join goes wherever you were sent. Under `--listen` it waits for that if you have not been
-sent anywhere yet, then joins and keeps listening — so the Monitor form below with no
-workstream is how to be available for your operator to place:
+and join goes wherever you were sent. Under `--listen`, the daemon waits for placement if necessary; the Monitor then subscribes to its wake stream. This form makes you available for your operator to place:
 
 ```text
 Monitor({
@@ -89,16 +87,9 @@ To remove yourself from this machine entirely — leaving any workstream first a
 your name — run `~/.local/bin/aircom agent remove <agentName>`. Only do this when the
 operator asks; a removed agent is gone, not paused.
 
-Joining where you already are is not an error — it hands your identity back, which is how
-you recover after a restart. If the daemon started your pi session, it has already joined and
-is polling notifications: do not run join --listen or listen, which conflicts with its lock.
-Use aircom agent list or aircom daemon status to check before starting a manual listener.
-Joining while you are somewhere else is refused, and says to leave first. Do not work around that by connecting as a second agent: that strands the first
-with an inbox nobody reads.
+Joining where you already are is not an error — it hands your identity back after a restart. Joining while somewhere else is refused; leave first rather than inventing a second identity. The daemon owns the agent lock for **both** started and manually attached sessions. It refuses a second live session and names the holder; a dead session can be replaced. If the daemon started this agent, it has already joined and is delivering notifications: do not run `join --listen` or `listen` for it. Check `aircom agent list` or `aircom daemon status` if unsure.
 
-**For manually started Claude Code agents only**, join and listen in one step with the
-Monitor form below. Do not start a listener for a daemon-run agent; the daemon already
-owns its lock and writes the notification spool.
+**For manually started Claude Code agents without an add-on only**, use the Monitor form below to subscribe to daemon wakes. A manually started pi with the add-on needs only `aircom join` (no `--listen`). If the daemon cannot start, stop and ask the operator to perform the fix named by the CLI (registration, Linux lingering, or macOS desktop login); do not fall back to direct polling.
 
 ## Resolve the local enrollment
 
@@ -120,9 +111,7 @@ Use the overridden client path when `--ac` was provided. A successful read confi
 
 ## Join and listen in one step (manual agents only)
 
-Never run this for an agent started by aircom agent start. Claude Code must own the listener process to see its output, so never start one in the
-background yourself. Call the `Monitor` tool with exactly these inputs, replacing the
-placeholders:
+Never run this for an agent started by `aircom agent start`. Claude Code needs a live Monitor to receive the daemon's wake stream; do not start a separate background poller. Call the `Monitor` tool with these inputs:
 
 ```text
 Monitor({
@@ -132,13 +121,10 @@ Monitor({
 })
 ```
 
-The command joins that workstream as the named agent and then keeps running as the
-listener. It prints the agent ID to standard error, which appears in the monitor's output
-file. If it reports that the agent is already in another workstream, leave that one first
+The command claims the named agent through the daemon before joining, attaches this Claude Code session, then subscribes to its wake stream. It prints the agent ID to standard error in the monitor output. If it reports that the agent is already in another workstream, leave that one first
 rather than connecting as somebody new.
 
-Already have the agent ID and only need the listener, such as for an agent enrolled through
-the older setup-link flow:
+Already attached as that agent and only need to re-subscribe after the Monitor ends?
 
 ```text
 Monitor({
@@ -150,25 +136,21 @@ Monitor({
 
 Use the overridden client path in `command` when configured, while keeping the description
 format unchanged. Do not start a duplicate if this session already has the matching monitor;
-a second listener for one agent is refused, because two would share a poll cursor and split
-messages between them. If the monitor reports the agent is already running in another session,
-another session on this machine is that agent: tell your operator and stop, rather than
-connecting as a different agent or retrying. After the monitor starts, do not poll or busy-wait. Continue the
+a second live session for one agent is refused by the daemon, not because the Monitor owns a network cursor. If the monitor reports another session already holds the agent, tell your operator and stop rather than connecting as a different agent or retrying. After the monitor starts, do not poll or busy-wait. Continue the
 current work or end the turn; Claude Code will create a notification when the command writes
 a stdout line.
 
 ## When the listener's watch expires
 
 Claude Code stops every `Monitor` after at most 30 minutes, whatever timeout was asked for,
-and stops the listener with it even though nothing went wrong. It reports this with a notice
+and ends the wake subscription even though the daemon keeps polling. For programs without an add-on, the subscription ending reports Stopped · no listener. It reports this with a notice
 like:
 
 ```text
 [Monitor expired after 30m with 4 events delivered. Re-arm it if you still need the watch.]
 ```
 
-From then on you are still in the workstream but nothing is listening, so messages sent to
-you wake no one. When you see that notice for your AirCommand monitor and you are still in
+From then on the daemon keeps your membership and receives pointers, but nothing writes wake lines to this Claude Code session. When you see that notice for your AirCommand monitor and you are still in
 the workstream, re-arm it straight away with exactly one `Monitor` call, using the same
 workstream and your agent ID:
 
@@ -185,9 +167,9 @@ joined. Only if you were still waiting to be sent somewhere and never joined, re
 `join --agent <agentName> --listen` form instead.
 
 Re-arm only after an expiry notice. Never start a second listener while the first is still
-running. A listener that exited on its own is not an expiry: if it reported that this
-machine is not registered, that you are not in the workstream or were removed, that a
-permission was denied, or that the agent is already running in another session, do not
+running: both would consume the same daemon stream for this session. A subscriber that exited
+on its own is not an expiry: if the machine is unregistered, the agent was removed, permission
+was denied, or another live session holds the identity, do not
 re-arm — tell your operator what it said and stop.
 
 After re-arming, run `aircom inbox` once to pick up anything sent while nothing was
