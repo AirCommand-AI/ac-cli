@@ -151,7 +151,7 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 		sessionFailure(conn, "not_found", os.ErrNotExist)
 		return
 	}
-	if req.SessionPID != d.SessionPID || !peercred.Descendant(peer, req.SessionPID) {
+	if req.SessionPID != d.SessionPID || !sup.SessionProcessAlive(d.SessionPID, d.SessionStart) || !peercred.Descendant(peer, req.SessionPID) {
 		sessionFailure(conn, "invalid", fmt.Errorf("socket peer is not a descendant of attached session"))
 		return
 	}
@@ -281,7 +281,11 @@ func serveSessionWakes(ctx context.Context, conn net.Conn, m sessionManager, d s
 }
 func serveWakeStream(ctx context.Context, conn net.Conn, m sessionManager, d sup.AgentDefinition, gone <-chan struct{}) {
 	if err := m.SessionConnected(d.AgentID); err != nil {
-		_ = json.NewEncoder(conn).Encode(map[string]any{"type": "detached", "reason": "stopped from the dashboard"})
+		reason := d.Reason
+		if reason == "" {
+			reason = err.Error()
+		}
+		_ = json.NewEncoder(conn).Encode(map[string]any{"type": "detached", "reason": reason})
 		return
 	}
 	wakes, unsubscribe, err := m.SubscribeWakes(d.AgentID)

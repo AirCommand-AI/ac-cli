@@ -800,6 +800,7 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 	feed, err := m.Poll.Fetch(ctx, a.def, cursor, has)
 	if errors.Is(err, ErrAgentStopped) {
 		if a.def.Kind == "attached" {
+			changed := a.def.State != "stopped-by-dashboard"
 			a.def.State = "stopped-by-dashboard"
 			a.def.Reason = "stopped from the dashboard"
 			a.nextPoll = m.now().Add(30 * time.Second)
@@ -809,7 +810,9 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 				default:
 				}
 			}
-			m.emitAttached(a, "dashboard_stop", "", a.def.Reason)
+			if changed {
+				m.emitAttached(a, "dashboard_stop", "", a.def.Reason)
+			}
 			return m.save(a) // Never stop or signal the person's process.
 		}
 		a.def.State = "stopped-by-dashboard"

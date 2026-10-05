@@ -89,7 +89,14 @@ func (m *Manager) Claim(agentID, workstream string, peerPID int) (*Claim, error)
 		if a.def.AgentID != agentID {
 			continue
 		}
-		if a.def.Kind != "attached" || a.def.State == "running" {
+		if a.def.Kind != "attached" {
+			pid := a.pid
+			if a.driver != nil {
+				pid = a.driver.State().PID
+			}
+			return nil, fmt.Errorf("%w by daemon session %d (pi)", ErrSessionHeld, pid)
+		}
+		if a.def.State == "running" {
 			return nil, fmt.Errorf("%w by daemon session %d (%s)", ErrSessionHeld, a.def.SessionPID, a.def.Program)
 		}
 		prior := a.def
@@ -204,6 +211,12 @@ func (m *Manager) Attach(claim *Claim, p Attachment) error {
 	offset := previous.Offset
 	if previous.Workstream != p.Workstream {
 		offset = 0
+		// A cursor from another workstream cannot replay that stream's wakes.
+		if previous.Workstream != "" {
+			if info, err := os.Stat(m.SpoolPath(p.AgentID)); err == nil {
+				offset = info.Size()
+			}
+		}
 	}
 	a.def = AgentDefinition{Version: 1, Kind: "attached", AgentID: p.AgentID, Name: name, Workstream: p.Workstream, Desired: "running", State: "running", Mode: "attached", SessionPID: p.SessionPID, SessionStart: p.SessionStart, Program: p.Program, SessionID: p.SessionID, Offset: offset}
 	if p.Program == "other" {
@@ -251,6 +264,9 @@ func (m *Manager) SessionConnected(agentID string) error {
 				return fmt.Errorf("session stopped from dashboard")
 			}
 			if a.def.Program != "other" {
+				if a.def.State != "running" {
+					return fmt.Errorf("session is stopped: %s", a.def.Reason)
+				}
 				return nil
 			}
 			a.attachedConnected = true

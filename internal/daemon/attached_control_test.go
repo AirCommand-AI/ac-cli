@@ -142,4 +142,29 @@ func TestSessionClaimAttachSubscribeAndAck(t *testing.T) {
 	if d, found := m.SessionLookup("new-session"); !found || d.SessionPID != os.Getpid() {
 		t.Fatal("sessionId not updated on idempotent attach")
 	}
+	events, cancelEvents := m.SubscribeAgentEvents()
+	defer cancelEvents()
+	activity, activityReader := open()
+	send(activity, Request{Op: "session.event", SessionPID: os.Getpid(), Kind: "run_start", At: time.Now().UTC().Format(time.RFC3339Nano)})
+	if result := read(activityReader)["ok"]; result != true {
+		t.Fatalf("event rejected: %v", result)
+	}
+	activity.Close()
+	select {
+	case got := <-events:
+		if got.Kind != "run_start" || got.AgentID != "agm_person" {
+			t.Fatalf("unexpected event: %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event not exposed to state engine")
+	}
+	detach, dr := open()
+	send(detach, Request{Op: "session.detach", SessionPID: os.Getpid()})
+	if result := read(dr)["ok"]; result != true {
+		t.Fatalf("detach rejected: %v", result)
+	}
+	detach.Close()
+	if d, _ := m.Attached("agm_person"); d.State != "stopped" || d.Reason != "pi closed" {
+		t.Fatalf("detach state: %+v", d)
+	}
 }
