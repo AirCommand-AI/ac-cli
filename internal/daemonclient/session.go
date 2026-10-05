@@ -38,10 +38,6 @@ type SessionLookup struct {
 	Workstream string `json:"workstream"`
 }
 
-func (c Client) Claim(ctx context.Context, agentID, workstream string) error {
-	return c.call(ctx, map[string]any{"op": "agent.claim", "agentId": agentID, "workstream": workstream}, nil)
-}
-
 // ClaimSession keeps the claiming connection alive across the remote Join and
 // local Attach. The daemon releases an un-attached claim when this closes.
 type SessionClaim interface {

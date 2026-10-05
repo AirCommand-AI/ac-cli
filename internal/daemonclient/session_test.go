@@ -54,9 +54,6 @@ func TestSessionOpsUseDaemonProtocol(t *testing.T) {
 		return peer, nil
 	}}
 	ctx := context.Background()
-	if err := client.Claim(ctx, "agm_test", "478"); err != nil {
-		t.Fatal(err)
-	}
 	if err := client.AttachSession(ctx, SessionAttach{AgentID: "agm_test", Workstream: "478", SessionPID: 42, SessionStart: "today", Program: "pi"}); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +64,7 @@ func TestSessionOpsUseDaemonProtocol(t *testing.T) {
 	if err != nil || result.AgentID != "agm_test" {
 		t.Fatalf("lookup: %+v %v", result, err)
 	}
-	for _, want := range []string{"agent.claim", "session.attach", "session.event", "session.lookup"} {
+	for _, want := range []string{"session.attach", "session.event", "session.lookup"} {
 		if got := <-requests; got["op"] != want {
 			t.Fatalf("%s: %+v", want, got)
 		}

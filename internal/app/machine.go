@@ -1153,15 +1153,15 @@ func (a *App) join(arguments []string) error {
 		return storageError(err, "Credential storage is unavailable.")
 	}
 
+	client := a.sessionControl()
+	if err := a.ensureDaemon(client); err != nil {
+		return err
+	}
 	agent, err := a.resolveAgent(agentReference)
 	if err != nil {
 		return err
 	}
 	if _, err := discoverSession(os.Getpid(), a.ProcessSnapshot); err != nil {
-		return err
-	}
-	client := a.sessionControl()
-	if err := a.ensureDaemon(client); err != nil {
 		return err
 	}
 	// Keep this connection open across the remote Join: a disconnected claim
@@ -1176,7 +1176,7 @@ func (a *App) join(arguments []string) error {
 		if err := a.attachSession(claim, agent.AgentID, agent.Name, ""); err != nil {
 			return err
 		}
-		fmt.Fprintf(a.errorWriter(), "Waiting for %s to be placed by a person. The daemon owns the connection.\n", agent.Name)
+		fmt.Fprintf(a.errorWriter(), "Agent ID: %s\nWaiting for %s to be placed by a person. The daemon owns the connection.\n", agent.AgentID, agent.Name)
 		if listen {
 			return a.listenDaemon("", agent.AgentID)
 		}
@@ -1417,7 +1417,7 @@ func (a *App) machineCredential() (credentials.Machine, error) {
 	machine, err := a.Store.LoadMachine()
 	if err != nil {
 		if err == credentials.ErrNoMachineLogin {
-			return credentials.Machine{}, &publicError{message: "This machine is not registered with AirCommand. Run aircom init."}
+			return credentials.Machine{}, &publicError{message: "This machine is not registered with AirCommand. Ask a person to run aircom init."}
 		}
 		return credentials.Machine{}, &publicError{message: "Unable to read this machine's login."}
 	}

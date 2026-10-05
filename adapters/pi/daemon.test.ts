@@ -10,7 +10,7 @@ test("daemon call and session subscription decode frames", async () => {
  const server=createServer(socket=>{let buffer="";socket.on("data",bytes=>{buffer+=bytes.toString();if(!buffer.includes("\n"))return;
   const req=JSON.parse(buffer.slice(0,buffer.indexOf("\n"))) as {op:string};
   if(req.op==="session.lookup")socket.end('{"ok":true,"data":{"agentId":"agm_test","workstream":"478"}}\n');
-  else socket.end('{"ok":true}\n{"type":"connect","agentId":"agm_test","offset":8}\n{"type":"detached","reason":"stopped"}\n');
+  else socket.end('{"ok":true}\n{"type":"future-event","other":"ignored"}\n{"type":"connect","agentId":"agm_test","offset":8}\n{"type":"detached","reason":"stopped"}\n');
  })});
  try{await new Promise<void>(resolve=>server.listen(path,resolve));
   expect(await daemonCall(path,{op:"session.lookup",sessionId:"conv"})).toEqual({agentId:"agm_test",workstream:"478"});

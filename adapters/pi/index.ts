@@ -90,6 +90,7 @@ interface Enrollment {
 interface StoredCredential {
 	workstreamCode?: unknown;
 	agentId?: unknown;
+	agentName?: unknown;
 }
 
 interface CredentialFile {
@@ -278,7 +279,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		name: CONNECT_TOOL_NAME,
 		label: "Connect AirCommand",
 		description:
-			"Connect this running pi session to the AirCommand agent identified by an agent ID returned from aircom join. In terminal mode, starts watching only that agent's notification spool; in headless mode the daemon delivers wakes.",
+			"Recover this pi session's AirCommand connection. Normally aircom join and the daemon connect automatically; this tool is for manual recovery.",
 		promptSnippet: "Join an AirCommand workstream, connect this session, and use messages and operator-authorized tasks",
 		// These persist for the session, so the per-wake notification can stay
 		// terse instead of restating the whole procedure on every message.
@@ -288,9 +289,9 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			"For a manually started agent, create your identity once with aircom agent create <agentName>. Pick a name your operator will recognise and keep using it. This joins nothing. See who else is here with aircom agent list. If the daemon started you, your identity and workstream are already set up; do not create another agent.",
 			"Every workstream lives in an organization and this machine may reach several, so name one. Run: aircom orgs, then aircom workstreams --org <org> --agent <agentName>. --org takes the organization's name or its identifier; --agent marks the workstream you are in as yours, while other agents on this machine are named separately and their workstreams are not yours until you join. Report every workstream, not only the ones already joined — the rest are the joinable ones, and omitting them hides the only useful action.",
 			"To join, run: aircom join --agent <agentName> --org <org> --workstream <code>. You join as the agent you already are. Joining is what allows sending — listing a workstream grants nothing on its own.",
-			"For a manually started agent, your operator can send you to a workstream from the dashboard. Run aircom join --agent <agentName> --listen without org or workstream to wait for placement. Do not run this for a daemon-run agent: the daemon owns its lock and polls notifications itself.",
+			"For a manually started pi, an operator can place your agent from the dashboard. Run aircom join --agent <agentName> without a workstream once; the daemon waits for placement. Do not add --listen inside pi.",
 			"You are in at most one workstream at a time. To move, run aircom leave --agent <agentName> first. Joining where you already are is not an error and hands your identity back, which is how you recover after a restart; joining while you are somewhere else is refused. Do not work around that by connecting as a second agent, which strands the first with an inbox nobody reads.",
-			"Prefer the machine daemon for pi agents: a person starts one with aircom agent create <name> --org <org> --workstream <code> --repo <owner/repo> (or Create agent on the dashboard device page); the daemon reports working, idle and stalled, restarts it, and lets the dashboard stop and resume it. Start pi by hand only where the daemon is not available.",
+			"The machine daemon is required for both hand-started and daemon-started agents. AirCommand attaches a hand-started pi without taking ownership of its process; it never closes your pi when the dashboard stops the agent. Agents started by the daemon can be started and stopped on the Machines page.",
 			"AirCommand uses the machine daemon for every agent. Run aircom join --agent <name> --org <org> --workstream <code> once from this pi; the CLI attaches this pi process and the add-on subscribes to the daemon automatically. Do not start a separate listener for pi. join --listen is only for programs without the add-on.",
 			"The add-on connects this pi session when the daemon announces the attachment. Resuming a known conversation reconnects automatically; a new conversation is never automatically joined. Do not create a second agent to bypass a held session.",
 			"After connecting, run aircom inbox once. The add-on replays unacknowledged daemon-spool entries, but an earlier message may still be unread; only inbox confirms the current server state.",
@@ -372,7 +373,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			case "connect":
 				if(message.agentId && message.workstream){
 					try{connect(validateEnrollment({agentId:message.agentId,workstreamCode:message.workstream}),ctx,message.offset??0)}catch(error){notify(ctx,errorMessage(error),"warning")}
-					if(conversationID)void daemonCall(daemonSocket,{op:"session.attach",agentId:message.agentId,name:"",workstream:message.workstream,sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId:conversationID}).catch(()=>notify(ctx,"AirCommand could not bind this pi conversation for resume.","warning"));
+					if(conversationID)void daemonCall(daemonSocket,{op:"session.attach",agentId:message.agentId,name:storedAgentName(message.agentId),workstream:message.workstream,sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId:conversationID}).catch(()=>notify(ctx,"AirCommand could not bind this pi conversation for resume.","warning"));
 				}
 				break;
 			case "wake":activeConnection?.tail.drain?.();break;
@@ -403,7 +404,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		try {
 			const prior=await daemonCall<{agentId?:string;workstream?:string;name?:string}>(daemonSocket,{op:"session.lookup",sessionId});
 			if(prior?.agentId){
-				await daemonCall(daemonSocket,{op:"session.attach",agentId:prior.agentId,name:prior.name||"",workstream:prior.workstream||"",sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId});
+				await daemonCall(daemonSocket,{op:"session.attach",agentId:prior.agentId,name:prior.name||storedAgentName(prior.agentId),workstream:prior.workstream||"",sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId});
 				if(prior.workstream && !requestedAgent)connect(validateEnrollment({agentId:prior.agentId,workstreamCode:prior.workstream}),ctx);
 			}
 		}catch{ /* A new conversation or stopped daemon has no attachment. */ }
@@ -464,6 +465,14 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 			// Session shutdown remains best-effort and idempotent.
 		}
 	});
+}
+
+function storedAgentName(agentId:string):string {
+ try{const data=JSON.parse(readFileSync(join(agentDirectory(agentId),"credentials.json"),"utf8")) as CredentialFile;
+ const record=isRecord(data.agents)?data.agents[agentId]:undefined;
+ if(isRecord(record)&&typeof record.agentName==="string")return record.agentName;
+ }catch{/* Agent may be waiting for placement without a credential. */}
+ return "";
 }
 
 function enrollmentFromCredential(agentIDInput: string): Enrollment {
