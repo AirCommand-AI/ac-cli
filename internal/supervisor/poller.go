@@ -3,13 +3,11 @@ package supervisor
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +15,6 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/agentstate"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
-	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
 
 // HTTPPoller uses the shared agent API wire contract. BaseURL is the same
@@ -85,8 +82,7 @@ func (p *HTTPPoller) Fetch(ctx context.Context, d AgentDefinition, cursor string
 	return Feed{Notifications: feed.Notifications, Cursor: *feed.Cursor, PollAfter: agentapi.PollDelay(feed.PollAfterSeconds)}, nil
 }
 
-// ReportState sends the K1 snapshot through this agent's credential. T5 will
-// replace the legacy State/StateReason callers with the state engine.
+// ReportState sends the K1 snapshot through this agent's credential.
 func (p *HTTPPoller) ReportState(ctx context.Context, d AgentDefinition, state agentstate.State, at time.Time) error {
 	if p.Store == nil || p.Client == nil {
 		return fmt.Errorf("state API is not configured")
@@ -96,37 +92,6 @@ func (p *HTTPPoller) ReportState(ctx context.Context, d AgentDefinition, state a
 		return err
 	}
 	return (agentstate.Reporter{BaseURL: p.BaseURL, Client: p.Client, Token: cred.APIToken}).Report(ctx, d.Workstream, state, at)
-}
-
-// State reports headless pi event-derived state through the agent credential.
-func (p *HTTPPoller) State(ctx context.Context, d AgentDefinition, state string) error {
-	if p.Store == nil || p.Client == nil {
-		return fmt.Errorf("state API is not configured")
-	}
-	cred, err := p.Store.FindByAgent(d.Workstream, d.AgentID)
-	if err != nil {
-		return err
-	}
-	payload, err := json.Marshal(map[string]string{"state": state, "source": "daemon", "at": time.Now().UTC().Format(time.RFC3339Nano)})
-	if err != nil {
-		return err
-	}
-	base := strings.TrimRight(p.BaseURL, "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, base+"/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/agents/me/state", bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+cred.APIToken)
-	req.Header.Set("Content-Type", "application/json")
-	response, err := p.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("state API returned HTTP %d", response.StatusCode)
-	}
-	return nil
 }
 
 type APIStatusError struct{ Status int }
@@ -174,137 +139,9 @@ func (p *HTTPPoller) apiCall(ctx context.Context, d AgentDefinition, method, pat
 	return result, nil
 }
 
-type stallTaskRow struct {
-	ID, Status, Assignee, Milestone, CreatedAt string
-	Number, Position                           int
-}
-type stallMilestoneRow struct {
-	Name     string
-	Position int
-}
-
-// Mirrors overview.go's milestone groups followed by position (0 last),
-// task number, createdAt and ID. Only assigned in-flight tasks are candidates;
-// all tasks still determine group order.
-func chooseInFlightTask(rows []stallTaskRow, milestones []stallMilestoneRow, agentID string) (InFlightTask, bool) {
-	groups := map[string]int{}
-	for _, row := range rows {
-		key := strings.TrimSpace(row.Milestone)
-		if n, ok := groups[key]; !ok || row.Number < n {
-			groups[key] = row.Number
-		}
-	}
-	ordered := make(map[string]int)
-	for _, m := range milestones {
-		ordered[m.Name] = m.Position
-	}
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		a, b := keys[i], keys[j]
-		if a == "" || b == "" {
-			return a != ""
-		}
-		ap, aok := ordered[a]
-		bp, bok := ordered[b]
-		if aok != bok {
-			return aok
-		}
-		if aok && ap != bp {
-			return ap < bp
-		}
-		if groups[a] != groups[b] {
-			return groups[a] < groups[b]
-		}
-		return a < b
-	})
-	rank := make(map[string]int, len(keys))
-	for i, k := range keys {
-		rank[k] = i
-	}
-	candidates := make([]stallTaskRow, 0)
-	for _, row := range rows {
-		if row.Assignee == agentID && row.Status == "in_flight" {
-			candidates = append(candidates, row)
-		}
-	}
-	if len(candidates) == 0 {
-		return InFlightTask{}, false
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		a, b := candidates[i], candidates[j]
-		ar, br := rank[strings.TrimSpace(a.Milestone)], rank[strings.TrimSpace(b.Milestone)]
-		if ar != br {
-			return ar < br
-		}
-		if a.Position == 0 && b.Position != 0 {
-			return false
-		}
-		if b.Position == 0 && a.Position != 0 {
-			return true
-		}
-		if a.Position != b.Position {
-			return a.Position < b.Position
-		}
-		if a.Number != b.Number {
-			return a.Number < b.Number
-		}
-		if a.CreatedAt != b.CreatedAt {
-			return a.CreatedAt < b.CreatedAt
-		}
-		return a.ID < b.ID
-	})
-	first := candidates[0]
-	return InFlightTask{ID: first.ID, Number: first.Number, Position: first.Position}, true
-}
-
-func (p *HTTPPoller) InFlight(ctx context.Context, d AgentDefinition) (InFlightTask, bool, bool, error) {
-	base := "/agent/v1/workstreams/" + url.PathEscape(d.Workstream)
-	body, err := p.apiCall(ctx, d, http.MethodGet, base, nil)
-	if err != nil {
-		return InFlightTask{}, false, false, err
-	}
-	var detail struct {
-		Tasks []stallTaskRow `json:"tasks"`
-	}
-	if err := json.Unmarshal(body, &detail); err != nil {
-		return InFlightTask{}, false, false, err
-	}
-	selected, found := chooseInFlightTask(detail.Tasks, nil, d.AgentID)
-	if !found {
-		return InFlightTask{}, false, false, nil
-	}
-	// Fetch milestone order only when candidate tasks span groups.
-	groups := map[string]struct{}{}
-	for _, task := range detail.Tasks {
-		if task.Assignee == d.AgentID && task.Status == "in_flight" {
-			groups[strings.TrimSpace(task.Milestone)] = struct{}{}
-		}
-	}
-	if len(groups) > 1 {
-		milestoneBody, err := p.apiCall(ctx, d, http.MethodGet, base+"/milestones", nil)
-		if err != nil {
-			return InFlightTask{}, false, false, err
-		}
-		var milestones []stallMilestoneRow
-		if err := json.Unmarshal(milestoneBody, &milestones); err != nil {
-			return InFlightTask{}, false, false, err
-		}
-		selected, _ = chooseInFlightTask(detail.Tasks, milestones, d.AgentID)
-	}
-	approval, err := p.apiCall(ctx, d, http.MethodGet, base+"/approvals/requests?mine=pending", nil)
-	if err != nil {
-		return InFlightTask{}, false, false, err
-	}
-	var pending struct {
-		Requests []json.RawMessage `json:"requests"`
-	}
-	if err := json.Unmarshal(approval, &pending); err != nil {
-		return InFlightTask{}, false, false, err
-	}
-	return selected, found, len(pending.Requests) > 0, nil
+type presenceTaskRow struct {
+	ID, Status, Assignee string
+	Number               int
 }
 
 // PresenceTasks provides K4's waiting precedence from agent-authenticated
@@ -317,12 +154,12 @@ func (p *HTTPPoller) PresenceTasks(ctx context.Context, d AgentDefinition) (appr
 		return "", "", "", err
 	}
 	var detail struct {
-		Tasks []stallTaskRow `json:"tasks"`
+		Tasks []presenceTaskRow `json:"tasks"`
 	}
 	if err = json.Unmarshal(body, &detail); err != nil {
 		return "", "", "", err
 	}
-	label := func(t stallTaskRow) string {
+	label := func(t presenceTaskRow) string {
 		if t.Number > 0 {
 			return strconv.Itoa(t.Number)
 		}
@@ -366,20 +203,6 @@ func (p *HTTPPoller) PresenceTasks(ctx context.Context, d AgentDefinition) (appr
 		}
 	}
 	return approval, blocked, inFlight, nil
-}
-func (p *HTTPPoller) StateReason(ctx context.Context, d AgentDefinition, state, reason string) error {
-	payload := map[string]string{"state": state, "reason": reason, "source": "daemon", "at": time.Now().UTC().Format(time.RFC3339Nano)}
-	_, err := p.apiCall(ctx, d, http.MethodPut, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/agents/me/state", payload)
-	return err
-}
-func (p *HTTPPoller) NudgeUpdate(ctx context.Context, d AgentDefinition, task InFlightTask) error {
-	id, err := secrets.IdempotencyID(rand.Reader)
-	if err != nil {
-		return err
-	}
-	payload := map[string]string{"summary": fmt.Sprintf("Auto-nudged after 15m without progress on %s", taskLabel(task)), "taskId": task.ID, "idempotencyId": id}
-	_, err = p.apiCall(ctx, d, http.MethodPost, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/updates", payload)
-	return err
 }
 func (p *HTTPPoller) MessageBody(ctx context.Context, d AgentDefinition, id string) (string, error) {
 	body, err := p.apiCall(ctx, d, http.MethodGet, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/messages/"+url.PathEscape(id), nil)

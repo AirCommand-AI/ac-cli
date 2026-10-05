@@ -77,13 +77,7 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 		// instead of risking a second pi on the same session.
 		a.driver = d
 		a.eventsDone = make(chan struct{})
-		reportCtx, cancel := context.WithCancel(context.Background())
-		a.eventsCancel = cancel
-		states := make(chan string, 32)
-		if m.StateReport == nil {
-			go m.reportLoop(reportCtx, a.def, states)
-		}
-		go m.consumeEvents(a, d, a.eventsDone, states)
+		go m.consumeEvents(a, d, a.eventsDone)
 		a.takenOver = false
 		a.takeoverConnected = false
 		m.mu.Unlock()

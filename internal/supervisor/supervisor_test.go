@@ -224,23 +224,6 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	if err := m.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.After(time.Second)
-	for {
-		poll.mu.Lock()
-		states := append([]string(nil), poll.states...)
-		poll.mu.Unlock()
-		if len(states) == 2 {
-			if states[0] != "working" || states[1] != "idle" {
-				t.Fatalf("pi work state: %v", states)
-			}
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("pi work state not reported: %v", states)
-		case <-time.After(time.Millisecond):
-		}
-	}
 	n := Notification{Type: "message.received", MessageID: "0123456789abcdef", SenderID: "ac_sender", SenderNature: "human", Priority: "urgent"}
 	if err := m.Wake(ctx, d.AgentID, n); err != nil {
 		t.Fatal(err)
@@ -255,6 +238,12 @@ func TestHeadlessDriverStartWakesAndCrashBackoff(t *testing.T) {
 	}
 	if len(drivers[0].Sent) != 2 || drivers[0].Sent[1].Kind != pidriver.Urgent {
 		t.Fatal("urgent wake did not reach headless driver")
+	}
+	poll.mu.Lock()
+	legacy := len(poll.states)
+	poll.mu.Unlock()
+	if legacy != 0 {
+		t.Fatal("legacy state route used by headless driver")
 	}
 	drivers[0].ExitCh <- pidriver.Exit{Code: 7}
 	if err := m.Tick(ctx); err != nil {

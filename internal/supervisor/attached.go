@@ -485,8 +485,12 @@ func (m *Manager) SubscribeSignals(agentID string) (<-chan SessionSignal, func()
 			if a.signals == nil {
 				a.signals = make(map[chan SessionSignal]struct{})
 			}
-			ch := make(chan SessionSignal, 16)
+			ch := make(chan SessionSignal, 32)
 			a.signals[ch] = struct{}{}
+			for _, pending := range a.pendingSignals {
+				ch <- pending
+			}
+			a.pendingSignals = nil
 			return ch, func() {
 				m.mu.Lock()
 				defer m.mu.Unlock()
@@ -500,6 +504,13 @@ func (m *Manager) SubscribeSignals(agentID string) (<-chan SessionSignal, func()
 	return nil, nil, os.ErrNotExist
 }
 func (m *Manager) sendAttachedSignal(a *managed, kind, text string) {
+	if len(a.signals) == 0 {
+		if len(a.pendingSignals) == 32 {
+			a.pendingSignals = a.pendingSignals[1:]
+		}
+		a.pendingSignals = append(a.pendingSignals, SessionSignal{Type: kind, Text: text})
+		return
+	}
 	for ch := range a.signals {
 		select {
 		case ch <- SessionSignal{Type: kind, Text: text}:

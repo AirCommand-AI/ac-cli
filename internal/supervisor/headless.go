@@ -3,7 +3,6 @@ package supervisor
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,13 +86,7 @@ func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
 		return err
 	}
 	a.eventsDone = make(chan struct{})
-	reportCtx, cancel := context.WithCancel(context.Background())
-	a.eventsCancel = cancel
-	states := make(chan string, 32)
-	if m.StateReport == nil {
-		go m.reportLoop(reportCtx, a.def, states)
-	}
-	go m.consumeEvents(a, d, a.eventsDone, states)
+	go m.consumeEvents(a, d, a.eventsDone)
 	// Send queues until Ready; it is the first RPC prompt (R6). Never call
 	// driver methods that can write to pi under the supervisor mutex.
 	m.mu.Unlock()
@@ -168,9 +161,6 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	if err := m.drainPending(ctx, a); err != nil {
 		return err
 	}
-	if m.StateReport == nil {
-		m.checkStall(ctx, a)
-	}
 	if m.Poll != nil && !m.now().Before(a.nextPoll) {
 		return m.poll(ctx, a)
 	}
@@ -196,35 +186,12 @@ func (m *Manager) stopEvents(a *managed) {
 		close(a.eventsDone)
 		a.eventsDone = nil
 	}
-	if a.eventsCancel != nil {
-		a.eventsCancel()
-		a.eventsCancel = nil
-	}
 	for ch := range a.subscribers {
 		delete(a.subscribers, ch)
 		close(ch)
 	}
 }
-func (m *Manager) reportLoop(ctx context.Context, def AgentDefinition, states <-chan string) {
-	reporter, ok := m.Poll.(interface {
-		State(context.Context, AgentDefinition, string) error
-	})
-	if !ok {
-		return
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case state := <-states:
-			if err := reporter.State(ctx, def, state); err != nil && ctx.Err() == nil {
-				log.Printf("supervisor: agent %s: report %s: %v", def.Name, state, err)
-			}
-		}
-	}
-}
-
-func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struct{}, states chan string) {
+func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struct{}) {
 	for {
 		select {
 		case <-done:
@@ -241,27 +208,20 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 			if e.Kind == "agent_settled" {
 				m.lastBusy = m.now()
 			}
-			wasStalled := a.stalled
-			if wasStalled {
-				a.stalled = false
-				a.stallReason = ""
+			kind := "rpc"
+			switch e.Kind {
+			case "agent_start":
+				kind = "run_start"
+			case "agent_settled":
+				kind = "run_end"
+			case "tool_execution_start":
+				kind = "tool_start"
+			case "tool_execution_end":
+				kind = "tool_end"
+			case "message_start":
+				kind = "turn"
 			}
-			if m.StateReport != nil {
-				kind := "rpc"
-				switch e.Kind {
-				case "agent_start":
-					kind = "run_start"
-				case "agent_settled":
-					kind = "run_end"
-				case "tool_execution_start":
-					kind = "tool_start"
-				case "tool_execution_end":
-					kind = "tool_end"
-				case "message_start":
-					kind = "turn"
-				}
-				m.emitAgentEvent(a, AgentEvent{AgentID: a.def.AgentID, Kind: kind, At: m.now()})
-			}
+			m.emitAgentEvent(a, AgentEvent{AgentID: a.def.AgentID, Kind: kind, At: m.now()})
 			for ch := range a.subscribers {
 				select {
 				case ch <- e:
@@ -271,30 +231,6 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				}
 			}
 			m.mu.Unlock()
-			if m.StateReport != nil {
-				continue
-			}
-			if !wasStalled && e.Kind != "agent_start" && e.Kind != "agent_settled" {
-				continue
-			}
-			state := "working"
-			if e.Kind == "agent_settled" || wasStalled && d.State().Settled {
-				state = "idle"
-			}
-			select {
-			case states <- state:
-			default:
-				// Only state transitions use this queue; never let a slow
-				// server block the pi event reader.
-				select {
-				case <-states:
-				default:
-				}
-				select {
-				case states <- state:
-				default:
-				}
-			}
 		}
 	}
 }

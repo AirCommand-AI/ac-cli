@@ -14,6 +14,43 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
+func TestAttachedSignalsSurviveStreamReconnect(t *testing.T) {
+	m, _, _, _ := setup(t)
+	claim, err := m.Claim("agm_queue", "", os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Attach(claim, Attachment{AgentID: "agm_queue", Name: "queued", Program: "pi", SessionPID: os.Getpid(), SessionStart: SessionProcessStart(os.Getpid())}); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	m.sendAttachedSignal(m.agents["queued"], "interrupt", "body")
+	m.mu.Unlock()
+	signals, stop, err := m.SubscribeSignals("agm_queue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sig := <-signals:
+		if sig.Type != "interrupt" || sig.Text != "body" {
+			t.Fatalf("queued signal: %+v", sig)
+		}
+	default:
+		t.Fatal("queued interrupt lost before first stream")
+	}
+	stop()
+	signals, stop, err = m.SubscribeSignals("agm_queue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	select {
+	case <-signals:
+		t.Fatal("queued interrupt replayed twice")
+	default:
+	}
+	m.ReleaseClaim(claim)
+}
 func TestAttachedStateEngineReportsAndNudgesThroughStream(t *testing.T) {
 	ctx := context.Background()
 	m, tm, poll, now := setup(t)

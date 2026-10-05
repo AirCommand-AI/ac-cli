@@ -56,40 +56,36 @@ type Manager struct {
 	lastBusy       time.Time
 }
 type managed struct {
-	def                                                             AgentDefinition
-	lock                                                            *agentlock.Lock
-	nextStart, nextPoll, nextRetry, nextStallCheck, lastStallReport time.Time
-	stalled                                                         bool
-	stallReason                                                     string
-	stallTaskID                                                     string
-	stallTaskSince                                                  time.Time
-	failures, inspectFailures                                       int
-	lastPoll                                                        string
-	pid                                                             int
-	driver                                                          pidriver.Driver
-	takenOver                                                       bool
-	takeoverConnected                                               bool
-	takeoverNotice                                                  func(string) error
-	machineStopped                                                  bool
-	logFile                                                         *os.File
-	startupSent                                                     bool
-	legacySession                                                   bool
-	eventsDone                                                      chan struct{}
-	eventsCancel                                                    context.CancelFunc
-	subscribers                                                     map[chan pidriver.Event]struct{}
-	pendingWakes                                                    []agentapi.Notification
-	interruptFailures                                               map[string]int
-	delivered                                                       []string
-	wakes                                                           map[chan struct{}]struct{}
-	signals                                                         map[chan SessionSignal]struct{}
-	attachedConnected                                               bool
-	nextPlacement                                                   time.Time
-	presence                                                        agentstate.Snapshot
-	presenceReported                                                agentstate.State
-	lastPresenceReport                                              time.Time
-	nextPresenceRetry                                               time.Time
-	pendingPresenceNudges                                           []agentstate.Nudge
-	nextTaskCheck                                                   time.Time
+	def                            AgentDefinition
+	lock                           *agentlock.Lock
+	nextStart, nextPoll, nextRetry time.Time
+	failures, inspectFailures      int
+	lastPoll                       string
+	pid                            int
+	driver                         pidriver.Driver
+	takenOver                      bool
+	takeoverConnected              bool
+	takeoverNotice                 func(string) error
+	machineStopped                 bool
+	logFile                        *os.File
+	startupSent                    bool
+	legacySession                  bool
+	eventsDone                     chan struct{}
+	subscribers                    map[chan pidriver.Event]struct{}
+	pendingWakes                   []agentapi.Notification
+	interruptFailures              map[string]int
+	delivered                      []string
+	wakes                          map[chan struct{}]struct{}
+	signals                        map[chan SessionSignal]struct{}
+	pendingSignals                 []SessionSignal
+	attachedConnected              bool
+	nextPlacement                  time.Time
+	presence                       agentstate.Snapshot
+	presenceReported               agentstate.State
+	lastPresenceReport             time.Time
+	nextPresenceRetry              time.Time
+	pendingPresenceNudges          []agentstate.Nudge
+	nextTaskCheck                  time.Time
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
