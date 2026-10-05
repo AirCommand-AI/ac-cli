@@ -16,10 +16,11 @@ type fakeSessionControl struct {
 	attaches      []daemonclient.SessionAttach
 	messages      []daemonclient.SessionMessage
 	acks          []int64
+	statusAgents  []daemonclient.AgentStatus
 }
 
-func (*fakeSessionControl) Status(context.Context) (daemonclient.Status, error) {
-	return daemonclient.Status{}, nil
+func (f *fakeSessionControl) Status(context.Context) (daemonclient.Status, error) {
+	return daemonclient.Status{Agents: f.statusAgents}, nil
 }
 
 type fakeClaim struct{ parent *fakeSessionControl }

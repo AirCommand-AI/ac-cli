@@ -81,9 +81,16 @@ func (m *Manager) progressPresence(ctx context.Context, a *managed) {
 		return
 	}
 	current, def, report := a.presence.State, a.def, m.StateReport
+	// Stamp the report when it is sent: an event processed during this pass
+	// (e.g. while tasks were fetched) can move Since past the pass start, and
+	// the server rejects a report whose Since is after its At.
+	at := m.now()
+	if at.Before(current.Since) {
+		at = current.Since
+	}
 	m.mu.Unlock()
 	reportCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	err := report(reportCtx, def, current, now)
+	err := report(reportCtx, def, current, at)
 	cancel()
 	m.mu.Lock()
 	if err != nil {

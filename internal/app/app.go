@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1106,7 +1108,39 @@ func (a *App) listen(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	// A session that has not joined through the daemon (e.g. a listener
+	// re-armed after an upgrade) would wait forever: join it first.
+	attached, err := a.sessionAttached(credential.AgentID)
+	if err != nil {
+		return err
+	}
+	if !attached {
+		return a.join([]string{"--agent", credential.AgentID, "--workstream", workstreamCode, "--listen"})
+	}
 	return a.listenDaemon(workstreamCode, credential.AgentID)
+}
+
+// sessionAttached reports whether the daemon holds agentID for the program
+// this command runs in.
+func (a *App) sessionAttached(agentID string) (bool, error) {
+	client := a.sessionControl()
+	if err := a.ensureDaemon(client); err != nil {
+		return false, err
+	}
+	process, err := discoverSession(os.Getpid(), a.ProcessSnapshot)
+	if err != nil {
+		return false, err
+	}
+	status, err := client.Status(context.Background())
+	if err != nil {
+		return false, fmt.Errorf("read daemon status: %w", err)
+	}
+	for _, agent := range status.Agents {
+		if agent.AgentID == agentID && agent.Mode == "attached" && agent.PID == process.SessionPID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func decodeNotificationFeedResponse(body []byte) (notificationFeedResponse, error) {

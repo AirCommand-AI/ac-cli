@@ -1137,7 +1137,7 @@ func (a *App) join(arguments []string) error {
 	// With neither, join goes wherever a human has sent this agent from the
 	// dashboard. Naming only one of them is a mistake rather than a request.
 	pickUp := workstreamCode == "" && organizationReference == ""
-	if !pickUp && (workstreamCode == "" || organizationReference == "") {
+	if !pickUp && workstreamCode == "" {
 		return &publicError{message: joinUsage}
 	}
 	if !pickUp {
@@ -1196,6 +1196,13 @@ func (a *App) join(arguments []string) error {
 			organizationID = agent.AssignedOrganizationID
 			workstreamCode = agent.AssignedWorkstreamCode
 		}
+	} else if organizationReference == "" {
+		// Without --org, only the workstream the agent is already in is
+		// unambiguous: codes repeat across organizations.
+		if strings.TrimSpace(agent.WorkstreamCode) != workstreamCode || agent.OrganizationID == "" {
+			return &publicError{message: fmt.Sprintf("%s is not in workstream %s. Add --org to say which organization's workstream %s to join.", agent.Name, workstreamCode, workstreamCode)}
+		}
+		organizationID = agent.OrganizationID
 	} else {
 		organizationID, err = a.resolveOrganization(organizationReference)
 		if err != nil {
