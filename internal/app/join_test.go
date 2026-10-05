@@ -120,6 +120,9 @@ func TestJoinWithListenStreamsWakeLinesOnStdout(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Agent ID: "+agent.AgentID) {
 		t.Fatalf("identity block missing from stderr: %q", stderr.String())
 	}
+	if daemon := client.SessionClient.(*fakeSessionControl); daemon.claims != 1 || len(daemon.attaches) != 1 || daemon.attaches[0].SessionPID <= 0 || daemon.attaches[0].Program != "pi" {
+		t.Fatalf("join did not claim and attach: %+v", daemon)
+	}
 }
 
 // TestJoinRefusesAnAgentAlreadySomewhereElse makes moving deliberate: an agent

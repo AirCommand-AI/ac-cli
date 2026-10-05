@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -65,12 +66,16 @@ func discoverSession(pid int, snapshot ProcessSnapshot) (daemonclient.SessionAtt
 		if err != nil {
 			return daemonclient.SessionAttach{}, fmt.Errorf("inspect parent process %d: %w", pid, err)
 		}
-		lower := strings.ToLower(command)
-		if strings.Contains(lower, "pi-coding-agent/") || strings.Contains(lower, "/pi-coding-agent ") {
-			return daemonclient.SessionAttach{SessionPID: pid, SessionStart: start, Program: "pi"}, nil
-		}
-		if strings.Contains(lower, "claude") || strings.Contains(lower, "codex") {
-			return daemonclient.SessionAttach{SessionPID: pid, SessionStart: start, Program: "other"}, nil
+		parts := strings.Fields(command)
+		if len(parts) > 0 {
+			executable := strings.ToLower(filepath.Base(parts[0]))
+			lower := strings.ToLower(command)
+			if (executable == "node" || executable == "bun" || executable == "pi") && strings.Contains(lower, "pi-coding-agent/") {
+				return daemonclient.SessionAttach{SessionPID: pid, SessionStart: start, Program: "pi"}, nil
+			}
+			if executable == "claude" || executable == "codex" {
+				return daemonclient.SessionAttach{SessionPID: pid, SessionStart: start, Program: "other"}, nil
+			}
 		}
 		if parent == pid {
 			break

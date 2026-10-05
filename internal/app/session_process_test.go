@@ -9,7 +9,7 @@ func TestDiscoverSessionWalksAncestorProcessTable(t *testing.T) {
 	table := map[int]struct {
 		parent     int
 		cmd, start string
-	}{99: {88, "aircom join --agent x", "1"}, 88: {77, "/bin/bash -c aircom join", "2"}, 77: {1, "node /tmp/@earendil-works/pi-coding-agent/dist/cli.js", "first"}}
+	}{99: {88, "aircom join --agent x", "1"}, 88: {77, "/bin/bash -c aircom join --agent claude --workstream 478", "2"}, 77: {1, "node /tmp/@earendil-works/pi-coding-agent/dist/cli.js", "first"}}
 	snapshot := func(pid int) (int, string, string, error) {
 		row, ok := table[pid]
 		if !ok {
