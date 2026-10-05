@@ -43,7 +43,10 @@ func Descendant(peerPID, sessionPID int) bool {
 		return false
 	}
 	seen := map[int]bool{}
-	for pid := peerPID; pid > 1 && !seen[pid]; seen[pid] = true {
+	for pid := peerPID; pid > 1 && !seen[pid]; {
+		// Mark before moving up: marking in the loop's post statement would mark
+		// the parent before it is checked and stop after the first step.
+		seen[pid] = true
 		if pid == sessionPID {
 			return true
 		}
