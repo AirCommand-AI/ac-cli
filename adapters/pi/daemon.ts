@@ -1,4 +1,18 @@
 import { createConnection, type Socket } from "node:net";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+
+// Match the daemon's takeover process identity on Linux and macOS.
+export function processStart(pid:number):string {
+ if(process.platform==="linux"){
+  const stat=readFileSync(`/proc/${pid}/stat`,"utf8");const end=stat.lastIndexOf(")");
+  if(end<0)throw new Error("Invalid process identity");
+  const fields=stat.slice(end+1).trim().split(/\s+/);
+  if(fields.length<20)throw new Error("Invalid process identity");
+  return fields[19];
+ }
+ return execFileSync("ps",["-p",String(pid),"-o","lstart="],{encoding:"utf8"}).trim();
+}
 
 export interface SessionMessage {
  type: "connect" | "wake" | "nudge" | "interrupt" | "detached";
@@ -38,7 +52,8 @@ export function subscribeDaemon(path:string,pid:number,onMessage:(message:Sessio
    try{const value=JSON.parse(line) as Record<string,unknown>;
     if(!ready){if(value.ok!==true)throw new Error((value.error as {message?:string}|undefined)?.message||"AirCommand daemon refused subscription");ready=true}
     else if(typeof value.type==="string" && ["connect","wake","nudge","interrupt","detached"].includes(value.type)){onMessage(value as unknown as SessionMessage)}
-    else throw new Error("Invalid AirCommand daemon session frame");
+    else if(typeof value.type!=="string")throw new Error("Invalid AirCommand daemon session frame");
+    // Ignore future daemon event kinds rather than disconnecting the stream.
    }catch(error){fail(error instanceof Error?error:new Error("Invalid AirCommand daemon frame"));return}
    end=buffer.indexOf("\n");
   }
