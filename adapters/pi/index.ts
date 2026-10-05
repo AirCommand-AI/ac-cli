@@ -143,6 +143,7 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	let retryTimer:ReturnType<typeof setTimeout>|undefined;
 	let subscriptionAttempt=0;
 	let conversationID="";
+	let pendingDetach:string|undefined;
 	let ackQueue=Promise.resolve();
 	const daemonSocket=join(homedir(),".aircommand","daemon","daemon.sock");
 	let sessionStartedAt = new Date().toISOString();
@@ -365,8 +366,24 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	const restoreSession=async(ctx:ExtensionContext,sessionId:string,requestedAgent?:string)=>{
+		try {
+			const prior=await daemonCall<{agentId?:string;workstream?:string;name?:string}>(daemonSocket,{op:"session.lookup",sessionId});
+			if(prior?.agentId){
+				await daemonCall(daemonSocket,{op:"session.attach",agentId:prior.agentId,name:prior.name||storedAgentName(prior.agentId),workstream:prior.workstream||"",sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId});
+				if(prior.workstream && !requestedAgent && conversationID===sessionId)connect(validateEnrollment({agentId:prior.agentId,workstreamCode:prior.workstream}),ctx);
+			}
+		}catch{ /* A new conversation or stopped daemon has no attachment. */ }
+	};
 	const startSubscription=(ctx:ExtensionContext)=>{
-		if(stopSubscription)return;
+		if(stopSubscription||retryTimer)return;
+		if(pendingDetach){
+			const agentId=pendingDetach;
+			void daemonCall(daemonSocket,{op:"session.detach",agentId,sessionPid:process.pid,reason:"conversation changed"}).then(async()=>{if(pendingDetach===agentId)pendingDetach=undefined;if(sessionActive){await restoreSession(ctx,conversationID,readStringFlag(pi,AGENT_FLAG));startSubscription(ctx)}}).catch(()=>{
+				if(sessionActive)retryTimer=setTimeout(()=>{retryTimer=undefined;startSubscription(ctx)},retryDelay(subscriptionAttempt++));
+			});
+			return;
+		}
 		stopSubscription=subscribeDaemon(daemonSocket,process.pid,(message:SessionMessage)=>{
 			subscriptionAttempt=0;
 			switch(message.type){
@@ -391,6 +408,10 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		sessionActive = true;
 		sessionStartedAt = new Date().toISOString();
+		const nextID=ctx.sessionManager.getSessionId();
+		if(conversationID && conversationID!==nextID && activeConnection)pendingDetach=activeConnection.enrollment.agentId;
+		stopSubscription?.();stopSubscription=undefined;
+		if(retryTimer){clearTimeout(retryTimer);retryTimer=undefined}
 		try {
 			disconnect();
 		} catch {
@@ -399,15 +420,9 @@ export default function aircommandExtension(pi: ExtensionAPI) {
 
 		const requestedWorkstream = readStringFlag(pi, WORKSTREAM_FLAG);
 		const requestedAgent = readStringFlag(pi, AGENT_FLAG);
-		const sessionId=ctx.sessionManager.getSessionId();
+		const sessionId=nextID;
 		conversationID=sessionId;
-		try {
-			const prior=await daemonCall<{agentId?:string;workstream?:string;name?:string}>(daemonSocket,{op:"session.lookup",sessionId});
-			if(prior?.agentId){
-				await daemonCall(daemonSocket,{op:"session.attach",agentId:prior.agentId,name:prior.name||storedAgentName(prior.agentId),workstream:prior.workstream||"",sessionPid:process.pid,sessionStart:processStart(process.pid),program:"pi",sessionId});
-				if(prior.workstream && !requestedAgent)connect(validateEnrollment({agentId:prior.agentId,workstreamCode:prior.workstream}),ctx);
-			}
-		}catch{ /* A new conversation or stopped daemon has no attachment. */ }
+		if(!pendingDetach)await restoreSession(ctx,sessionId,requestedAgent);
 		startSubscription(ctx);
 		if (!requestedWorkstream && !requestedAgent) return;
 
