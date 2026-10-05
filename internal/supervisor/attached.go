@@ -223,9 +223,14 @@ func (m *Manager) Attach(claim *Claim, p Attachment) error {
 		}
 	}
 	a.def = AgentDefinition{Version: 1, Kind: "attached", AgentID: p.AgentID, Name: name, Workstream: p.Workstream, Desired: "running", State: "running", Mode: "attached", SessionPID: p.SessionPID, SessionStart: p.SessionStart, Program: p.Program, SessionID: p.SessionID, Offset: offset}
+	sameSession := old != nil && previous.SessionPID == p.SessionPID && previous.SessionStart == p.SessionStart
 	if p.Program == "other" {
 		a.def.State = "stopped"
 		a.def.Reason = "no listener"
+		// The same session joining again keeps its running listener.
+		if sameSession && previous.Program == "other" && previous.State == "running" {
+			a.def.State, a.def.Reason = previous.State, previous.Reason
+		}
 	}
 	if a.lock == nil && claim != nil && !claim.reused {
 		a.lock = claim.lock
@@ -253,7 +258,9 @@ func (m *Manager) Attach(claim *Claim, p Attachment) error {
 	}
 	a.nextPoll = m.now()
 	if p.Program == "other" {
-		m.emitAttached(a, "no_listener", "", "no listener")
+		if a.def.State != "running" {
+			m.emitAttached(a, "no_listener", "", "no listener")
+		}
 	} else {
 		m.emitAttached(a, "session_alive", "", "")
 	}

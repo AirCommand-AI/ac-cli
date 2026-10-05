@@ -273,3 +273,32 @@ func TestClaimAllowsTheHoldingSessionToJoinAgain(t *testing.T) {
 		})
 	}
 }
+
+func TestSameSessionRejoinKeepsRunningListener(t *testing.T) {
+	m, _, _, _ := setup(t)
+	if err := credentials.NewStore(m.Home).Save(credentials.Credential{AgentID: "agm_rejoin", WorkstreamCode: "478", APIToken: "token", SocketKey: "key", SocketAddress: "ac:agm_rejoin"}); err != nil {
+		t.Fatal(err)
+	}
+	attach := func() {
+		t.Helper()
+		claim, err := m.Claim("agm_rejoin", "478", os.Getpid())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.ReleaseClaim(claim)
+		if err = m.Attach(claim, Attachment{AgentID: "agm_rejoin", Name: "rejoin", Workstream: "478", Program: "other", SessionPID: os.Getpid(), SessionStart: SessionProcessStart(os.Getpid())}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attach()
+	if def, _ := m.Attached("agm_rejoin"); def.State != "stopped" || def.Reason != "no listener" {
+		t.Fatalf("before listener: state %q reason %q", def.State, def.Reason)
+	}
+	if err := m.SessionConnected("agm_rejoin"); err != nil {
+		t.Fatal(err)
+	}
+	attach()
+	if def, _ := m.Attached("agm_rejoin"); def.State != "running" {
+		t.Fatalf("same-session re-join reset a running listener to %q (%s)", def.State, def.Reason)
+	}
+}
