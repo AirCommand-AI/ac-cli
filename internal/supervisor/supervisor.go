@@ -241,6 +241,17 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 	if _, exists := m.agents[def.Name]; exists {
 		return fmt.Errorf("duplicate agent name %s", def.Name)
 	}
+	if def.Kind == "attached" {
+		a := &managed{def: def}
+		if err := m.loadDelivered(a); err != nil {
+			return err
+		}
+		if err := m.acquire(a); err != nil {
+			return err
+		}
+		m.agents[def.Name] = a
+		return nil
+	}
 	if def.Mode == "headless" && def.Pi != nil {
 		m.mu.Unlock()
 		err = killRecordedPi(ctx, def.Pi)
@@ -283,7 +294,16 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 	return nil
 }
 func validate(d AgentDefinition) error {
-	if !validName(d.Name) || d.AgentID == "" || d.Workstream == "" || d.WorkFolder == "" || !filepath.IsAbs(d.WorkFolder) {
+	if !validName(d.Name) || d.AgentID == "" || (d.Kind != "" && d.Kind != "started" && d.Kind != "attached") {
+		return fmt.Errorf("invalid agent definition")
+	}
+	if d.Kind == "attached" {
+		if d.Desired != "running" || d.Program != "pi" && d.Program != "other" || d.SessionPID < 0 || d.Offset < 0 {
+			return fmt.Errorf("invalid attached agent definition")
+		}
+		return nil
+	}
+	if d.Workstream == "" || d.WorkFolder == "" || !filepath.IsAbs(d.WorkFolder) {
 		return fmt.Errorf("invalid agent definition")
 	}
 	if d.Desired != "running" && d.Desired != "stopped" {
@@ -315,8 +335,12 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 		m.agents[def.Name] = a
 	}
 	old := a.def
+	if old.Kind == "attached" {
+		return fmt.Errorf("agent is attached to a person's session")
+	}
 	a.legacySession = old.AgentID != "" && !old.SessionMigrated && old.WorkFolder == def.WorkFolder
 	def.Version = 1
+	def.Kind = "started"
 	def.Harness = "pi"
 	if def.Mode == "" {
 		def.Mode = old.Mode
@@ -453,7 +477,11 @@ func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
 	defer m.mu.Unlock()
 	var list []AgentStatus
 	for _, a := range m.agents {
-		status := AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Reason: a.def.Reason, Mode: a.def.Mode, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll}
+		status := AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Reason: a.def.Reason, Mode: a.def.Mode, Kind: a.def.Kind, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll}
+		if a.def.Kind == "attached" {
+			status.Mode = "attached"
+			status.PID = a.def.SessionPID
+		}
 		if m.stoppingHold && a.machineStopped {
 			status.State = "stopped"
 			status.PID = 0

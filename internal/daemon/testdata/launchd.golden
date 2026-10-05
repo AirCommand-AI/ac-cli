@@ -6,10 +6,6 @@
 <string>/opt/aircom</string>
 <string>daemon</string>
 <string>run</string>
-<string>--tmux</string>
-<string>/usr/bin/tmux</string>
-<string>--pi</string>
-<string>/opt/pi</string>
 </array>
 <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/bin:/opt</string></dict>
 <key>RunAtLoad</key><true/>

@@ -43,6 +43,12 @@ func main() {
 	commands := daemon.Commands{Home: home, Output: os.Stdout}
 	operationGate := &sync.Mutex{}
 	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
+		if tmux == "" {
+			tmux = "tmux"
+		}
+		if pi == "" {
+			pi = "pi"
+		}
 		poll := &supervisor.HTTPPoller{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		manager := supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll)
 		manager.OperationGate = operationGate

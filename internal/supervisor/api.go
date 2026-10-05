@@ -39,6 +39,12 @@ type TakeoverProcess struct {
 }
 type AgentDefinition struct {
 	Version          int              `json:"version"`
+	Kind             string           `json:"kind,omitempty"`
+	SessionPID       int              `json:"sessionPid,omitempty"`
+	SessionStart     string           `json:"sessionStart,omitempty"`
+	Program          string           `json:"program,omitempty"`
+	SessionID        string           `json:"sessionId,omitempty"`
+	Offset           int64            `json:"offset,omitempty"`
 	Revision         int64            `json:"revision,omitempty"`
 	AgentID          string           `json:"agentId"`
 	Name             string           `json:"name"`
@@ -83,6 +89,7 @@ type AgentStatus struct {
 	State      string `json:"state"`
 	Reason     string `json:"reason,omitempty"`
 	Mode       string `json:"mode"`
+	Kind       string `json:"kind,omitempty"`
 	PiState    string `json:"piState,omitempty"`
 	PID        int    `json:"pid,omitempty"`
 	LastExit   *Exit  `json:"lastExit,omitempty"`
