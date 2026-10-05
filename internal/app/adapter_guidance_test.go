@@ -23,8 +23,9 @@ func TestPiHeadlessFlagDisablesExtensionDeliveryAndReporting(t *testing.T) {
 	for _, part := range []string{
 		`pi.registerFlag(HEADLESS_FLAG, {`, `type: "boolean"`,
 		`const headless = pi.getFlag(HEADLESS_FLAG) === true`,
-		`headless ? { close() {} } : tailSpool(`,
-		`if (headless || !sessionActive || !enrollment) return;`,
+		`if(headless||!current||!message.line)break;`,
+		`sessionId:conversationID`, // subscription and daemon delivery are conversation-scoped
+		`reportEvent("run_start")`,
 		`if (headless || !sessionActive || !connection || event.message.role !== "assistant") return;`,
 	} {
 		if !strings.Contains(extension, part) {
@@ -66,7 +67,7 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	if !strings.Contains(extension, "\t\t\tURGENT_GUIDANCE,") {
 		t.Fatal("pi extension defines urgent guidance but does not inject it")
 	}
-	if !strings.Contains(extension, `deliverAs: urgent ? "steer" : "followUp"`) {
+	if !strings.Contains(extension, `deliverAs:urgent?"steer":"followUp"`) {
 		t.Fatal("pi extension does not deliver urgent pointers as steer")
 	}
 	if !strings.Contains(skill, "or list, inspect, create, progress, or comment on tasks") {

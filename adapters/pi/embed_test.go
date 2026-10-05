@@ -36,6 +36,10 @@ func TestSyncWritesNoOpAndPermissions(t *testing.T) {
 		}
 		return info
 	}
+	daemonPath := filepath.Join(filepath.Dir(path), "daemon.ts")
+	if contents, err := os.ReadFile(daemonPath); err != nil || !bytes.Equal(contents, DaemonSource) {
+		t.Fatalf("daemon add-on missing: %v", err)
+	}
 	first := check()
 	if err := Sync(home); err != nil {
 		t.Fatal(err)

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/daemonclient"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 )
 
@@ -624,6 +625,10 @@ func testApp(t *testing.T, baseURL string, stdin string, random io.Reader) (*App
 		Random:        random,
 		RetryAttempts: 3,
 		RetryDelay:    func(int) {},
+		SessionClient: &fakeSessionControl{messages: []daemonclient.SessionMessage{{Type: "detached"}}},
+		ProcessSnapshot: func(pid int) (int, string, string, error) {
+			return 1, "node /opt/pi-coding-agent/dist/cli.js", "start", nil
+		},
 	}
 	return client, stdout, stderr
 }

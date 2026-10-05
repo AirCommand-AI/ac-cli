@@ -2,13 +2,13 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
@@ -111,14 +111,17 @@ func TestJoinWithListenStreamsWakeLinesOnStdout(t *testing.T) {
 	if exitCode := client.Run([]string{"join", "--agent", "Pi", "--org", "Acme", "--workstream", "694", "--listen"}); exitCode != 0 {
 		t.Fatalf("join --listen exit code = %d, stderr = %q", exitCode, stderr.String())
 	}
-	if notified == 0 {
-		t.Fatal("join --listen returned without ever polling for notifications")
+	if notified != 0 {
+		t.Fatal("join --listen polled the remote notification endpoint")
 	}
 	if strings.Contains(stdout.String(), "Agent ID:") {
 		t.Fatalf("identity block reached the wake-line stream: %q", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "Agent ID: "+agent.AgentID) {
 		t.Fatalf("identity block missing from stderr: %q", stderr.String())
+	}
+	if daemon := client.SessionClient.(*fakeSessionControl); daemon.claims != 1 || len(daemon.attaches) != 1 || daemon.attaches[0].SessionPID <= 0 || daemon.attaches[0].Program != "pi" {
+		t.Fatalf("join did not claim and attach: %+v", daemon)
 	}
 }
 
@@ -304,16 +307,12 @@ func TestJoinWithListenRefusesAnAgentRunningElsewhere(t *testing.T) {
 
 	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
 	storedMachine(t, client)
-	other, err := agentlock.Acquire(client.Store.Home(), "agm_0123456789abcdef0123456789abcdef")
-	if err != nil {
-		t.Fatalf("Acquire: %v", err)
-	}
-	defer func() { _ = other.Release() }()
+	client.SessionClient.(*fakeSessionControl).claimErr = errors.New("held by pi pid 123")
 
 	if exitCode := client.Run([]string{"join", "--agent", "Pi", "--listen"}); exitCode == 0 {
 		t.Fatal("a second session joined as an agent already running")
 	}
-	if !strings.Contains(stderr.String(), "already running in another session") {
+	if !strings.Contains(stderr.String(), "held by pi pid 123") {
 		t.Fatalf("refusal does not say why: %q", stderr.String())
 	}
 	if fake.joinedPath != "" {
@@ -328,11 +327,14 @@ func TestJoinWithNothingAssignedAndNoListenSaysHow(t *testing.T) {
 
 	client, _, stderr := testApp(t, server.URL, "", deterministicRandom(0x11))
 	storedMachine(t, client)
-	if exitCode := client.Run([]string{"join", "--agent", "Pi"}); exitCode == 0 {
-		t.Fatal("join with nothing to join succeeded")
+	if exitCode := client.Run([]string{"join", "--agent", "Pi"}); exitCode != 0 {
+		t.Fatalf("waiting attach failed: %s", stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "account page") {
-		t.Fatalf("error does not say how to proceed: %q", stderr.String())
+	if !strings.Contains(stderr.String(), "Waiting for Pi") {
+		t.Fatalf("missing placement guidance: %q", stderr.String())
+	}
+	if got := client.SessionClient.(*fakeSessionControl).attaches; len(got) != 1 || got[0].Workstream != "" {
+		t.Fatalf("waiting attachment: %+v", got)
 	}
 	if fake.joinedPath != "" {
 		t.Fatal("joined without an assignment")

@@ -16,12 +16,15 @@ func TestPiPresenceReportsRunBoundariesNotTurnBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(source)
-	for _, part := range []string{`pi.on("agent_start", async () => { reportState("working"); })`, `pi.on("agent_end", async () => { reportState("idle"); })`} {
+	for _, part := range []string{`pi.on("agent_start", async () => { reportEvent("run_start"); })`, `pi.on("agent_end", async () => { reportEvent("run_end"); })`} {
 		if !strings.Contains(text, part) {
 			t.Fatalf("missing pi run boundary handler: %s", part)
 		}
 	}
-	if strings.Contains(text, `pi.on("turn_start", async () => { reportState`) || strings.Contains(text, `pi.on("turn_end", async () => { reportState`) {
-		t.Fatal("state is still reported per model turn")
+	if strings.Contains(text, `execFile(cliPath, ["state"`) {
+		t.Fatal("pi still reports state directly to server")
+	}
+	if !strings.Contains(text, `reportEvent("tool_end")`) {
+		t.Fatal("missing tool completion activity")
 	}
 }

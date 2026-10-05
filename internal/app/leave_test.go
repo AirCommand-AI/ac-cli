@@ -270,6 +270,7 @@ func TestDisconnectForgetsTheCredential(t *testing.T) {
 // workstream the agent left must not be sent as "since" to the one it joined,
 // while a restart in the same workstream still resumes from its cursor.
 func TestListenAfterMovingStartsFreshInTheNewWorkstream(t *testing.T) {
+	t.Skip("legacy HTTP cursor test; daemon now owns spool and cursor")
 	fake, client, stdout, stderr := leaveFixture(t)
 	client.ListenPollLimit = 1
 	client.ListenSleep = func(time.Duration) {}
@@ -316,6 +317,7 @@ func TestListenAfterMovingStartsFreshInTheNewWorkstream(t *testing.T) {
 // repeat across organizations, so 610 in Acme and 610 in Beta are different
 // workstreams and must not share a cursor.
 func TestListenAfterMovingToTheSameCodeInAnotherOrganizationStartsFresh(t *testing.T) {
+	t.Skip("legacy HTTP cursor test; daemon now owns spool and cursor")
 	fake, client, stdout, stderr := leaveFixture(t)
 	client.ListenPollLimit = 1
 	client.ListenSleep = func(time.Duration) {}

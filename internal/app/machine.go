@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AirCommand-AI/ac-cli/internal/agentlock"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/enroll"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
@@ -1153,23 +1153,35 @@ func (a *App) join(arguments []string) error {
 		return storageError(err, "Credential storage is unavailable.")
 	}
 
+	client := a.sessionControl()
+	if err := a.ensureDaemon(client); err != nil {
+		return err
+	}
 	agent, err := a.resolveAgent(agentReference)
 	if err != nil {
 		return err
 	}
-	// A joining listener claims the agent before it waits or joins, not only
-	// once it starts listening: otherwise two sessions could both wait, both
-	// join when the agent is sent, and the second would save its credential
-	// over the first's.
-	var held *agentlock.Lock
-	if listen {
-		held, err = a.claimAgent(agent.AgentID)
-		if err != nil {
+	if _, err := discoverSession(os.Getpid(), a.ProcessSnapshot); err != nil {
+		return err
+	}
+	// Keep this connection open across the remote Join: a disconnected claim
+	// is released by the daemon and would admit a competing session.
+	claim, err := client.ClaimSession(context.Background(), agent.AgentID, workstreamCode)
+	if err != nil {
+		return &publicError{message: fmt.Sprintf("Unable to claim %s: %v", agent.Name, err)}
+	}
+	defer claim.Close()
+	var organizationID string
+	if pickUp && !agentHasSomewhereToBe(agent) {
+		if err := a.attachSession(claim, agent.AgentID, agent.Name, ""); err != nil {
 			return err
 		}
-		defer func() { _ = held.Release() }()
+		fmt.Fprintf(a.errorWriter(), "Agent ID: %s\nWaiting for %s to be placed by a person. The daemon owns the connection.\n", agent.AgentID, agent.Name)
+		if listen {
+			return a.listenDaemon("", agent.AgentID)
+		}
+		return nil
 	}
-	var organizationID string
 	if pickUp {
 		agent, err = a.awaitAssignment(agent, listen)
 		if err != nil {
@@ -1218,9 +1230,12 @@ func (a *App) join(arguments []string) error {
 		}
 		// Already there. Re-running join is how a restarted runtime asks for
 		// its agent back, so report the identity only after its bearer is live.
+		if err := a.attachSession(claim, agent.AgentID, agent.Name, workstreamCode); err != nil {
+			return err
+		}
 		a.reportAgentIdentity(listen, agent.AgentID, agent.Name, workstreamCode, socketAddressForAgentID(agent.AgentID))
 		if listen {
-			return a.listenAs(workstreamCode, agent.AgentID, held)
+			return a.listenDaemon(workstreamCode, agent.AgentID)
 		}
 		return nil
 	}
@@ -1281,9 +1296,12 @@ func (a *App) join(arguments []string) error {
 		return &publicError{message: "Joined the workstream but could not store the agent credential."}
 	}
 
+	if err := a.attachSession(claim, joined.AgentID, joined.AgentName, joined.WorkstreamCode); err != nil {
+		return err
+	}
 	a.reportAgentIdentity(listen, joined.AgentID, joined.AgentName, joined.WorkstreamCode, joined.SocketAddress)
 	if listen {
-		return a.listenAs(joined.WorkstreamCode, joined.AgentID, held)
+		return a.listenDaemon(joined.WorkstreamCode, joined.AgentID)
 	}
 	return nil
 }
@@ -1399,7 +1417,7 @@ func (a *App) machineCredential() (credentials.Machine, error) {
 	machine, err := a.Store.LoadMachine()
 	if err != nil {
 		if err == credentials.ErrNoMachineLogin {
-			return credentials.Machine{}, &publicError{message: "This machine is not registered with AirCommand. Run aircom init."}
+			return credentials.Machine{}, &publicError{message: "This machine is not registered with AirCommand. Ask a person to run aircom init."}
 		}
 		return credentials.Machine{}, &publicError{message: "Unable to read this machine's login."}
 	}

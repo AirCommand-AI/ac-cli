@@ -1,3 +1,5 @@
+//go:build legacy_listener
+
 package app
 
 import (
