@@ -36,6 +36,11 @@ func (m *Manager) Stage(def AgentDefinition) error {
 	if m.agents[def.Name] != nil {
 		return fmt.Errorf("agent already exists")
 	}
+	for _, existing := range m.agents {
+		if existing.def.AgentID == def.AgentID {
+			return fmt.Errorf("agent identity already held")
+		}
+	}
 	a := &managed{def: def}
 	if err := m.save(a); err != nil {
 		return err

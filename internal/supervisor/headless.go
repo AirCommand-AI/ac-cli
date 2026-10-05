@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +26,11 @@ func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
 			return fmt.Errorf("%w (saving crashed state: %v)", err, saveErr)
 		}
 		return err
+	}
+	if m.Pi == "pi" {
+		if _, err := exec.LookPath("pi"); err != nil {
+			return fmt.Errorf("pi is required to launch a daemon-started agent; install pi: %w", err)
+		}
 	}
 	if m.NewDriver == nil {
 		return fmt.Errorf("headless pi driver is unavailable")

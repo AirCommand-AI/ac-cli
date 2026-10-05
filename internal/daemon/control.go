@@ -36,6 +36,14 @@ type Request struct {
 	Mode         string   `json:"mode,omitempty"`
 	StopAgents   bool     `json:"stopAgents,omitempty"`
 	Text         string   `json:"text,omitempty"`
+	SessionPID   int      `json:"sessionPid,omitempty"`
+	SessionStart string   `json:"sessionStart,omitempty"`
+	SessionID    string   `json:"sessionId,omitempty"`
+	Program      string   `json:"program,omitempty"`
+	Offset       int64    `json:"offset,omitempty"`
+	Kind         string   `json:"kind,omitempty"`
+	Logical      string   `json:"logical,omitempty"`
+	At           string   `json:"at,omitempty"`
 }
 type APIError struct {
 	Code    string `json:"code"`
@@ -315,6 +323,11 @@ func serveConnection(ctx context.Context, conn net.Conn, supervisor Supervisor, 
 	line, err := reader.ReadBytes('\n')
 	if err != nil || len(line) > 1024*1024 || json.Unmarshal(line, &req) != nil {
 		_ = encoder.Encode(Response{Error: &APIError{Code: "invalid", Message: "invalid JSON request"}})
+		return
+	}
+	if req.Op == "agent.claim" || strings.HasPrefix(req.Op, "session.") {
+		_ = conn.SetDeadline(time.Time{})
+		serveSession(ctx, conn, reader, supervisor, req)
 		return
 	}
 	if req.Op == "agent.attach" || req.Op == "agent.takeover" {

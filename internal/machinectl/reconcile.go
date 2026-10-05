@@ -131,6 +131,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		current[d.AgentID] = d
 	}
 	for _, target := range remote.Agents {
+		if attached, ok := r.Manager.(interface {
+			Attached(string) (supervisor.AgentDefinition, bool)
+		}); ok {
+			if _, yes := attached.Attached(target.AgentID); yes {
+				continue
+			}
+		}
 		if skip[target.AgentID] {
 			continue
 		}
@@ -321,6 +328,14 @@ func prepareFolder(ctx context.Context, home string, agent Agent) error {
 	return nil
 }
 
+// JoinAssignment connects a locally attached, unplaced agent once a person
+// assigns it. No daemon-started definition or desired-state post is created.
+func (r *AgentReconciler) JoinAssignment(ctx context.Context, target Agent) error {
+	if target.AgentID == "" || target.AssignedOrganizationID == "" || target.AssignedWorkstreamCode == "" {
+		return fmt.Errorf("invalid attached assignment")
+	}
+	return r.joinHTTP(ctx, target)
+}
 func (r *AgentReconciler) joinHTTP(ctx context.Context, target Agent) error {
 	api, ok := r.API.(HTTPAPI)
 	if !ok {

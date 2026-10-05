@@ -36,6 +36,9 @@ type Manager struct {
 	// The production constructor is supplied by the daemon entrypoint.
 	NewDriver   func(io.Writer) pidriver.Driver
 	DesiredPost func(context.Context, AgentDefinition) (int64, error)
+	// PlaceAttached checks machine assignment and joins using the machine bearer.
+	// Empty workstream means the person has not placed the agent yet.
+	PlaceAttached func(context.Context, AgentDefinition) (organization, workstream string, err error)
 	// OperationGate serializes dashboard reconciliation with local lifecycle
 	// changes, without holding Manager.mu across network or git operations.
 	OperationGate  *sync.Mutex
@@ -43,6 +46,9 @@ type Manager struct {
 	Now            func() time.Time
 	mu             sync.Mutex
 	agents         map[string]*managed
+	claims         map[string]*Claim
+	pendingSubs    map[int]map[chan struct{}]struct{}
+	agentEvents    map[chan AgentEvent]struct{}
 	booted         chan struct{}
 	stoppingHold   bool
 	lastBusy       time.Time
@@ -72,6 +78,9 @@ type managed struct {
 	pendingWakes                                                    []agentapi.Notification
 	interruptFailures                                               map[string]int
 	delivered                                                       []string
+	wakes                                                           map[chan struct{}]struct{}
+	attachedConnected                                               bool
+	nextPlacement                                                   time.Time
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
@@ -249,6 +258,14 @@ func (m *Manager) bootAgent(ctx context.Context, path string) error {
 		if err := m.acquire(a); err != nil {
 			return err
 		}
+		if def.Program == "other" && def.State == "running" {
+			a.def.State = "stopped"
+			a.def.Reason = "no listener"
+			if err := m.save(a); err != nil {
+				m.release(a)
+				return err
+			}
+		}
 		m.agents[def.Name] = a
 		return nil
 	}
@@ -298,7 +315,7 @@ func validate(d AgentDefinition) error {
 		return fmt.Errorf("invalid agent definition")
 	}
 	if d.Kind == "attached" {
-		if d.Desired != "running" || d.Program != "pi" && d.Program != "other" || d.SessionPID < 0 || d.Offset < 0 {
+		if d.Desired != "running" || d.Program != "pi" && d.Program != "other" || d.SessionPID <= 0 || d.SessionStart == "" || d.Offset < 0 || d.Mode != "attached" || d.State != "running" && d.State != "stopped" && d.State != "stopped-by-dashboard" {
 			return fmt.Errorf("invalid attached agent definition")
 		}
 		return nil
@@ -322,6 +339,11 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	defer m.mu.Unlock()
 	if m.stoppingHold {
 		return fmt.Errorf("machine is stopping")
+	}
+	for name, existing := range m.agents {
+		if name != def.Name && existing.def.AgentID == def.AgentID {
+			return fmt.Errorf("agent identity already held by %s", name)
+		}
 	}
 	a := m.agents[def.Name]
 	if a != nil && (a.takenOver || a.def.Takeover != nil || a.def.State == "taken-over") {
@@ -403,6 +425,9 @@ func (m *Manager) Mode(_ context.Context, name, mode string) error {
 	if a == nil {
 		return os.ErrNotExist
 	}
+	if a.def.Kind == "attached" {
+		return fmt.Errorf("attached agents have no daemon mode")
+	}
 	if a.takenOver || a.def.Takeover != nil || a.def.State == "taken-over" {
 		return fmt.Errorf("agent is taken over")
 	}
@@ -423,6 +448,12 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 	a := m.agents[name]
 	if a == nil {
 		return os.ErrNotExist
+	}
+	if a.def.Kind == "attached" {
+		a.def.State = "stopped"
+		a.def.Reason = "stopped locally"
+		m.emitAttached(a, "dashboard_stop", "", a.def.Reason)
+		return m.save(a) // Do not kill the person's session or release its lock.
 	}
 	if a.takenOver || a.def.Takeover != nil || a.def.State == "taken-over" {
 		return fmt.Errorf("agent is taken over")
@@ -470,6 +501,9 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 	}
 	delete(m.agents, name)
 	delete(m.pendingDesired, name)
+	if a.def.Kind == "attached" {
+		m.release(a)
+	}
 	return nil
 }
 func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
@@ -508,6 +542,10 @@ func (m *Manager) Shutdown(ctx context.Context, stopAgents bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.agents {
+		if a.def.Kind == "attached" {
+			m.release(a)
+			continue
+		}
 		if a.driver != nil {
 			d := a.driver
 			a.driver = nil
@@ -655,6 +693,12 @@ func (m *Manager) Tick(ctx context.Context) error {
 	defer m.mu.Unlock()
 	if m.stoppingHold {
 		for _, a := range m.agents {
+			if a.def.Kind == "attached" {
+				if err := m.tickAttached(ctx, a); err != nil {
+					log.Printf("supervisor: attached %s: %v", a.def.Name, err)
+				}
+				continue
+			}
 			if a.takenOver && !a.takeoverConnected {
 				if err := m.cleanupDeadTakeover(a); err != nil {
 					return err
@@ -668,6 +712,12 @@ func (m *Manager) Tick(ctx context.Context) error {
 		agents = append(agents, a)
 	}
 	for _, a := range agents {
+		if a.def.Kind == "attached" {
+			if err := m.tickAttached(ctx, a); err != nil {
+				log.Printf("supervisor: attached %s: %v", a.def.Name, err)
+			}
+			continue
+		}
 		if a.def.Desired != "running" || a.def.State == "crashed" || a.def.State == "stopped-by-dashboard" || m.now().Before(a.nextRetry) {
 			continue
 		}
@@ -749,6 +799,19 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 	}
 	feed, err := m.Poll.Fetch(ctx, a.def, cursor, has)
 	if errors.Is(err, ErrAgentStopped) {
+		if a.def.Kind == "attached" {
+			a.def.State = "stopped-by-dashboard"
+			a.def.Reason = "stopped from the dashboard"
+			a.nextPoll = m.now().Add(30 * time.Second)
+			for ch := range a.wakes {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+			m.emitAttached(a, "dashboard_stop", "", a.def.Reason)
+			return m.save(a) // Never stop or signal the person's process.
+		}
 		a.def.State = "stopped-by-dashboard"
 		if err := m.save(a); err != nil {
 			return err

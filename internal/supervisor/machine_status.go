@@ -76,6 +76,9 @@ func (m *Manager) AgentsStopped() bool {
 		return false
 	}
 	for _, a := range m.agents {
+		if a.def.Kind == "attached" {
+			continue
+		}
 		if a.driver != nil || a.takenOver || a.def.Takeover != nil || !a.machineStopped {
 			return false
 		}
@@ -93,6 +96,9 @@ func (m *Manager) StopForMachine(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.agents {
+		if a.def.Kind == "attached" {
+			continue
+		} // Never signal a person's program or drop its lock.
 		if a.machineStopped {
 			continue
 		}
