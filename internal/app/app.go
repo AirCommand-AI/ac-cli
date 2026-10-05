@@ -1103,7 +1103,10 @@ func (a *App) listen(arguments []string) error {
 	if err := validateWorkstreamCode(workstreamCode); err != nil {
 		return err
 	}
-	return a.listenAs(workstreamCode, agentID, nil)
+	if _, err := a.credentialFor(workstreamCode, agentID); err != nil {
+		return err
+	}
+	return a.listenDaemon(workstreamCode, agentID)
 }
 
 // claimAgent takes the agent's lock: one live process per agent on this

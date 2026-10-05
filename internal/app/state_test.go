@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"io"
-	"strings"
 	"testing"
 
 	"github.com/AirCommand-AI/ac-cli/internal/daemonclient"
@@ -21,9 +19,17 @@ type fakeSessionControl struct {
 func (*fakeSessionControl) Status(context.Context) (daemonclient.Status, error) {
 	return daemonclient.Status{}, nil
 }
-func (f *fakeSessionControl) ClaimSession(context.Context, string, string) (io.Closer, error) {
+
+type fakeClaim struct{ parent *fakeSessionControl }
+
+func (*fakeClaim) Close() error { return nil }
+func (c *fakeClaim) AttachSession(s daemonclient.SessionAttach) error {
+	c.parent.attaches = append(c.parent.attaches, s)
+	return nil
+}
+func (f *fakeSessionControl) ClaimSession(context.Context, string, string) (daemonclient.SessionClaim, error) {
 	f.claims++
-	return io.NopCloser(strings.NewReader("")), nil
+	return &fakeClaim{parent: f}, nil
 }
 func (f *fakeSessionControl) AttachSession(_ context.Context, s daemonclient.SessionAttach) error {
 	f.attaches = append(f.attaches, s)

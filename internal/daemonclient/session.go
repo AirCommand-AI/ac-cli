@@ -15,6 +15,7 @@ import (
 // The daemon checks peer ancestry; a caller cannot attach an unrelated pid.
 type SessionAttach struct {
 	AgentID      string `json:"agentId"`
+	Name         string `json:"name,omitempty"`
 	Workstream   string `json:"workstream"`
 	SessionPID   int    `json:"sessionPid"`
 	SessionStart string `json:"sessionStart"`
@@ -43,7 +44,41 @@ func (c Client) Claim(ctx context.Context, agentID, workstream string) error {
 
 // ClaimSession keeps the claiming connection alive across the remote Join and
 // local Attach. The daemon releases an un-attached claim when this closes.
-func (c Client) ClaimSession(ctx context.Context, agentID, workstream string) (io.Closer, error) {
+type SessionClaim interface {
+	io.Closer
+	AttachSession(SessionAttach) error
+}
+
+type ClaimedSession struct {
+	conn    net.Conn
+	decoder *json.Decoder
+}
+
+func (s *ClaimedSession) Close() error { return s.conn.Close() }
+func (s *ClaimedSession) AttachSession(r SessionAttach) error {
+	_ = s.conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := json.NewEncoder(s.conn).Encode(struct {
+		Op string `json:"op"`
+		SessionAttach
+	}{"session.attach", r}); err != nil {
+		return err
+	}
+	var response struct {
+		OK    bool         `json:"ok"`
+		Error *RemoteError `json:"error"`
+	}
+	if err := s.decoder.Decode(&response); err != nil {
+		return err
+	}
+	if !response.OK {
+		if response.Error != nil {
+			return response.Error
+		}
+		return errors.New("daemon returned invalid attach response")
+	}
+	return nil
+}
+func (c Client) ClaimSession(ctx context.Context, agentID, workstream string) (SessionClaim, error) {
 	if c.SocketPath == "" {
 		return nil, errors.New("daemon socket path is empty")
 	}
@@ -64,7 +99,8 @@ func (c Client) ClaimSession(ctx context.Context, agentID, workstream string) (i
 		OK    bool         `json:"ok"`
 		Error *RemoteError `json:"error"`
 	}
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+	decoder := json.NewDecoder(conn)
+	if err := decoder.Decode(&response); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -76,7 +112,7 @@ func (c Client) ClaimSession(ctx context.Context, agentID, workstream string) (i
 		return nil, errors.New("daemon returned invalid claim response")
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return conn, nil
+	return &ClaimedSession{conn: conn, decoder: decoder}, nil
 }
 func (c Client) AttachSession(ctx context.Context, r SessionAttach) error {
 	return c.call(ctx, struct {
@@ -158,7 +194,7 @@ func (c Client) SubscribeSession(ctx context.Context, pid int, handle func(Sessi
 		switch msg.Type {
 		case "connect", "wake", "nudge", "interrupt", "detached":
 		default:
-			return fmt.Errorf("invalid session message type %q", msg.Type)
+			continue // future daemon event types are not fatal
 		}
 		if err := handle(msg); err != nil {
 			return err
