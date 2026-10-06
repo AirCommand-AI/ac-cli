@@ -17,6 +17,7 @@ type fakeSessionControl struct {
 	messages      []daemonclient.SessionMessage
 	acks          []int64
 	statusAgents  []daemonclient.AgentStatus
+	detaches      []string
 }
 
 func (f *fakeSessionControl) Status(context.Context) (daemonclient.Status, error) {
@@ -77,5 +78,10 @@ func TestStateReportsOnlyToDaemon(t *testing.T) {
 
 func (f *fakeSessionControl) AckSession(_ context.Context, _ int, offset int64) error {
 	f.acks = append(f.acks, offset)
+	return nil
+}
+
+func (f *fakeSessionControl) DetachFrom(_ context.Context, agentID string, pid int, reason string) error {
+	f.detaches = append(f.detaches, agentID+"|"+reason)
 	return nil
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/AirCommand-AI/ac-cli/internal/daemonclient"
 	"strings"
 	"testing"
 )
@@ -145,5 +146,29 @@ func TestLeaveThenJoinTheSameCodeInAnotherOrganization(t *testing.T) {
 	_, acme, _ := exec("workstreams", "--org", "Acme")
 	if strings.Contains(acme, "Lead") {
 		t.Fatalf("Acme listing still claims Lead after it moved:\n%s", acme)
+	}
+}
+
+// TestLeaveFromAnAttachedSessionDetachesIt covers a pi that leaves: the daemon
+// must stop treating the session as that agent, or the add-on keeps reporting
+// for the workstream it left.
+func TestLeaveFromAnAttachedSessionDetachesIt(t *testing.T) {
+	_, client, exec := crossOrgFixture(t)
+	fake := &fakeSessionControl{}
+	client.SessionClient = fake
+	client.ProcessSnapshot = func(int) (int, string, string, error) { return 1, "pi", "start", nil }
+	if code, _, errText := exec("leave", "--agent", "Lead"); code != 0 {
+		t.Fatalf("leave exit code = %d, stderr = %q", code, errText)
+	}
+	if len(fake.detaches) != 1 || !strings.HasSuffix(fake.detaches[0], "|left the workstream") {
+		t.Fatalf("detaches = %v, want one 'left the workstream'", fake.detaches)
+	}
+}
+
+func TestAgentNamesNeverStartWithADash(t *testing.T) {
+	for name, want := range map[string]bool{"--help": false, "-x": false, "eng-1": true, "_svc": true, "Lead": true} {
+		if got := daemonclient.ValidAgentName(name); got != want {
+			t.Errorf("ValidAgentName(%q) = %v, want %v", name, got, want)
+		}
 	}
 }

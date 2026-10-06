@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 
 	"github.com/AirCommand-AI/ac-cli/internal/enroll"
@@ -300,8 +302,20 @@ func (a *App) leave(arguments []string) error {
 	if err := a.forgetWorkstreamCredential(agent); err != nil {
 		return err
 	}
+	a.detachAfterLeave(agent)
 	fmt.Fprintf(a.outputWriter(), "%s is no longer in a workstream.\n", agent.Name)
 	return nil
+}
+
+// detachAfterLeave ends this session's daemon attachment for an agent that
+// just left, so the pi add-on disconnects and stops reporting for the old
+// workstream. Best effort: run outside the attached session it does nothing.
+func (a *App) detachAfterLeave(agent agentSummary) {
+	process, err := discoverSession(os.Getpid(), a.ProcessSnapshot)
+	if err != nil {
+		return
+	}
+	_ = a.sessionControl().DetachFrom(context.Background(), agent.AgentID, process.SessionPID, "left the workstream")
 }
 
 // forgetWorkstreamCredential deletes an agent's stored workstream credential

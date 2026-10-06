@@ -175,6 +175,9 @@ func serveSession(ctx context.Context, conn net.Conn, reader *bufio.Reader, s Su
 		if req.Reason == "conversation changed" {
 			reason = "pi conversation changed"
 		}
+		if req.Reason == "left the workstream" {
+			reason = "left the workstream"
+		}
 		if err = m.Detach(req.AgentID, reason); err != nil {
 			sessionFailure(conn, "invalid", err)
 			return

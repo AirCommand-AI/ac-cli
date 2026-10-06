@@ -119,6 +119,12 @@ func (c Client) AttachSession(ctx context.Context, r SessionAttach) error {
 func (c Client) DetachSession(ctx context.Context, agentID string) error {
 	return c.call(ctx, map[string]any{"op": "session.detach", "agentId": agentID}, nil)
 }
+
+// DetachFrom ends the attachment held by the session pid this command runs
+// under (the daemon checks the caller descends from it).
+func (c Client) DetachFrom(ctx context.Context, agentID string, pid int, reason string) error {
+	return c.call(ctx, map[string]any{"op": "session.detach", "agentId": agentID, "sessionPid": pid, "reason": reason}, nil)
+}
 func (c Client) SessionEvent(ctx context.Context, pid int, kind, logical string) error {
 	request := map[string]any{"op": "session.event", "sessionPid": pid, "kind": kind, "at": time.Now().UTC().Format(time.RFC3339Nano)}
 	if logical != "" {
