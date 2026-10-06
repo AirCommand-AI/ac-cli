@@ -61,10 +61,14 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	if skillUrgentGuidance != extensionUrgentGuidance {
 		t.Fatalf("Claude Code and pi urgent guidance differ\n--- Claude Code ---\n%s\n--- pi ---\n%s", skillUrgentGuidance, extensionUrgentGuidance)
 	}
-	if !strings.Contains(extension, "\t\t\tTASK_GUIDANCE,") {
+	promptGuidance := textBetween(t, extension, "const guidance = [", "];")
+	if !strings.Contains(extension, `pi.on("before_agent_start"`) {
+		t.Fatal("pi extension does not add its guidance to the system prompt")
+	}
+	if !strings.Contains(promptGuidance, "\t\tTASK_GUIDANCE,") {
 		t.Fatal("pi extension defines task guidance but does not inject it")
 	}
-	if !strings.Contains(extension, "\t\t\tURGENT_GUIDANCE,") {
+	if !strings.Contains(promptGuidance, "\t\tURGENT_GUIDANCE,") {
 		t.Fatal("pi extension defines urgent guidance but does not inject it")
 	}
 	if !strings.Contains(extension, `deliverAs:urgent?"steer":"followUp"`) {
@@ -73,8 +77,8 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 	if !strings.Contains(skill, "or list, inspect, create, progress, or comment on tasks") {
 		t.Fatal("Claude Code skill description does not advertise task support")
 	}
-	if !strings.Contains(extension, "use messages and operator-authorized tasks") {
-		t.Fatal("pi tool prompt snippet does not advertise task support")
+	if !strings.Contains(promptGuidance, "use messages and operator-authorized tasks") {
+		t.Fatal("pi prompt guidance does not advertise task support")
 	}
 	// A work.start grant must be enough to push a feature branch; agents
 	// stalled asking for a non-existent push approval (ac-cli#14).

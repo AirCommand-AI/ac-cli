@@ -38,3 +38,14 @@ test("switching to a new conversation detaches old agent before pending subscrip
   await handlers.get("session_shutdown")!({},ctx);
  }finally{sockets.forEach(s=>s.destroy());server.close();rmSync(home,{recursive:true,force:true});process.env.HOME=originalHome}
 });
+
+test("add-on registers no connect path and adds AirCommand guidance to the prompt",async()=>{
+  const tools:string[]=[],commands:string[]=[],handlers=new Map<string,any>();
+  const pi={registerFlag(){},getFlag(){return undefined},registerTool(t:{name:string}){tools.push(t.name)},registerCommand(name:string){commands.push(name)},on(name:string,handler:any){handlers.set(name,handler)},sendMessage(){},sendUserMessage(){}} as any;
+  (await import("./index")).default(pi);
+  expect(tools).toEqual([]);
+  expect(commands).toEqual([]);
+  const result=await handlers.get("before_agent_start")({systemPrompt:"BASE"});
+  expect(result.systemPrompt.startsWith("BASE\n\n# AirCommand\n- ")).toBe(true);
+  expect(result.systemPrompt).toContain("aircom inbox");
+});
