@@ -44,6 +44,9 @@ func TestMachineRunAgentCommandsUseAgentBearerAndC5Body(t *testing.T) {
 			t.Fatalf("%v: %s", args, errOut.String())
 		}
 	}
+	if code := a.Run([]string{"machine", "request", "--workstream", "694", "--agent", credential.AgentID, "--profile", "standard"}); code == 0 {
+		t.Fatal("run without repositories accepted")
+	}
 	if len(paths) != 3 || !strings.Contains(out.String(), "run_0123456789abcdef01234567") {
 		t.Fatalf("paths=%v output=%s", paths, out.String())
 	}

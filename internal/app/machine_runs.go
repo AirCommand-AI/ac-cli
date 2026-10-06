@@ -109,7 +109,7 @@ func (a *App) machineRun(args []string) error {
 			usedCount = true
 		}
 	})
-	if args[0] == "request" && (profile == "" || run != "" || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount) {
+	if args[0] == "request" && (profile == "" || run != "" || len(repos.values) == 0 || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount) {
 		return &publicError{message: machineRunUsage}
 	}
 	if args[0] != "request" && (run == "" || profile != "" || model != "" || len(names.values) > 0 || len(repos.values) > 0 || runtimeMin != 0 || agents != 1) {
