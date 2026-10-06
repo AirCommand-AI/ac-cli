@@ -64,11 +64,12 @@ type App struct {
 	// Organization is sent on requests made with the device credential, which
 	// carries no organization of its own. Set per command from --org; empty for
 	// agent credentials, which are already bound to one workstream.
-	Organization    string
-	DaemonCommands  DaemonCommands
-	AgentCommands   AgentCommands
-	SessionClient   SessionControl
-	ProcessSnapshot ProcessSnapshot
+	Organization         string
+	DaemonCommands       DaemonCommands
+	AgentCommands        AgentCommands
+	SessionClient        SessionControl
+	ProcessSnapshot      ProcessSnapshot
+	BootstrapMetadataURL string // injected IMDS endpoint for bootstrap tests; empty uses IMDSv2
 	// joinForDaemon is set while agent start joins on the daemon's behalf.
 	joinForDaemon bool
 }
@@ -319,6 +320,10 @@ func (a *App) Run(arguments []string) int {
 			err = a.initMachine(arguments[1:])
 		case "daemon":
 			err = a.daemonCommand(arguments[1:])
+		case "machine":
+			err = a.machineRun(arguments[1:])
+		case "git-credential":
+			err = a.gitCredential(arguments[1:])
 		case "agent":
 			err = a.agentCommand(arguments[1:])
 		case "workstreams":
@@ -391,7 +396,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | daemon start|stop|status | agent create|remove|start|stop|list|attach | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | docs --workstream <code> | doc get|put|diff|archive <name> --workstream <code> | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | machine bootstrap|request|done|cancel | git-credential get | daemon start|stop|status | agent create|remove|start|stop|list|attach | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | docs --workstream <code> | doc get|put|diff|archive <name> --workstream <code> | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -409,6 +414,10 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "Usage: aircom init", true
 	case "daemon":
 		return "Usage: aircom daemon start|stop|status", true
+	case "machine":
+		return machineRunUsage, true
+	case "git-credential":
+		return "Usage: aircom git-credential get", true
 	case "agent":
 		return "Usage: aircom agent create|remove|start|stop|list|attach", true
 	case "orgs":
