@@ -805,6 +805,24 @@ func (m *Manager) poll(ctx context.Context, a *managed) error {
 	store := listenstore.NewStore(m.Home)
 	cred, err := credentials.NewStore(m.Home).FindByAgent(a.def.Workstream, a.def.AgentID)
 	if err != nil {
+		// An attached agent that left its workstream has no credential there any
+		// more: stop it instead of retrying (and failing) every tick.
+		if a.def.Kind == "attached" {
+			if a.def.State == "running" {
+				a.def.State = "stopped"
+				a.def.Reason = "left the workstream"
+				for ch := range a.wakes {
+					select {
+					case ch <- struct{}{}:
+					default:
+					}
+				}
+				m.emitAttached(a, "session_exited", "", a.def.Reason)
+				_ = m.save(a)
+			}
+			a.nextPoll = m.now().Add(30 * time.Second)
+			return nil
+		}
 		return err
 	}
 	key := cred.WorkstreamKey()

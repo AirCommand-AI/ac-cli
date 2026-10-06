@@ -302,3 +302,29 @@ func TestSameSessionRejoinKeepsRunningListener(t *testing.T) {
 		t.Fatalf("same-session re-join reset a running listener to %q (%s)", def.State, def.Reason)
 	}
 }
+
+// An attached agent that left its workstream (credential gone) must neither
+// block the machine's catch-up for other agents nor stay "running".
+func TestLeftAttachedAgentDoesNotBlockCatchUp(t *testing.T) {
+	m, _, _, _ := setup(t)
+	if err := credentials.NewStore(m.Home).Save(credentials.Credential{AgentID: "agm_left", WorkstreamCode: "529", APIToken: "token", SocketKey: "key", SocketAddress: "ac:agm_left"}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := m.Claim("agm_left", "529", os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Attach(claim, Attachment{AgentID: "agm_left", Name: "leaver", Workstream: "529", Program: "pi", SessionPID: os.Getpid(), SessionStart: SessionProcessStart(os.Getpid())}); err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseClaim(claim)
+	if err := credentials.NewStore(m.Home).Delete("agm_left"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CatchUp(context.Background()); err != nil {
+		t.Fatalf("catch-up failed because of a left agent: %v", err)
+	}
+	if def, _ := m.Attached("agm_left"); def.State != "stopped" || def.Reason != "left the workstream" {
+		t.Fatalf("left agent state %q reason %q", def.State, def.Reason)
+	}
+}

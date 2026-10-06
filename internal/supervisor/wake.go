@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/AirCommand-AI/ac-cli/internal/agentapi"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
@@ -68,8 +69,10 @@ func (m *Manager) CatchUp(ctx context.Context) error {
 		if a.def.Desired != "running" || a.def.State != "running" {
 			continue
 		}
+		// One agent's failure must not block the machine connection for the
+		// others; log it and keep going.
 		if err := m.poll(ctx, a); err != nil {
-			return err
+			log.Printf("supervisor: catch-up %s: %v", a.def.Name, err)
 		}
 	}
 	return nil
