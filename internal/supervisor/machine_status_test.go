@@ -3,11 +3,38 @@ package supervisor
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
+
+	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 	"testing"
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 )
+
+func TestRunFinishingHoldCannotBeClearedByOnlineStatusOrRestart(t *testing.T) {
+	m, tm, poll, _ := setup(t)
+	if err := os.MkdirAll(storagepath.Root(m.Home), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storagepath.Root(m.Home), "run.json"), []byte(`{"runId":"run_example"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.BeginRunFinishing(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetMachineState(context.Background(), "online"); err != nil || !m.stoppingHold {
+		t.Fatalf("online cleared finishing hold: %v", err)
+	}
+	next := New(m.Home, m.Pi, m.CLI, tm, poll)
+	if !next.runFinishing || !next.stoppingHold {
+		t.Fatal("run finishing hold did not survive restart")
+	}
+	if err := next.SetMachineState(context.Background(), "online"); err != nil || !next.stoppingHold {
+		t.Fatalf("restart cleared finishing hold: %v", err)
+	}
+}
 
 func TestMachineHoldPreservesParkedStates(t *testing.T) {
 	for _, state := range []string{"crashed", "stopped-by-dashboard"} {

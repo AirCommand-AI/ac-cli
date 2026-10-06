@@ -126,6 +126,16 @@ func (m *Manager) StopForMachine(ctx context.Context) error {
 	return nil
 }
 
+// BeginRunFinishing is triggered by the authenticated run API. Unlike a
+// managed machine's ordinary stop, the launch hold cannot be cleared by a
+// later status response reporting the run device online.
+func (m *Manager) BeginRunFinishing(ctx context.Context) error {
+	m.mu.Lock()
+	m.runFinishing = true
+	m.mu.Unlock()
+	return m.SetMachineState(ctx, "stopping")
+}
+
 // SetMachineState is driven only by an authenticated HTTPS status response.
 // The hold is set before stopping so Tick cannot relaunch between agents.
 func (m *Manager) SetMachineState(ctx context.Context, state string) error {
@@ -184,6 +194,10 @@ func (m *Manager) SetMachineState(ctx context.Context, state string) error {
 		return shutdownErr
 	case "online", "error":
 		m.mu.Lock()
+		if m.runFinishing {
+			m.mu.Unlock()
+			return nil
+		}
 		m.stoppingHold = false
 		for _, a := range m.agents {
 			a.machineStopped = false

@@ -30,6 +30,26 @@ func (s *fakeStatusSource) SetMachineState(_ context.Context, state string) erro
 	return nil
 }
 
+func TestHTTPReporterRunModeAddsCapability(t *testing.T) {
+	source := &fakeStatusSource{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if len(body.Capabilities) != 2 || body.Capabilities[1] != "run.v1" {
+			t.Errorf("capabilities=%v", body.Capabilities)
+		}
+		_, _ = w.Write([]byte(`{"machine":{"state":"online"},"run":{"state":"finishing"}}`))
+	}))
+	defer server.Close()
+	if err := (&HTTPReporter{URL: server.URL, Token: "machine", Source: source, RunMode: true}).Report(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHTTPReporterSendsContractAndAppliesMachineState(t *testing.T) {
 	source := &fakeStatusSource{idle: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)}
 	calls := 0

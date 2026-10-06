@@ -21,6 +21,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/enroll"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
+	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
@@ -311,7 +312,11 @@ func prepareFolder(ctx context.Context, home string, agent Agent) error {
 		if err != nil {
 			return err
 		}
-		cloneCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		timeout := 2 * time.Minute
+		if _, runErr := os.Stat(filepath.Join(storagepath.Root(home), "run.json")); runErr == nil {
+			timeout = 10 * time.Minute
+		}
+		cloneCtx, cancel := context.WithTimeout(ctx, timeout)
 		cmd := exec.CommandContext(cloneCtx, "git", "clone", "--", "https://github.com/"+repo+".git", tmp)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 		output, cloneErr := cmd.CombinedOutput()
@@ -323,6 +328,13 @@ func prepareFolder(ctx context.Context, home string, agent Agent) error {
 		if err := os.Rename(tmp, dest); err != nil {
 			_ = os.RemoveAll(tmp)
 			return err
+		}
+		if _, runErr := os.Stat(filepath.Join(storagepath.Root(home), "run.json")); runErr == nil {
+			for _, pair := range [][2]string{{"user.name", agent.Name + " (AirCommand)"}, {"user.email", "run-agents@users.noreply.aircommand.ai"}} {
+				if out, e := exec.CommandContext(ctx, "git", "-C", dest, "config", "--local", pair[0], pair[1]).CombinedOutput(); e != nil {
+					return fmt.Errorf("configure git author: %w: %s", e, strings.TrimSpace(string(out)))
+				}
+			}
 		}
 	}
 	return nil

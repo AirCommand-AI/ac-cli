@@ -27,6 +27,7 @@ type HTTPReporter struct {
 	URL, Token, Version string
 	Client              *http.Client
 	Source              StatusSource
+	RunMode             bool // run.v1 is opt-in; managed devices keep the old check-in shape
 }
 
 func (r *HTTPReporter) Report(ctx context.Context) error { return r.report(ctx, true) }
@@ -66,13 +67,17 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 			Kind    string `json:"kind"`
 		}{a.AgentID, a.State, a.Mode, kind})
 	}
+	capabilities := []string{"check-in"}
+	if r.RunMode {
+		capabilities = append(capabilities, "run.v1")
+	}
 	body, err := json.Marshal(struct {
 		Version       string     `json:"aircomVersion"`
 		Capabilities  []string   `json:"capabilities"`
 		IdleSince     *time.Time `json:"idleSince"`
 		AgentsStopped bool       `json:"agentsStopped"`
 		Agents        any        `json:"agents"`
-	}{r.Version, []string{"check-in"}, idle, r.Source.AgentsStopped(), rows})
+	}{r.Version, capabilities, idle, r.Source.AgentsStopped(), rows})
 	if err != nil {
 		return err
 	}

@@ -53,6 +53,7 @@ type Manager struct {
 	agentEvents    map[chan AgentEvent]struct{}
 	booted         chan struct{}
 	stoppingHold   bool
+	runFinishing   bool
 	lastBusy       time.Time
 }
 type managed struct {
@@ -93,6 +94,9 @@ func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
 	m := &Manager{Home: home, Pi: pi, CLI: cli, Tmux: tmux, Poll: poll, Now: time.Now, NewDriver: func(log io.Writer) pidriver.Driver { return pidriver.New(pidriver.Options{Log: log}) }, agents: make(map[string]*managed), booted: make(chan struct{})}
 	if _, err := os.Stat(m.machineHoldPath()); err == nil || !errors.Is(err, os.ErrNotExist) {
 		m.stoppingHold = true // fail closed when the hold marker cannot be read
+		if _, runErr := os.Stat(filepath.Join(storagepath.Root(home), "run.json")); runErr == nil {
+			m.runFinishing = true
+		}
 	}
 	return m
 }

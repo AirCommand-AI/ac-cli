@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/daemon"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
 	"github.com/AirCommand-AI/ac-cli/internal/machinectl"
+	"github.com/AirCommand-AI/ac-cli/internal/runmode"
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
@@ -99,7 +103,33 @@ func main() {
 			return nil, nil
 		} // offline polling still runs without a machine socket
 		source := manager.(machinectl.StatusSource)
-		control := machinectl.New(nil, &machinectl.HTTPReporter{URL: dashboardURL, Token: machine.APIToken, Version: version, Client: httpClient, Source: source})
+		_, runErr := runmode.Load(home)
+		runEnabled := runErr == nil
+		if runEnabled {
+			api := runmode.API{BaseURL: dashboardURL, Client: httpClient, Store: store}
+			tokens := &runmode.TokenSource{API: api}
+			svc := &runmode.Service{Home: home, API: api, Tokens: tokens, Stop: manager.(runmode.Stopper), Clones: func() []runmode.Clone {
+				defs := manager.(*supervisor.Manager).Definitions()
+				var clones []runmode.Clone
+				for _, d := range defs {
+					if !strings.HasPrefix(filepath.Clean(d.WorkFolder), filepath.Join(home, "work")+string(os.PathSeparator)) {
+						continue
+					}
+					for _, repo := range d.Repos {
+						clones = append(clones, runmode.Clone{Agent: d.Name, Repo: repo, Folder: d.WorkFolder})
+					}
+				}
+				return clones
+			}, OnError: func(err error) { log.Printf("machine run: %v", err) }}
+			go svc.Run(ctx)
+			go svc.WatchLogin(ctx)
+			go func() {
+				if err := runmode.ServeTokens(ctx, home, tokens); err != nil && ctx.Err() == nil {
+					log.Printf("machine run token helper: %v", err)
+				}
+			}()
+		}
+		control := machinectl.New(nil, &machinectl.HTTPReporter{URL: dashboardURL, Token: machine.APIToken, Version: version, Client: httpClient, Source: source, RunMode: runEnabled})
 		return &daemon.SocketClient{URL: "wss://ac.aircommand.ai/machine", MachineID: machine.DeviceID, Sink: manager.(daemon.WakeSink), Control: control, OnCheckIn: control.CheckIn, OnConnect: control.CheckIn, SecretLoader: func(ctx context.Context) (string, error) {
 			return daemon.MachineSecret(ctx, store, httpClient, dashboardURL)
 		}}, nil
