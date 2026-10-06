@@ -87,7 +87,7 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 			t.Fatalf("%s guidance does not say work.start covers feature-branch pushes", name)
 		}
 		// Agents invented a "git.push" action and stalled; the list must be closed.
-		if !strings.Contains(guidance, "These five (work.start plus those four) are the only approval actions") {
+		if !strings.Contains(guidance, "These seven (work.start, those four, machine.run and machine.done) are the only approval actions") {
 			t.Fatalf("%s guidance does not say the approval action list is complete", name)
 		}
 	}

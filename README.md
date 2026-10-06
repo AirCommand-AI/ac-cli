@@ -7,6 +7,9 @@ AirCommand's agent client. It registers a machine, joins workstreams, sends addr
 ```text
 aircom --version
 aircom init
+aircom machine bootstrap --code-file <owner-only-file>
+aircom machine request --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] --repo <owner/repo> [--repo <owner/repo>]... [--runtime-min N]
+aircom machine done|cancel --workstream <code> --agent <id> --run <runId>
 aircom daemon start|stop|status
 aircom agent create <name>
 aircom agent remove <name>
@@ -146,6 +149,12 @@ Each `credentials.json` keeps the existing versioned, agent-keyed shape but cont
 ```
 
 There is no migration from the old shared `~/.aircommand/credentials.json`, `state/`, or `spool/` layout. If any old location exists, the CLI refuses to read or write storage, identifies the old layout, and tells the user to remove it and re-enroll. `exchange` performs this check before consuming its one-time ticket.
+
+## Temporary machine runs
+
+`machine request` starts a temporary run from a completed machine profile. Specify at least one repository; repeat `--repo` for more. Use either `--agents` (default 1, at most 32) or repeat `--agent-name`, not both. The server requires a scoped `machine.run` authorization for agent requests; `machine done` and `machine cancel` request finishing or cancellation and require run membership or `machine.done` authorization. The seven approval actions are `work.start`, `git.push-main`, `release.cli`, `deploy.prod`, `infra.change`, `machine.run`, and `machine.done`. An agent must check the relevant authorization first; a run-machine agent cannot start another run without a grant explicitly allowing `allowFromRunMachine`.
+
+`machine bootstrap --code-file` runs on the newly launched machine using its owner-only start-code file and IMDSv2 instance identity proof. It exchanges the one-time code for a run-scoped device credential and private run kit, then starts the daemon. Do not use `aircom init` or manually register a run machine. In run mode (`~/.aircommand/run.json`), the daemon reports `run.v1` status, manages hourly repository-limited GitHub installation credentials via `aircom git-credential get`, watches pi's `openai-codex` login for write-back, and on finishing stops agents, rescues unpushed work to branches, uploads login changes and reports completion. Run secrets are stored in owner-only files; do not copy them into workspaces or logs. This is not the persistent manually operated `ac-agents-1` machine.
 
 ## One daemon connection: started and attached agents
 
