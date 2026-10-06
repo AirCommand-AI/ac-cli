@@ -71,7 +71,7 @@ func TestBootstrapUsesIMDSv2ProofAndOwnerOnlyFiles(t *testing.T) {
 			if req.PublicKey != originalKey || req.APIToken != originalToken {
 				t.Error("retry changed pending key/token")
 			}
-			_, _ = w.Write([]byte(`{"runId":"` + runID + `","deviceId":"dev_test","machine":{"version":1,"deviceId":"dev_test","machineName":"run-test","machineSocketSecret":"socket-key","createdAt":"2026-10-06T00:00:00Z"},"piAuth":{"openai-codex":{"type":"oauth","access":"access"}},"piModels":{"providers":{"openai-codex":{}}},"piSettings":{"defaultProvider":"openai-codex"},"hardLimitAt":"2030-10-06T00:00:00Z","workstreamCode":"107","organizationId":"org_test"}`))
+			_, _ = w.Write([]byte(`{"runId":"` + runID + `","deviceId":"dev_test","machine":{"version":1,"deviceId":"dev_test","machineName":"run-test","machineSocketSecret":"socket-key","createdAt":"2026-10-06T00:00:00Z"},"piAuth":{"openai-codex":{"type":"oauth","access":"access","refresh":"refresh","expires":1893456000000,"accountId":"acct"}},"piModels":{"providers":{"openai-codex":{}}},"piSettings":{"defaultProvider":"openai-codex","defaultModel":"gpt-6","transport":"sse"},"hardLimitAt":"2030-10-06T00:00:00Z","workstreamCode":"107","organizationId":"org_test"}`))
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(404)

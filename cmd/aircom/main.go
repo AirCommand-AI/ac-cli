@@ -92,10 +92,14 @@ func main() {
 		return manager, nil
 	}
 	commands.NewControl = func(manager daemon.Supervisor) *machinectl.Control {
-		return machinectl.New(&machinectl.AgentReconciler{
+		control := machinectl.New(&machinectl.AgentReconciler{
 			API:     machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store},
 			Manager: manager.(machinectl.Manager), Store: store, Home: home, Gate: operationGate,
 		}, nil)
+		if _, err := runmode.Load(home); err == nil {
+			control.ReportFirst = true
+		}
+		return control
 	}
 	commands.NewSocket = func(ctx context.Context, manager daemon.Supervisor) (*daemon.SocketClient, error) {
 		machine, err := store.LoadMachine()
@@ -121,13 +125,18 @@ func main() {
 				}
 				return clones
 			}, OnError: func(err error) { log.Printf("machine run: %v", err) }}
-			go svc.Run(ctx)
-			go svc.WatchLogin(ctx)
 			go func() {
-				if err := runmode.ServeTokens(ctx, home, tokens); err != nil && ctx.Err() == nil {
-					log.Printf("machine run token helper: %v", err)
+				if ready, ok := manager.(interface{ WaitReady(context.Context) error }); ok {
+					if err := ready.WaitReady(ctx); err != nil {
+						return
+					}
 				}
+				svc.Run(ctx)
 			}()
+			go svc.WatchLogin(ctx)
+			if err := runmode.StartTokens(ctx, home, tokens); err != nil {
+				return nil, err
+			}
 		}
 		control := machinectl.New(nil, &machinectl.HTTPReporter{URL: dashboardURL, Token: machine.APIToken, Version: version, Client: httpClient, Source: source, RunMode: runEnabled})
 		return &daemon.SocketClient{URL: "wss://ac.aircommand.ai/machine", MachineID: machine.DeviceID, Sink: manager.(daemon.WakeSink), Control: control, OnCheckIn: control.CheckIn, OnConnect: control.CheckIn, SecretLoader: func(ctx context.Context) (string, error) {

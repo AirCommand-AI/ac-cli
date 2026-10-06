@@ -53,9 +53,26 @@ func TestRescueRejectsOversizedFileBeforeCommit(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
 	_ = os.MkdirAll(filepath.Join(repo, ".git"), 0o700)
-	// Invalid destination is rejected without consulting git or network.
-	result := (Rescuer{RunID: "run_example", Clones: []Clone{{Agent: "../unsafe", Repo: "Org/repo", Folder: root}}, LimitBytes: 1}).Rescue(context.Background())
-	if len(result) != 1 || result[0].Reason != "invalid rescue destination" {
+	_ = os.WriteFile(filepath.Join(repo, "big.bin"), []byte("123456789"), 0o600)
+	bin := filepath.Join(root, "bin")
+	_ = os.MkdirAll(bin, 0o700)
+	log := filepath.Join(root, "git.log")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$GIT_LOG"
+case " $* " in
+  *" remote get-url origin "*) echo https://github.com/Org/repo.git ;;
+  *" diff --cached --name-only -z "*) printf 'big.bin\000' ;;
+esac
+`
+	_ = os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700)
+	t.Setenv("GIT_LOG", log)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	result := (Rescuer{RunID: "run_example", Clones: []Clone{{Agent: "eng-1", Repo: "Org/repo", Folder: root}}, LimitBytes: 4}).Rescue(context.Background())
+	if len(result) != 1 || result[0].Reason != "staged work exceeds rescue size limit" {
 		t.Fatal(result)
+	}
+	commands, _ := os.ReadFile(log)
+	if strings.Contains(string(commands), " commit ") || strings.Contains(string(commands), " push ") {
+		t.Fatalf("unsafe git calls: %s", commands)
 	}
 }

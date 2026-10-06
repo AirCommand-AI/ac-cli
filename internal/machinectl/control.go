@@ -20,10 +20,11 @@ type Reporter interface {
 // Control coalesces content-free check-in signals with periodic checks.
 // Construct with New; a check-in never carries a definition or command.
 type Control struct {
-	Reconciler Reconciler
-	Reporter   Reporter
-	checks     chan struct{}
-	interval   time.Duration
+	Reconciler  Reconciler
+	Reporter    Reporter
+	ReportFirst bool // run machines must become running before cloning private repos
+	checks      chan struct{}
+	interval    time.Duration
 }
 
 func New(reconciler Reconciler, reporter Reporter) *Control {
@@ -45,6 +46,14 @@ func (c *Control) Run(ctx context.Context, onError func(error)) {
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
 	check := func() {
+		if c.ReportFirst && c.Reporter != nil && ctx.Err() == nil {
+			if err := c.Reporter.Report(ctx); err != nil {
+				if onError != nil {
+					onError(err)
+				}
+				return
+			}
+		}
 		if c.Reconciler != nil {
 			if err := c.Reconciler.Reconcile(ctx); err != nil && onError != nil && ctx.Err() == nil {
 				onError(err)

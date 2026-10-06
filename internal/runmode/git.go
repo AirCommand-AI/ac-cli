@@ -25,23 +25,59 @@ func writeGHHosts(home, token string) error {
 	return writePrivate(filepath.Join(home, ".config", "gh", "hosts.yml"), []byte("github.com:\n    oauth_token: "+token+"\n    git_protocol: https\n"))
 }
 
-// ServeTokens lives and dies with the machine daemon. Renewal is serialized
-// by TokenSource; a malformed request never leaks the token.
-func ServeTokens(ctx context.Context, home string, source *TokenSource) error {
-	path := TokenSocket(home)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	_ = os.Remove(path)
-	listener, err := net.Listen("unix", path)
+// StartTokens binds synchronously before reconciliation can clone private
+// repositories. The accept loop then lives and dies with the daemon context.
+func StartTokens(ctx context.Context, home string, source *TokenSource) error {
+	listener, err := listenTokens(home)
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
-	defer os.Remove(path)
-	if err = os.Chmod(path, 0o600); err != nil {
+	go func() { _ = serveTokenListener(ctx, home, listener, source) }()
+	return nil
+}
+
+// ServeTokens is also useful for foreground integration tests.
+func ServeTokens(ctx context.Context, home string, source *TokenSource) error {
+	listener, err := listenTokens(home)
+	if err != nil {
 		return err
 	}
+	return serveTokenListener(ctx, home, listener, source)
+}
+func listenTokens(home string) (net.Listener, error) {
+	path := TokenSocket(home)
+	if len(path) > 103 {
+		return nil, fmt.Errorf("run token socket path is too long")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	if _, err := os.Lstat(path); err == nil {
+		conn, e := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if e == nil {
+			conn.Close()
+			return nil, fmt.Errorf("run token daemon already running")
+		}
+		if e = os.Remove(path); e != nil {
+			return nil, e
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err = os.Chmod(path, 0o600); err != nil {
+		listener.Close()
+		_ = os.Remove(path)
+		return nil, err
+	}
+	return listener, nil
+}
+func serveTokenListener(ctx context.Context, home string, listener net.Listener, source *TokenSource) error {
+	defer listener.Close()
+	defer os.Remove(TokenSocket(home))
 	go func() { <-ctx.Done(); _ = listener.Close() }()
 	for {
 		conn, err := listener.Accept()

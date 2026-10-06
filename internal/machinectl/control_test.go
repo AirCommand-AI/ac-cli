@@ -16,6 +16,17 @@ type reportFunc func(context.Context) error
 
 func (f reportFunc) Report(ctx context.Context) error { return f(ctx) }
 
+func TestRunModeReportsBeforeCloning(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls []string
+	c := New(reconcileFunc(func(context.Context) error { calls = append(calls, "clone"); cancel(); return nil }), reportFunc(func(context.Context) error { calls = append(calls, "report"); return nil }))
+	c.ReportFirst = true
+	c.Run(ctx, nil)
+	if len(calls) != 2 || calls[0] != "report" || calls[1] != "clone" {
+		t.Fatalf("startup order %v", calls)
+	}
+}
 func TestCheckInCoalescesAndChecksOnStartup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

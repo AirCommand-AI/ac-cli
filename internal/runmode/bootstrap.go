@@ -151,6 +151,23 @@ func (b Bootstrap) Exchange(ctx context.Context, codeFile string) (Run, error) {
 	if json.Unmarshal(result.PiAuth, &auth) != nil || len(auth) != 1 || len(auth["openai-codex"]) == 0 {
 		return Run{}, errors.New("bootstrap response includes invalid model login")
 	}
+	var login struct {
+		Type      string `json:"type"`
+		Access    string `json:"access"`
+		Refresh   string `json:"refresh"`
+		AccountID string `json:"accountId"`
+		Expires   int64  `json:"expires"`
+	}
+	if json.Unmarshal(auth["openai-codex"], &login) != nil || login.Type == "" || login.Access == "" || login.Refresh == "" || login.AccountID == "" || login.Expires <= b.now().Unix() {
+		return Run{}, errors.New("bootstrap response includes incomplete model login")
+	}
+	var settings struct{ DefaultProvider, DefaultModel, Transport string }
+	var models struct {
+		Providers map[string]json.RawMessage `json:"providers"`
+	}
+	if json.Unmarshal(result.PiSettings, &settings) != nil || settings.DefaultProvider != "openai-codex" || settings.DefaultModel == "" || settings.Transport != "sse" || json.Unmarshal(result.PiModels, &models) != nil || len(models.Providers["openai-codex"]) == 0 {
+		return Run{}, errors.New("bootstrap response includes invalid model settings")
+	}
 	run := Run{RunID: runID, OrganizationID: result.OrganizationID, WorkstreamCode: result.WorkstreamCode, HardLimitAt: result.HardLimitAt}
 	if err = b.install(run, result, state.Token); err != nil {
 		return Run{}, err
