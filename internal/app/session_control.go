@@ -41,6 +41,9 @@ func (a *App) ensureDaemon(client SessionControl) error {
 	return &publicError{message: "Machine daemon did not start. Ask a person to check aircom daemon status and the daemon log."}
 }
 func (a *App) attachSession(claim daemonclient.SessionClaim, agentID, agentName, workstream string) error {
+	if a.joinForDaemon {
+		return nil
+	}
 	discovered, err := discoverSession(os.Getpid(), a.ProcessSnapshot)
 	if err != nil {
 		return err

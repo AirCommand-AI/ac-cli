@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/daemonclient"
 	"github.com/AirCommand-AI/ac-cli/internal/enroll"
 	"github.com/AirCommand-AI/ac-cli/internal/secrets"
 )
@@ -1161,16 +1162,21 @@ func (a *App) join(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := discoverSession(os.Getpid(), a.ProcessSnapshot); err != nil {
-		return err
+	// agent start joins on the daemon's behalf: the daemon takes the agent
+	// when it starts it, so there is no calling program to attach.
+	var claim daemonclient.SessionClaim
+	if !a.joinForDaemon {
+		if _, err := discoverSession(os.Getpid(), a.ProcessSnapshot); err != nil {
+			return err
+		}
+		// Keep this connection open across the remote Join: a disconnected claim
+		// is released by the daemon and would admit a competing session.
+		claim, err = client.ClaimSession(context.Background(), agent.AgentID, workstreamCode)
+		if err != nil {
+			return &publicError{message: fmt.Sprintf("Unable to claim %s: %v", agent.Name, err)}
+		}
+		defer claim.Close()
 	}
-	// Keep this connection open across the remote Join: a disconnected claim
-	// is released by the daemon and would admit a competing session.
-	claim, err := client.ClaimSession(context.Background(), agent.AgentID, workstreamCode)
-	if err != nil {
-		return &publicError{message: fmt.Sprintf("Unable to claim %s: %v", agent.Name, err)}
-	}
-	defer claim.Close()
 	var organizationID string
 	if pickUp && !agentHasSomewhereToBe(agent) {
 		if err := a.attachSession(claim, agent.AgentID, agent.Name, ""); err != nil {

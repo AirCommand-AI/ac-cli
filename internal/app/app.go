@@ -69,6 +69,8 @@ type App struct {
 	AgentCommands   AgentCommands
 	SessionClient   SessionControl
 	ProcessSnapshot ProcessSnapshot
+	// joinForDaemon is set while agent start joins on the daemon's behalf.
+	joinForDaemon bool
 }
 
 // Command implementations are installed by the daemon and agent packages.

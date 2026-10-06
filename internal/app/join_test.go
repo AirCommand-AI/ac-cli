@@ -352,3 +352,40 @@ func TestJoinNamingOnlyOneOfOrgAndWorkstreamIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestJoinForDaemonNeedsNoCallingProgram covers aircom agent start, which runs
+// from a plain shell and joins on the daemon's behalf: it must not look for a
+// calling program or claim a session; an ordinary join from a shell is refused.
+func TestJoinForDaemonNeedsNoCallingProgram(t *testing.T) {
+	agent := agentSummary{
+		AgentID: "agm_0123456789abcdef0123456789abcdef", Name: "Pi",
+		Status: "connected", OrganizationID: "org_aaaaaaaaaaaaaaaaaaaaaaaaaa", WorkstreamCode: "694",
+	}
+	tests := []struct {
+		name      string
+		forDaemon bool
+		wantErr   bool
+	}{
+		{name: "agent start from a shell joins", forDaemon: true, wantErr: false},
+		{name: "plain join from a shell is refused", forDaemon: false, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := joinTestServer(t, agent, nil)
+			defer server.Close()
+			client, _, _ := testApp(t, server.URL, "", deterministicRandom(0x11, 0x22, 0x33))
+			storedAgent(t, client, agent.AgentID, "694", "Pi")
+			fake := &fakeSessionControl{}
+			client.SessionClient = fake
+			client.ProcessSnapshot = func(int) (int, string, string, error) { return 1, "-zsh", "start", nil }
+			client.joinForDaemon = test.forDaemon
+			err := client.join([]string{"--agent", "Pi", "--org", "Acme", "--workstream", "694"})
+			if gotErr := err != nil; gotErr != test.wantErr {
+				t.Fatalf("join error = %v, want error %v", err, test.wantErr)
+			}
+			if test.forDaemon && (fake.claims != 0 || len(fake.attaches) != 0) {
+				t.Fatalf("joined for the daemon but claimed %d / attached %d sessions", fake.claims, len(fake.attaches))
+			}
+		})
+	}
+}

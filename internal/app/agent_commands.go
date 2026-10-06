@@ -302,7 +302,10 @@ func (a *App) startAgent(ctx context.Context, client daemonclient.Client, args [
 	if err != nil {
 		return err
 	}
-	if err := a.join([]string{"--agent", agent.AgentID, "--org", org, "--workstream", code}); err != nil {
+	a.joinForDaemon = true
+	err = a.join([]string{"--agent", agent.AgentID, "--org", org, "--workstream", code})
+	a.joinForDaemon = false
+	if err != nil {
 		return err
 	}
 	if err := daemonclient.WriteBrief(storagepath.AgentBrief(home, agent.AgentID), name, org, code); err != nil {
