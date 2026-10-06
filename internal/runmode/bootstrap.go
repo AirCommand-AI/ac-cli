@@ -22,6 +22,8 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
 
+var ErrNotReady = errors.New("run instance is not ready")
+
 // Bootstrap creates a run's device login without an interactive human login.
 // Client and MetadataURL are injectable so the exchange and IMDSv2 handshake
 // can be tested without a cloud instance. No start code is passed on argv.
@@ -138,7 +140,7 @@ func (b Bootstrap) Exchange(ctx context.Context, codeFile string) (Run, error) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusTooEarly {
-		return Run{}, errors.New("run instance is not ready; retry bootstrap with the same code file")
+		return Run{}, fmt.Errorf("%w; retry bootstrap with the same code file", ErrNotReady)
 	}
 	if response.StatusCode != http.StatusOK {
 		return Run{}, fmt.Errorf("bootstrap rejected (HTTP %d)", response.StatusCode)

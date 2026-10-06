@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/runmode"
 )
@@ -48,7 +50,20 @@ func (a *App) machineRun(args []string) error {
 		if err != nil {
 			return &publicError{message: "Unable to locate git credential helper."}
 		}
-		run, err := (runmode.Bootstrap{Home: a.Store.Home(), BaseURL: a.BaseURL, MetadataURL: a.BootstrapMetadataURL, GitHelperPath: executable, Client: a.HTTPClient, Random: a.Random}).Exchange(a.commandContext(), codeFile)
+		bootstrap := runmode.Bootstrap{Home: a.Store.Home(), BaseURL: a.BaseURL, MetadataURL: a.BootstrapMetadataURL, GitHelperPath: executable, Client: a.HTTPClient, Random: a.Random}
+		var run runmode.Run
+		until := time.Now().Add(20 * time.Minute)
+		for attempt := 0; ; attempt++ {
+			run, err = bootstrap.Exchange(a.commandContext(), codeFile)
+			if !errors.Is(err, runmode.ErrNotReady) || time.Now().After(until) {
+				break
+			}
+			delay := time.Duration(attempt+1) * time.Second
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+			time.Sleep(delay)
+		}
 		if err != nil {
 			return &publicError{message: "Unable to bootstrap run machine: " + err.Error()}
 		}
