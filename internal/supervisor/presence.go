@@ -77,6 +77,13 @@ func (m *Manager) progressPresence(ctx context.Context, a *managed) {
 		}
 	}
 	a.pendingPresenceNudges = nil
+	// The dashboard stopped or removed this agent and revoked its credential:
+	// try the Stopped report once, never retry it (each retry is refused).
+	if a.def.State != "stopped-by-dashboard" {
+		a.dashboardStopReported = false
+	} else if a.dashboardStopReported {
+		return
+	}
 	if a.def.Workstream == "" || now.Before(a.nextPresenceRetry) || !agentstate.Due(a.presenceReported, a.presence.State, a.lastPresenceReport, now) {
 		return
 	}
@@ -93,6 +100,9 @@ func (m *Manager) progressPresence(ctx context.Context, a *managed) {
 	err := report(reportCtx, def, current, at)
 	cancel()
 	m.mu.Lock()
+	if def.State == "stopped-by-dashboard" {
+		a.dashboardStopReported = true
+	}
 	if err != nil {
 		a.nextPresenceRetry = m.now().Add(30 * time.Second)
 		log.Printf("supervisor: presence %s: %v", def.Name, err)

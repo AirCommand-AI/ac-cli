@@ -83,6 +83,7 @@ type managed struct {
 	presence                       agentstate.Snapshot
 	presenceReported               agentstate.State
 	lastPresenceReport             time.Time
+	dashboardStopReported          bool // the one Stopped report after a dashboard stop was tried
 	nextPresenceRetry              time.Time
 	pendingPresenceNudges          []agentstate.Nudge
 	nextTaskCheck                  time.Time
