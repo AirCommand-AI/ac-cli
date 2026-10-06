@@ -60,7 +60,7 @@ func Join(request Request, machineToken, agentID, workstream, newToken, idempote
 func ResolveOrganization(list []Organization, reference string) (string, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
-		return "", fmt.Errorf("Name the organization with --org. Run aircom orgs to see them.")
+		return "", fmt.Errorf("Name the workspace with --workspace. Run aircom workspaces to see them.")
 	}
 	for _, org := range list {
 		if org.OrganizationID == reference {
@@ -90,15 +90,15 @@ func ResolveOrganization(list []Organization, reference string) (string, error) 
 		}
 		sort.Strings(names)
 		if len(names) == 0 {
-			return "", fmt.Errorf("This machine can reach no organizations.")
+			return "", fmt.Errorf("This machine can reach no workspaces.")
 		}
-		return "", fmt.Errorf("No organization called %q. This machine can reach: %s", reference, strings.Join(names, ", "))
+		return "", fmt.Errorf("No workspace called %q. This machine can reach: %s", reference, strings.Join(names, ", "))
 	default:
 		ids := make([]string, 0, len(matches))
 		for _, org := range matches {
 			ids = append(ids, org.OrganizationID)
 		}
 		sort.Strings(ids)
-		return "", fmt.Errorf("More than one organization is called %q. Use its identifier: %s", reference, strings.Join(ids, ", "))
+		return "", fmt.Errorf("More than one workspace is called %q. Use its identifier: %s", reference, strings.Join(ids, ", "))
 	}
 }

@@ -96,7 +96,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		}
 		cred, err := r.Store.FindByAgent(d.Workstream, d.AgentID)
 		if err == nil && cred.OrganizationID == "" {
-			err = fmt.Errorf("credential has no organization ID")
+			err = fmt.Errorf("credential has no workspace ID")
 		}
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("seed %s: %v", d.Name, err))

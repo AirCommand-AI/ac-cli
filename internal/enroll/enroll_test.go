@@ -32,7 +32,7 @@ func TestJoinAllowsFreshBearerForBoundAgent(t *testing.T) {
 func TestResolveOrganization(t *testing.T) {
 	orgs := []Organization{{"org_a", "Team"}, {"org_b", "team"}}
 	for _, tc := range []struct{ input, want, message string }{
-		{"org_b", "org_b", ""}, {"Team", "org_a", ""}, {"TEAM", "", "More than one"}, {"Other", "", "No organization"},
+		{"org_b", "org_b", ""}, {"Team", "org_a", ""}, {"TEAM", "", "More than one"}, {"Other", "", "No workspace"},
 	} {
 		got, err := ResolveOrganization(orgs, tc.input)
 		if got != tc.want || (tc.message == "" && err != nil) || (tc.message != "" && (err == nil || !strings.Contains(err.Error(), tc.message))) {

@@ -41,7 +41,9 @@ func TestWorkstreamsShowOnlyAgentsInThatOrganization(t *testing.T) {
 		want    []string
 		notWant []string
 	}{
-		{"Acme without --agent", []string{"workstreams", "--org", "Acme"},
+		{"Acme without --agent (legacy flag)", []string{"workstreams", "--org", "Acme"},
+			[]string{"* 610      Open    Fixes  (on this machine: Lead)\n"}, []string{"Engineer"}},
+		{"Acme with --workspace", []string{"workstreams", "--workspace", "Acme"},
 			[]string{"* 610      Open    Fixes  (on this machine: Lead)\n"}, []string{"Engineer"}},
 		{"Beta without --agent", []string{"workstreams", "--org", "Beta"},
 			[]string{"* 610      Open    Fixes  (on this machine: Engineer)\n"}, []string{"Lead"}},
@@ -70,6 +72,16 @@ func TestWorkstreamsShowOnlyAgentsInThatOrganization(t *testing.T) {
 	}
 }
 
+func TestWorkspacesCommandAndLegacyOrgsAlias(t *testing.T) {
+	_, _, exec := crossOrgFixture(t)
+	for _, command := range []string{"workspaces", "orgs"} {
+		code, out, errText := exec(command)
+		if code != 0 || !strings.Contains(out, "Acme") || !strings.Contains(out, "Beta") {
+			t.Fatalf("%s: code=%d output=%q error=%q", command, code, out, errText)
+		}
+	}
+}
+
 func TestWorkstreamsDoNotClaimAnAgentWithNoOrganization(t *testing.T) {
 	fake, _, exec := crossOrgFixture(t)
 	fake.mu.Lock()
@@ -91,18 +103,20 @@ func TestJoinComparesOrganizationAndCode(t *testing.T) {
 	cases := []struct {
 		name     string
 		org      string
+		flag     string
 		wantExit int
 		wantOut  string
 		wantErr  string
 	}{
-		{name: "same organization and code resumes", org: "Acme", wantOut: "Agent ID: " + leadID},
-		{name: "same code in another organization is refused", org: "Beta", wantExit: 1,
-			wantErr: "Lead is already in workstream 610 in another organization. Take it out first"},
+		{name: "same workspace and code resumes", org: "Acme", flag: "--workspace", wantOut: "Agent ID: " + leadID},
+		{name: "legacy org flag still resumes", org: "Acme", flag: "--org", wantOut: "Agent ID: " + leadID},
+		{name: "same code in another workspace is refused", org: "Beta", flag: "--workspace", wantExit: 1,
+			wantErr: "Lead is already in workstream 610 in another workspace. Take it out first"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, _, exec := crossOrgFixture(t)
-			code, out, errText := exec("join", "--agent", "Lead", "--org", tc.org, "--workstream", "610")
+			code, out, errText := exec("join", "--agent", "Lead", tc.flag, tc.org, "--workstream", "610")
 			if (code != 0) != (tc.wantExit != 0) {
 				t.Fatalf("exit code = %d, stdout = %q, stderr = %q", code, out, errText)
 			}

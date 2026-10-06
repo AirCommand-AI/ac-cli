@@ -22,7 +22,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
-const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --org <org> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name> | takeover <name> | interrupt <name> --message <text>"
+const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --workspace <workspace> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name> | takeover <name> | interrupt <name> --message <text>"
 
 // runAgent implements the command contract without depending on daemon service code.
 func (a *App) runAgent(args []string) error {
@@ -204,7 +204,7 @@ func (a *App) interruptAgent(name, text string) error {
 		return err
 	}
 	if credential.OrganizationID == "" {
-		return &publicError{message: "Agent organization is missing from its credential."}
+		return &publicError{message: "Agent workspace is missing from its credential."}
 	}
 	machine, err := a.machineCredential()
 	if err != nil {
@@ -265,7 +265,8 @@ func (a *App) startAgent(ctx context.Context, client daemonclient.Client, args [
 	var org, code, mode string
 	flags.StringVar(&mode, "mode", "", "pi mode (headless or tmux)")
 	var repos repoFlags
-	flags.StringVar(&org, "org", "", "organization name or ID")
+	flags.StringVar(&org, "workspace", "", "workspace name or ID")
+	flags.StringVar(&org, "org", "", "alias for --workspace")
 	flags.StringVar(&code, "workstream", "", "workstream code")
 	flags.Var(&repos, "repo", "GitHub owner/repo")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || strings.TrimSpace(org) == "" || code == "" {
@@ -303,7 +304,7 @@ func (a *App) startAgent(ctx context.Context, client daemonclient.Client, args [
 		return err
 	}
 	a.joinForDaemon = true
-	err = a.join([]string{"--agent", agent.AgentID, "--org", org, "--workstream", code})
+	err = a.join([]string{"--agent", agent.AgentID, "--workspace", org, "--workstream", code})
 	a.joinForDaemon = false
 	if err != nil {
 		return err

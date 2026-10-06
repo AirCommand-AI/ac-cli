@@ -46,7 +46,7 @@ type listOrganizationsResponse struct {
 const (
 	connectUsage    = "Usage: aircom connect --name <agentName>"
 	agentsUsage     = "Usage: aircom agents"
-	orgsUsage       = "Usage: aircom orgs"
+	orgsUsage       = "Usage: aircom workspaces"
 	leaveUsage      = "Usage: aircom leave --agent <agentId|name>"
 	disconnectUsage = "Usage: aircom disconnect --agent <agentId|name>"
 
@@ -91,7 +91,7 @@ func (a *App) connect(arguments []string) error {
 	if err := json.Unmarshal(response.Body, &agent); err != nil || agent.AgentID == "" {
 		return &publicError{message: "The AirCommand service returned an invalid connect response."}
 	}
-	fmt.Fprintf(a.outputWriter(), "Connected as %s (%s).\n\nThis agent is in no workstream yet. Join one with:\n    aircom join --agent %s --org <org> --workstream <code>\n",
+	fmt.Fprintf(a.outputWriter(), "Connected as %s (%s).\n\nThis agent is in no workstream yet. Join one with:\n    aircom join --agent %s --workspace <workspace> --workstream <code>\n",
 		agent.Name, agent.AgentID, agent.Name)
 	return nil
 }
@@ -122,8 +122,8 @@ func (a *App) agents(arguments []string) error {
 	return nil
 }
 
-// orgs lists the organizations this machine can reach, so --org can be written
-// as a name rather than an opaque identifier.
+// orgs lists the workspaces this machine can reach, so --workspace can be
+// written as a name rather than an opaque identifier.
 func (a *App) orgs(arguments []string) error {
 	if len(arguments) != 0 {
 		return &publicError{message: orgsUsage}
@@ -133,7 +133,7 @@ func (a *App) orgs(arguments []string) error {
 		return err
 	}
 	if len(list) == 0 {
-		fmt.Fprintln(a.outputWriter(), "This machine can reach no organizations.")
+		fmt.Fprintln(a.outputWriter(), "This machine can reach no workspaces.")
 		return nil
 	}
 	for _, organization := range list {
@@ -186,25 +186,25 @@ func (a *App) fetchOrganizations() ([]organizationSummary, error) {
 		return nil, &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
 	}
 	if response.status < 200 || response.status >= 300 {
-		return nil, &publicError{message: "Unable to list organizations."}
+		return nil, &publicError{message: "Unable to list workspaces."}
 	}
 	var decoded listOrganizationsResponse
 	if err := json.Unmarshal(response.body, &decoded); err != nil {
-		return nil, &publicError{message: "The AirCommand service returned an invalid organization list."}
+		return nil, &publicError{message: "The AirCommand service returned an invalid workspace list."}
 	}
 	return decoded.Organizations, nil
 }
 
-// resolveOrganization turns --org into an identifier. It accepts the identifier
+// resolveOrganization turns --workspace (or its --org alias) into an identifier. It accepts the identifier
 // itself or a name, because the dashboard shows names and logs show
 // identifiers, and a human should be able to use whichever is in front of them.
 //
-// Ties fail closed rather than picking one: two organizations sharing a name is
+// Ties fail closed rather than picking one: two workspaces sharing a name is
 // exactly when guessing does the most damage.
 func (a *App) resolveOrganization(reference string) (string, error) {
 	reference = strings.TrimSpace(reference)
 	if reference == "" {
-		return "", &publicError{message: "Name the organization with --org. Run aircom orgs to see them."}
+		return "", &publicError{message: "Name the workspace with --workspace. Run aircom workspaces to see them."}
 	}
 	list, err := a.fetchOrganizations()
 	if err != nil {

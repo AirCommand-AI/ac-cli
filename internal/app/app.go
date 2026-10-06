@@ -62,7 +62,7 @@ type App struct {
 	// launching a real browser.
 	OpenBrowser func(url string) error
 	// Organization is sent on requests made with the device credential, which
-	// carries no organization of its own. Set per command from --org; empty for
+	// carries no workspace of its own. Set per command from --workspace; empty for
 	// agent credentials, which are already bound to one workstream.
 	Organization         string
 	DaemonCommands       DaemonCommands
@@ -328,7 +328,7 @@ func (a *App) Run(arguments []string) int {
 			err = a.agentCommand(arguments[1:])
 		case "workstreams":
 			err = a.workstreams(arguments[1:])
-		case "orgs":
+		case "workspaces", "orgs":
 			err = a.orgs(arguments[1:])
 		case "join":
 			err = a.join(arguments[1:])
@@ -396,7 +396,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | machine bootstrap|request|done|cancel | git-credential get | daemon start|stop|status | agent create|remove|start|stop|list|attach | orgs | join --agent <agentId|name> [--org <org> --workstream <code>] [--listen] | leave --agent <agentId|name> | workstreams --org <org> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | docs --workstream <code> | doc get|put|diff|archive <name> --workstream <code> | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | machine bootstrap|request|done|cancel | git-credential get | daemon start|stop|status | agent create|remove|start|stop|list|attach | workspaces | join --agent <agentId|name> [--workspace <workspace> --workstream <code>] [--listen] | leave --agent <agentId|name> | workstreams --workspace <workspace> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | docs --workstream <code> | doc get|put|diff|archive <name> --workstream <code> | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -420,7 +420,7 @@ func requestedHelp(arguments []string) (string, bool) {
 		return "Usage: aircom git-credential get", true
 	case "agent":
 		return "Usage: aircom agent create|remove|start|stop|list|attach", true
-	case "orgs":
+	case "workspaces", "orgs":
 		return orgsUsage, true
 	case "leave":
 		return leaveUsage, true
@@ -1618,12 +1618,12 @@ func revokedSessionRecoveryError(body []byte, credential credentials.Credential)
 	}
 	organization := singleLine(strings.TrimSpace(credential.OrganizationID))
 	if organization == "" {
-		organization = "<organization>"
+		organization = "<workspace>"
 	}
 	agentID := singleLine(strings.TrimSpace(credential.AgentID))
 	workstreamCode := singleLine(strings.TrimSpace(credential.WorkstreamCode))
 	return &publicError{message: fmt.Sprintf(
-		"Agent access was %s by %s at %s. To recover, run:\n    aircom leave --agent %s\n    aircom join --agent %s --org %s --workstream %s",
+		"Agent access was %s by %s at %s. To recover, run:\n    aircom leave --agent %s\n    aircom join --agent %s --workspace %s --workstream %s",
 		reason, actor, when, agentID, agentID, organization, workstreamCode,
 	)}
 }

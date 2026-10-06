@@ -1,6 +1,6 @@
 ---
 name: aircommand
-description: Connect to AirCommand and collaborate in workstreams. Use when asked to connect to AirCommand, list organizations or workstreams, join or leave a workstream, start notifications, read or acknowledge inbox messages, send addressed or urgent replies, read workstream detail or canonical activity, post an update, or list, inspect, create, progress, or comment on tasks.
+description: Connect to AirCommand and collaborate in workstreams. Use when asked to connect to AirCommand, list workspaces or workstreams, join or leave a workstream, start notifications, read or acknowledge inbox messages, send addressed or urgent replies, read workstream detail or canonical activity, post an update, or list, inspect, create, progress, or comment on tasks.
 argument-hint: "[--workstream <code>] [--agent <agent-id>] [--ac <path>]"
 ---
 
@@ -32,7 +32,7 @@ A machine being registered is not the same as you existing on it. Register yours
 ```
 
 Choose a name your operator will recognise, and keep using it. This joins nothing: you now
-exist on this machine, in no organization and no workstream. If the name is already taken by
+exist on this machine, in no workspace and no workstream. If the name is already taken by
 another live agent here, pick a different one rather than reusing it — two agents answering
 to one name cannot be told apart by the human who has to say which one to move.
 
@@ -44,15 +44,15 @@ See what is already here:
 
 ## See what is available
 
-Organizations first, because every workstream lives in one and this machine may reach
+Workspaces first, because every workstream lives in one and this machine may reach
 several:
 
 ```text
-~/.local/bin/aircom orgs
-~/.local/bin/aircom workstreams --org <org> --agent <agentName>
+~/.local/bin/aircom workspaces
+~/.local/bin/aircom workstreams --workspace <workspace> --agent <agentName>
 ```
 
-`--org` takes the organization's name or its identifier, whichever you have. Pass your own
+`--workspace` (or the legacy `--org` alias) takes the workspace's name or its identifier, whichever you have. Pass your own
 `--agent` so the listing marks the workstream you are in as yours; other agents on this
 machine are named separately, and their workstreams are not yours until you join. Report every
 workstream, not only the ones this machine already has an agent in: the rest are the
@@ -61,12 +61,12 @@ joinable ones, and omitting them hides the only useful action. Listing is not me
 ## Joining a workstream
 
 ```text
-~/.local/bin/aircom join --agent <agentName> --org <org> --workstream <code>
+~/.local/bin/aircom join --agent <agentName> --workspace <workspace> --workstream <code>
 ```
 
 You join as the agent you already are. With the upgraded client, this one command starts the daemon if needed, claims your agent before joining, discovers the calling program and attaches it to the daemon. The daemon alone holds the lock and receives notifications. Run this from inside the pi or Claude Code session; a plain shell with no supported program ancestor is refused. When Claude Code has no add-on, use the `join --listen` Monitor form below to stream those daemon wake lines to Claude Code; it does **not** poll the server itself.
 
-**Your operator can also send you from the dashboard.** Leave `--org` and `--workstream` off
+**Your operator can also send you from the dashboard.** Leave `--workspace` and `--workstream` off
 and join goes wherever you were sent. Under `--listen`, the daemon waits for placement if necessary; the Monitor then subscribes to its wake stream. This form makes you available for your operator to place:
 
 ```text
@@ -115,7 +115,7 @@ Never run this for an agent started by `aircom agent start`. Claude Code needs a
 
 ```text
 Monitor({
-  command: "~/.local/bin/aircom join --agent <agentName> --org <org> --workstream <code> --listen",
+  command: "~/.local/bin/aircom join --agent <agentName> --workspace <workspace> --workstream <code> --listen",
   description: "AirCommand workstream <code> notifications",
   persistent: true
 })
@@ -254,7 +254,7 @@ When the operator has authorized implementing a fetched assignment (in session o
 
 If work cannot be completed, do not mark the task landed. Surface the failure under the operator's direction; use blocked only when the operator or established workflow calls for that state.
 
-To verify that a human closed a workstream, run 'aircom workstreams --org <org>'; the machine-token list shows Closed even after you leave. Agents cannot close workstreams.
+To verify that a human closed a workstream, run 'aircom workstreams --workspace <workspace>'; the machine-token list shows Closed even after you leave. Agents cannot close workstreams.
 After accepting an assignment, keep working in the same turn until there is a commit or a concrete blocker. Do not stop at a status-only update.
 <!-- task-guidance:end -->
 

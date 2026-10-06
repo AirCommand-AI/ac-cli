@@ -5,7 +5,7 @@ The machine daemon is the only AirCommand connection. `aircom daemon start` inst
 From a pi session, run once:
 
 ```sh
-aircom join --agent <name> --org <org> --workstream <code>
+aircom join --agent <name> --workspace <workspace> --workstream <code>
 ```
 
 The CLI starts the daemon if needed, claims the agent **before** joining, discovers the calling pi process and attaches it. `join` refuses a plain shell with no supported parent program. No background `aircom listen` or separate direct state report is needed. `join --listen` is for programs without the add-on; never run it for a daemon-started pi. `join` without a workstream asks the daemon to wait for dashboard placement. If another live session holds the identity, join refuses it. Run `aircom leave` before changing workstreams.

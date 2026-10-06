@@ -67,11 +67,11 @@ func WriteBrief(path, name, organization, workstream string) error {
 		return fmt.Errorf("invalid agent name %q", name)
 	}
 	if organization == "" || workstream == "" || strings.ContainsAny(organization+workstream, "\r\n") {
-		return fmt.Errorf("invalid organization or workstream")
+		return fmt.Errorf("invalid workspace or workstream")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	brief := fmt.Sprintf("You are %s in workstream %s (organization %s). Work only in ~/work/%s. When you start, read your unread AirCommand messages (aircom inbox) and handle them.\n", name, workstream, organization, name)
+	brief := fmt.Sprintf("You are %s in workstream %s (workspace %s). Work only in ~/work/%s. When you start, read your unread AirCommand messages (aircom inbox) and handle them.\n", name, workstream, organization, name)
 	return os.WriteFile(path, []byte(brief), 0o600)
 }

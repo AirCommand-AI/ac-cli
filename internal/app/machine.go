@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	workstreamsUsage = "Usage: aircom workstreams --org <org> [--agent <agentId|name>] [--status open|closed]"
-	joinUsage        = "Usage: aircom join --agent <agentId|name> [--org <org> --workstream <code>] [--listen]"
+	workstreamsUsage = "Usage: aircom workstreams --workspace <workspace> [--agent <agentId|name>] [--status open|closed]"
+	joinUsage        = "Usage: aircom join --agent <agentId|name> [--workspace <workspace> --workstream <code>] [--listen]"
 	taskByIDUsage    = "Usage: aircom task <id|number> --workstream <code> [--agent <agentId|name>] [--status <status> [--reason <text>] [--replaced-by <id|number>]] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] [--title <text>] [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--position <n> | --before <id|number> | --after <id|number>]"
 	taskIDFlagUsage  = "Usage: aircom task --id <id|number> --workstream <code> [same flags as above]"
 	taskCreateUsage  = "Usage: aircom task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] --type <code|review|test|design|docs|investigation|infra|release|deploy|ops|other> [--acceptance <text>]... [--validation <text>] [--depends-on <id|number>]... [--link <url>]... [--agent <agentId|name>]"
@@ -197,7 +197,8 @@ func (a *App) workstreams(arguments []string) error {
 	var organizationReference string
 	var agentReference string
 	var statusFilter string
-	flags.StringVar(&organizationReference, "org", "", "organization name or id, as shown by aircom orgs")
+	flags.StringVar(&organizationReference, "workspace", "", "workspace name or id, as shown by aircom workspaces")
+	flags.StringVar(&organizationReference, "org", "", "alias for --workspace")
 	flags.StringVar(&agentReference, "agent", "", "the agent asking, by name or id, so its workstreams are marked as yours")
 	flags.StringVar(&statusFilter, "status", "", "filter by open or closed workstreams")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || (statusFilter != "" && statusFilter != "open" && statusFilter != "closed") {
@@ -270,7 +271,7 @@ func (a *App) workstreams(arguments []string) error {
 	local := agentsByWorkstream(agents, organizationID)
 	writer := a.outputWriter()
 	if len(all) == 0 {
-		fmt.Fprintln(writer, "No workstreams in this organization.")
+		fmt.Fprintln(writer, "No workstreams in this workspace.")
 		return nil
 	}
 	// Listing is not membership: keep unjoined and closed rows visible.
@@ -288,7 +289,7 @@ func (a *App) workstreams(arguments []string) error {
 		printed++
 	}
 	if printed == 0 {
-		fmt.Fprintf(writer, "No %s workstreams in this organization.\n", statusFilter)
+		fmt.Fprintf(writer, "No %s workstreams in this workspace.\n", statusFilter)
 		return nil
 	}
 	fmt.Fprint(writer, workstreamsFootnote(caller, marked, len(local) > 0))
@@ -353,7 +354,7 @@ func workstreamMembership(agents []localAgent, callerID string) (string, string)
 // workstream holding another agent from this machine is still one the caller
 // may need to join.
 func workstreamsFootnote(caller agentSummary, marked, anyLocal bool) string {
-	join := "Each agent joins on its own: aircom join --agent <name> --org <org> --workstream <code>"
+	join := "Each agent joins on its own: aircom join --agent <name> --workspace <workspace> --workstream <code>"
 	switch {
 	case caller.AgentID != "" && marked:
 		return "\n* marks workstreams " + caller.Name + " is in. " + join + "\n"
@@ -1128,7 +1129,8 @@ func (a *App) join(arguments []string) error {
 	var listen bool
 	flags.StringVar(&workstreamCode, "workstream", "", "workstream code")
 	flags.StringVar(&agentReference, "agent", "", "agent id or name, as shown by aircom agents")
-	flags.StringVar(&organizationReference, "org", "", "organization name or id, as shown by aircom orgs")
+	flags.StringVar(&organizationReference, "workspace", "", "workspace name or id, as shown by aircom workspaces")
+	flags.StringVar(&organizationReference, "org", "", "alias for --workspace")
 	flags.BoolVar(&listen, "listen", false, "keep running and listen for messages after joining")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return &publicError{message: joinUsage}
@@ -1203,10 +1205,10 @@ func (a *App) join(arguments []string) error {
 			workstreamCode = agent.AssignedWorkstreamCode
 		}
 	} else if organizationReference == "" {
-		// Without --org, only the workstream the agent is already in is
-		// unambiguous: codes repeat across organizations.
+		// Without --workspace, only the workstream the agent is already in is
+		// unambiguous: codes repeat across workspaces.
 		if strings.TrimSpace(agent.WorkstreamCode) != workstreamCode || agent.OrganizationID == "" {
-			return &publicError{message: fmt.Sprintf("%s is not in workstream %s. Add --org to say which organization's workstream %s to join.", agent.Name, workstreamCode, workstreamCode)}
+			return &publicError{message: fmt.Sprintf("%s is not in workstream %s. Add --workspace to say which workspace's workstream %s to join.", agent.Name, workstreamCode, workstreamCode)}
 		}
 		organizationID = agent.OrganizationID
 	} else {
@@ -1228,7 +1230,7 @@ func (a *App) join(arguments []string) error {
 				return legacy
 			}
 			return &publicError{message: fmt.Sprintf(
-				"%s is already in workstream %s, but its stored credential cannot be verified. To recover, run:\n    aircom leave --agent %s\n    aircom join --agent %s --org %s --workstream %s",
+				"%s is already in workstream %s, but its stored credential cannot be verified. To recover, run:\n    aircom leave --agent %s\n    aircom join --agent %s --workspace %s --workstream %s",
 				agent.Name, workstreamCode, agent.AgentID, agent.AgentID, organizationID, workstreamCode)}
 		}
 		response, err := a.request(http.MethodGet, "/agent/v1/workstreams/"+workstreamCode, credential.APIToken, nil)
@@ -1255,7 +1257,7 @@ func (a *App) join(arguments []string) error {
 	if strings.TrimSpace(agent.WorkstreamCode) != "" {
 		if strings.TrimSpace(agent.WorkstreamCode) == workstreamCode {
 			return &publicError{message: fmt.Sprintf(
-				"%s is already in workstream %s in another organization. Take it out first:\n    aircom leave --agent %s",
+				"%s is already in workstream %s in another workspace. Take it out first:\n    aircom leave --agent %s",
 				agent.Name, agent.WorkstreamCode, agent.Name)}
 		}
 		return &publicError{message: fmt.Sprintf(
@@ -1283,9 +1285,9 @@ func (a *App) join(arguments []string) error {
 	case response.Status == http.StatusUnauthorized:
 		return &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
 	case response.Status == http.StatusForbidden:
-		return &publicError{message: "This machine is not allowed to act in that organization."}
+		return &publicError{message: "This machine is not allowed to act in that workspace."}
 	case response.Status == http.StatusNotFound:
-		return &publicError{message: fmt.Sprintf("Workstream %s was not found in that organization.", workstreamCode)}
+		return &publicError{message: fmt.Sprintf("Workstream %s was not found in that workspace.", workstreamCode)}
 	case response.Status == http.StatusConflict:
 		return joinLifecycleError(response.Status, response.Body)
 	case response.Status == http.StatusBadRequest:
@@ -1333,7 +1335,7 @@ func (a *App) awaitAssignment(agent agentSummary, listen bool) (agentSummary, er
 	}
 	if !listen {
 		return agentSummary{}, &publicError{message: fmt.Sprintf(
-			"%s has not been sent to a workstream. Send it from the dashboard's account page, or name one:\n    aircom join --agent %s --org <org> --workstream <code>",
+			"%s has not been sent to a workstream. Send it from the dashboard's account page, or name one:\n    aircom join --agent %s --workspace <workspace> --workstream <code>",
 			agent.Name, agent.Name)}
 	}
 	// Standard output is the wake-line stream under --listen, so this goes to

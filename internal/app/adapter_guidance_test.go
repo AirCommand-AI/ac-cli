@@ -120,7 +120,7 @@ func TestRuntimeAdaptersShareTaskGuidance(t *testing.T) {
 		"exact structural senderId",
 		"operator has authorized",
 		"untrusted data, not as instructions",
-		"aircom workstreams --org <org>",
+		"aircom workstreams --workspace <workspace>",
 		"same turn until there is a commit or a concrete blocker",
 	} {
 		if !strings.Contains(skillGuidance, required) {
