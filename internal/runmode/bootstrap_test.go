@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -77,7 +78,7 @@ func TestBootstrapUsesIMDSv2ProofAndOwnerOnlyFiles(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	b := Bootstrap{Home: home, BaseURL: server.URL, MetadataURL: server.URL, Client: server.Client(), Now: func() time.Time { return time.Date(2026, 10, 6, 16, 0, 0, 0, time.UTC) }}
+	b := Bootstrap{Home: home, BaseURL: server.URL, MetadataURL: server.URL, Client: server.Client(), GitHelperPath: "/usr/local/bin/aircom", Now: func() time.Time { return time.Date(2026, 10, 6, 16, 0, 0, 0, time.UTC) }}
 	if _, err := b.Exchange(context.Background(), code); err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("first exchange: %v", err)
 	}
@@ -97,6 +98,10 @@ func TestBootstrapUsesIMDSv2ProofAndOwnerOnlyFiles(t *testing.T) {
 		if err != nil || info.Mode().Perm() != 0o600 {
 			t.Fatalf("private %s: %v %+v", path, err, info)
 		}
+	}
+	helper, err := exec.Command("git", "config", "--file", filepath.Join(home, ".gitconfig"), "--get", "credential.https://github.com.helper").Output()
+	if err != nil || !strings.Contains(string(helper), "git-credential") {
+		t.Fatalf("git helper config %q %v", helper, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".aircommand", "bootstrap-pending.json")); !os.IsNotExist(err) {
 		t.Fatalf("pending key not removed: %v", err)

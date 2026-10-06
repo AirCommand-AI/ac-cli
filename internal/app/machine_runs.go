@@ -8,11 +8,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
+	"strings"
 
 	"github.com/AirCommand-AI/ac-cli/internal/runmode"
 )
 
-const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine request --workstream <code> --agent <id> --profile <name> [--agents N] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId>"
+var machineAgentName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+var machineRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine request --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId>"
 
 func (a *App) machineRun(args []string) error {
 	if len(args) == 0 {
@@ -27,9 +33,22 @@ func (a *App) machineRun(args []string) error {
 			return &publicError{message: machineRunUsage}
 		}
 		if _, err := a.Store.LoadMachine(); err == nil {
-			return &publicError{message: "Refusing bootstrap: this machine is already registered."}
+			current, runErr := runmode.Load(a.Store.Home())
+			code, codeErr := os.ReadFile(codeFile)
+			if runErr != nil || codeErr != nil || !strings.HasPrefix(strings.TrimSpace(string(code)), current.RunID+".") {
+				return &publicError{message: "Refusing bootstrap: this machine is already registered for another run."}
+			}
+			if err := a.daemonCommand([]string{"start"}); err != nil {
+				return err
+			}
+			fmt.Fprintf(a.outputWriter(), "Run %s already bootstrapped; daemon running.\n", current.RunID)
+			return nil
 		}
-		run, err := (runmode.Bootstrap{Home: a.Store.Home(), BaseURL: a.BaseURL, MetadataURL: a.BootstrapMetadataURL, Client: a.HTTPClient, Random: a.Random}).Exchange(a.commandContext(), codeFile)
+		executable, err := os.Executable()
+		if err != nil {
+			return &publicError{message: "Unable to locate git credential helper."}
+		}
+		run, err := (runmode.Bootstrap{Home: a.Store.Home(), BaseURL: a.BaseURL, MetadataURL: a.BootstrapMetadataURL, GitHelperPath: executable, Client: a.HTTPClient, Random: a.Random}).Exchange(a.commandContext(), codeFile)
 		if err != nil {
 			return &publicError{message: "Unable to bootstrap run machine: " + err.Error()}
 		}
@@ -44,23 +63,41 @@ func (a *App) machineRun(args []string) error {
 	}
 	flags := flag.NewFlagSet("machine "+args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var code, agent, profile, run string
+	var code, agent, profile, run, model string
 	var agents, runtimeMin int
-	var repos stringList
+	var repos, names stringList
 	flags.StringVar(&code, "workstream", "", "workstream code")
 	flags.StringVar(&agent, "agent", "", "agent ID or name")
 	flags.StringVar(&profile, "profile", "", "machine profile")
 	flags.StringVar(&run, "run", "", "run ID")
 	flags.IntVar(&agents, "agents", 1, "agent count")
+	flags.Var(&names, "agent-name", "requested agent name (repeatable)")
+	flags.StringVar(&model, "model", "", "model override")
 	flags.IntVar(&runtimeMin, "runtime-min", 0, "run limit in minutes")
 	flags.Var(&repos, "repo", "repo (repeatable)")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || code == "" || validateWorkstreamCode(code) != nil {
 		return &publicError{message: machineRunUsage}
 	}
-	if args[0] == "request" && (profile == "" || run != "" || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720) {
+	for _, name := range names.values {
+		if !machineAgentName.MatchString(name) {
+			return &publicError{message: machineRunUsage}
+		}
+	}
+	for _, repo := range repos.values {
+		if !machineRepo.MatchString(repo) || strings.Contains(repo, "..") {
+			return &publicError{message: machineRunUsage}
+		}
+	}
+	usedCount := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "agents" {
+			usedCount = true
+		}
+	})
+	if args[0] == "request" && (profile == "" || run != "" || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount) {
 		return &publicError{message: machineRunUsage}
 	}
-	if args[0] != "request" && (run == "" || profile != "" || len(repos.values) > 0 || runtimeMin != 0 || agents != 1) {
+	if args[0] != "request" && (run == "" || profile != "" || model != "" || len(names.values) > 0 || len(repos.values) > 0 || runtimeMin != 0 || agents != 1) {
 		return &publicError{message: machineRunUsage}
 	}
 	credential, err := a.credentialFor(code, agent)
@@ -70,7 +107,19 @@ func (a *App) machineRun(args []string) error {
 	path := "/agent/v1/workstreams/" + url.PathEscape(code) + "/machine-runs"
 	var payload []byte
 	if args[0] == "request" {
-		payload, _ = json.Marshal(map[string]any{"profile": profile, "agents": agents, "repos": repos.values, "runtimeLimitMin": runtimeMin})
+		fields := map[string]any{"profile": profile, "repos": append([]string{}, repos.values...)}
+		if len(names.values) > 0 {
+			fields["agentNames"] = names.values
+		} else {
+			fields["agentCount"] = agents
+		}
+		if model != "" {
+			fields["model"] = model
+		}
+		if runtimeMin > 0 {
+			fields["runtimeLimitMin"] = runtimeMin
+		}
+		payload, _ = json.Marshal(fields)
 	} else {
 		path += "/" + url.PathEscape(run) + "/" + args[0]
 		payload = []byte("{}")
@@ -97,7 +146,6 @@ func (a *App) machineRun(args []string) error {
 func (a *App) commandContext() context.Context { return context.Background() }
 
 // The daemon owns the hourly installation token and responds to this helper.
-// See internal/runmode for the user-only socket protocol.
 func (a *App) gitCredential(args []string) error {
 	if len(args) != 1 || args[0] != "get" {
 		return &publicError{message: "Usage: aircom git-credential get"}
@@ -108,5 +156,8 @@ func (a *App) gitCredential(args []string) error {
 	if _, err := runmode.Load(a.Store.Home()); err != nil {
 		return &publicError{message: "git-credential is available only on a run machine"}
 	}
-	return &publicError{message: "git-credential daemon token helper is not configured"}
+	if err := runmode.GitCredential(a.commandContext(), a.Store.Home(), a.inputReader(), a.outputWriter()); err != nil {
+		return &publicError{message: "Unable to fetch run GitHub credential: " + err.Error()}
+	}
+	return nil
 }

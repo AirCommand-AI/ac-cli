@@ -26,10 +26,10 @@ import (
 // Client and MetadataURL are injectable so the exchange and IMDSv2 handshake
 // can be tested without a cloud instance. No start code is passed on argv.
 type Bootstrap struct {
-	Home, BaseURL, MetadataURL string
-	Client                     *http.Client
-	Random                     io.Reader
-	Now                        func() time.Time
+	Home, BaseURL, MetadataURL, GitHelperPath string
+	Client                                    *http.Client
+	Random                                    io.Reader
+	Now                                       func() time.Time
 }
 
 type Run struct {
@@ -161,6 +161,13 @@ func (b Bootstrap) Exchange(ctx context.Context, codeFile string) (Run, error) {
 
 func (b Bootstrap) pending(runID string) (pending, error) {
 	path := filepath.Join(storagepath.Root(b.Home), "bootstrap-pending.json")
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+			return pending{}, errors.New("pending bootstrap state must be owner-only and regular")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return pending{}, err
+	}
 	if data, err := os.ReadFile(path); err == nil {
 		var p pending
 		if json.Unmarshal(data, &p) != nil || p.RunID != runID || p.Token == "" || p.Key == "" {
@@ -243,6 +250,15 @@ func readMetadata(r *http.Response) (string, error) {
 func (b Bootstrap) install(run Run, r bootstrapReply, token string) error {
 	root := storagepath.Root(b.Home)
 	pi := filepath.Join(b.Home, ".pi", "agent")
+	if b.GitHelperPath != "" {
+		if !filepath.IsAbs(b.GitHelperPath) {
+			return errors.New("git helper must be absolute")
+		}
+		config := fmt.Sprintf("[credential \"https://github.com\"]\n\thelper = !%q git-credential\n", b.GitHelperPath)
+		if err := writePrivate(filepath.Join(b.Home, ".gitconfig"), []byte(config)); err != nil {
+			return err
+		}
+	}
 	for _, file := range []struct {
 		path string
 		data []byte
