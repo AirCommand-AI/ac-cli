@@ -49,6 +49,40 @@ esac
 		}
 	}
 }
+func TestRescuePushesUnpushedCommitsAndSkipsAlreadyPushedRepo(t *testing.T) {
+	root := t.TempDir()
+	folder := filepath.Join(root, "eng-1")
+	repo := filepath.Join(folder, "repo")
+	_ = os.MkdirAll(filepath.Join(repo, ".git"), 0o700)
+	bin := filepath.Join(root, "bin")
+	_ = os.MkdirAll(bin, 0o700)
+	script := `#!/bin/sh
+case " $* " in
+ *" remote get-url origin "*) echo https://github.com/Org/repo.git ;;
+ *" rev-list --count "*) echo "$UPSTREAM_COUNT" ;;
+ *" push origin "*) printf '%s\n' "$*" > "$PUSH_LOG" ;;
+esac
+`
+	_ = os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("PUSH_LOG", filepath.Join(root, "push.log"))
+	rescuer := Rescuer{RunID: "run_example", Clones: []Clone{{Agent: "eng-1", Repo: "Org/repo", Folder: folder}}}
+	t.Setenv("UPSTREAM_COUNT", "0")
+	result := rescuer.Rescue(context.Background())
+	if len(result) != 1 || result[0].Result != "nothing" {
+		t.Fatal(result)
+	}
+	t.Setenv("UPSTREAM_COUNT", "2")
+	result = rescuer.Rescue(context.Background())
+	if len(result) != 1 || result[0].Result != "pushed" {
+		t.Fatal(result)
+	}
+	pushed, err := os.ReadFile(filepath.Join(root, "push.log"))
+	if err != nil || !strings.Contains(string(pushed), "HEAD:refs/heads/aircommand/rescue/run_example/eng-1") {
+		t.Fatalf("push %q %v", pushed, err)
+	}
+}
+
 func TestRescueRejectsOversizedFileBeforeCommit(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")

@@ -77,7 +77,8 @@ func listenTokens(home string) (net.Listener, error) {
 }
 func serveTokenListener(ctx context.Context, home string, listener net.Listener, source *TokenSource) error {
 	defer listener.Close()
-	defer os.Remove(TokenSocket(home))
+	// Leave a closed socket path for the next boot to remove only after it
+	// verifies no live broker is listening; never unlink a replacement socket.
 	go func() { <-ctx.Done(); _ = listener.Close() }()
 	for {
 		conn, err := listener.Accept()

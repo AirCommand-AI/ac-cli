@@ -14,14 +14,15 @@ import (
 // Stopper holds the supervisor's launch gate before stopping processes.
 type Stopper interface{ BeginRunFinishing(context.Context) error }
 type Service struct {
-	Home     string
-	API      API
-	Tokens   *TokenSource
-	Stop     Stopper
-	Clones   func() []Clone
-	Interval time.Duration
-	Now      func() time.Time
-	OnError  func(error)
+	Home          string
+	API           API
+	Tokens        *TokenSource
+	Stop          Stopper
+	Clones        func() []Clone
+	Interval      time.Duration
+	LoginInterval time.Duration
+	Now           func() time.Time
+	OnError       func(error)
 }
 
 func (s *Service) now() time.Time {
@@ -121,7 +122,11 @@ func (s *Service) Finish(ctx context.Context, status RunStatus) error {
 // writes are rejected server-side; this watcher never overwrites the source.
 func (s *Service) WatchLogin(ctx context.Context) {
 	path := filepath.Join(s.Home, ".pi", "agent", "auth.json")
-	ticker := time.NewTicker(5 * time.Second)
+	interval := s.LoginInterval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	var last string
 	if data, err := os.ReadFile(path); err == nil {

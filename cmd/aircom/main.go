@@ -21,6 +21,22 @@ import (
 
 const dashboardURL = "https://dashboard.aircommand.ai"
 
+type runningOnlyReconciler struct {
+	machinectl.Reconciler
+	API runmode.API
+}
+
+func (r runningOnlyReconciler) Reconcile(ctx context.Context) error {
+	state, err := r.API.Status(ctx)
+	if err != nil {
+		return err
+	}
+	if state.State != "running" {
+		return nil
+	}
+	return r.Reconciler.Reconcile(ctx)
+}
+
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		if err := writeVersion(os.Stdout); err != nil {
@@ -98,6 +114,7 @@ func main() {
 		}, nil)
 		if _, err := runmode.Load(home); err == nil {
 			control.ReportFirst = true
+			control.Reconciler = runningOnlyReconciler{Reconciler: control.Reconciler, API: runmode.API{BaseURL: dashboardURL, Client: httpClient, Store: store}}
 		}
 		return control
 	}
@@ -134,6 +151,7 @@ func main() {
 				svc.Run(ctx)
 			}()
 			go svc.WatchLogin(ctx)
+			go tokens.Maintain(ctx, func(err error) { log.Printf("machine run token renewal: %v", err) })
 			if err := runmode.StartTokens(ctx, home, tokens); err != nil {
 				return nil, err
 			}

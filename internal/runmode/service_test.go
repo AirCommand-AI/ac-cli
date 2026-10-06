@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,45 @@ import (
 type stopFunc func(context.Context) error
 
 func (f stopFunc) BeginRunFinishing(ctx context.Context) error { return f(ctx) }
+func TestAuthWatcherUploadsOnlyChangedOpenAICodexEntry(t *testing.T) {
+	home := t.TempDir()
+	store := credentials.NewStore(home)
+	_ = store.SaveMachine(credentials.Machine{DeviceID: "dev", APIToken: "machine"})
+	path := filepath.Join(home, ".pi", "agent", "auth.json")
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
+	_ = os.WriteFile(path, []byte(`{"openai-codex":{"refresh":"first"},"other":{"key":"never"}}`), 0o600)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Login map[string]any `json:"login"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Login) != 1 || body.Login["other"] != nil {
+			t.Errorf("private login leak: %+v", body)
+		}
+		calls.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	service := Service{Home: home, API: API{BaseURL: server.URL, Client: server.Client(), Store: store}, LoginInterval: time.Millisecond}
+	go func() { service.WatchLogin(ctx); close(done) }()
+	time.Sleep(15 * time.Millisecond)
+	if calls.Load() != 0 {
+		t.Fatalf("initial login was re-uploaded: %d", calls.Load())
+	}
+	_ = os.WriteFile(path, []byte(`{"openai-codex":{"refresh":"second"},"other":{"key":"never"}}`), 0o600)
+	for i := 0; i < 100 && calls.Load() == 0; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if calls.Load() != 1 {
+		t.Fatalf("changed login uploads=%d", calls.Load())
+	}
+}
+
 func TestFinishingRenewsBeforeStopAndReportsRescueAndLogin(t *testing.T) {
 	home := t.TempDir()
 	store := credentials.NewStore(home)

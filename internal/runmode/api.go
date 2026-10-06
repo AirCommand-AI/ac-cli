@@ -102,6 +102,24 @@ func (s *TokenSource) now() time.Time {
 	}
 	return time.Now()
 }
+
+// Maintain refreshes the installation token before its one-hour expiry,
+// including while no git process is asking for credentials.
+func (s *TokenSource) Maintain(ctx context.Context, onError func(error)) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := s.Get(ctx, false); err != nil && onError != nil && ctx.Err() == nil {
+				onError(err)
+			}
+		}
+	}
+}
+
 func (s *TokenSource) Get(ctx context.Context, force bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,7 +134,7 @@ func (s *TokenSource) Get(ctx context.Context, force bool) (string, error) {
 	if err := s.API.call(ctx, http.MethodPost, "/github-token", map[string]any{}, &result); err != nil {
 		return "", err
 	}
-	if result.Token == "" || !result.ExpiresAt.After(now.Add(time.Minute)) {
+	if result.Token == "" || strings.ContainsAny(result.Token, "\r\n \t") || !result.ExpiresAt.After(now.Add(time.Minute)) {
 		return "", fmt.Errorf("run API returned invalid GitHub token")
 	}
 	if s.API.Store != nil {
