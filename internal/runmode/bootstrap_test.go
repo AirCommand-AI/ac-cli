@@ -22,8 +22,9 @@ import (
 func TestBootstrapUsesIMDSv2ProofAndOwnerOnlyFiles(t *testing.T) {
 	home := t.TempDir()
 	runID := "run_0123456789abcdef01234567"
-	secret := base64.RawURLEncoding.EncodeToString([]byte("thirty-two-byte-start-code-value!"))
-	hash := sha256.Sum256([]byte(secret))
+	rawSecret := []byte("thirty-two-byte-start-code-value") // 32 bytes, as minted by the run server
+	secret := base64.RawURLEncoding.EncodeToString(rawSecret)
+	hash := sha256.Sum256(rawSecret)
 	code := filepath.Join(home, "code")
 	if err := os.WriteFile(code, []byte(runID+"."+secret), 0o600); err != nil {
 		t.Fatal(err)
@@ -57,6 +58,14 @@ func TestBootstrapUsesIMDSv2ProofAndOwnerOnlyFiles(t *testing.T) {
 			}
 			if req.RunID != runID || req.Secret != secret || req.SecretHash != hex.EncodeToString(hash[:]) || req.Identity.Signature != "pkcs7-base64" {
 				t.Errorf("invalid exchange: %+v", req)
+			}
+			if len(req.APIToken) != 38 || !strings.HasPrefix(req.APIToken, "sk-ac-") {
+				t.Errorf("device API token is not in AirCommand format: %q", req.APIToken)
+			}
+			for _, char := range strings.TrimPrefix(req.APIToken, "sk-ac-") {
+				if !strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-", char) {
+					t.Errorf("invalid device token character %q", char)
+				}
 			}
 			key, _ := base64.StdEncoding.DecodeString(req.PublicKey)
 			proof, _ := base64.StdEncoding.DecodeString(req.Proof)
@@ -107,6 +116,19 @@ func TestBootstrapUsesIMDSv2ProofAndOwnerOnlyFiles(t *testing.T) {
 		t.Fatalf("pending key not removed: %v", err)
 	}
 }
+func TestBootstrapRejectsEncodedSecretWithWrongRawLength(t *testing.T) {
+	home := t.TempDir()
+	code := filepath.Join(home, "code")
+	secret := base64.RawURLEncoding.EncodeToString([]byte("thirty-two-byte-start-code-value!"))
+	if err := os.WriteFile(code, []byte("run_0123456789abcdef01234567."+secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := (Bootstrap{Home: home, BaseURL: "https://example.invalid"}).Exchange(context.Background(), code)
+	if err == nil || !strings.Contains(err.Error(), "invalid start code") {
+		t.Fatalf("accepted 33-byte secret: %v", err)
+	}
+}
+
 func TestBootstrapRejectsExposedStartCode(t *testing.T) {
 	home := t.TempDir()
 	code := filepath.Join(home, "code")

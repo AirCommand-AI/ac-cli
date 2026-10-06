@@ -106,9 +106,13 @@ func (b Bootstrap) Exchange(ctx context.Context, codeFile string) (Run, error) {
 		return Run{}, errors.New("invalid start code")
 	}
 	runID, secret := parts[0], parts[1]
-	// Do not log the code or include it in errors. The server compares the hash
-	// and validates the signed run/secret/timestamp proof.
-	hash := sha256.Sum256([]byte(secret))
+	decoded, err := base64.RawURLEncoding.DecodeString(secret)
+	if err != nil || len(decoded) != 32 {
+		return Run{}, errors.New("invalid start code")
+	}
+	// The server hashes the original 32 random bytes, not the encoded text.
+	// Never log the code or include it in errors.
+	hash := sha256.Sum256(decoded)
 	secretHash := hex.EncodeToString(hash[:])
 	state, err := b.pending(runID)
 	if err != nil {
@@ -204,7 +208,11 @@ func (b Bootstrap) pending(runID string) (pending, error) {
 	if _, err = io.ReadFull(b.random(), token); err != nil {
 		return pending{}, err
 	}
-	p := pending{RunID: runID, Key: base64.StdEncoding.EncodeToString(key), Token: base64.RawURLEncoding.EncodeToString(token)}
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+	for i := range token {
+		token[i] = alphabet[token[i]&0x3f]
+	}
+	p := pending{RunID: runID, Key: base64.StdEncoding.EncodeToString(key), Token: "sk-ac-" + string(token)}
 	data, _ := json.Marshal(p)
 	if err = writePrivate(path, data); err != nil {
 		return pending{}, err
