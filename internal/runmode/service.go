@@ -91,7 +91,9 @@ func (s *Service) Finish(ctx context.Context, status RunStatus) error {
 	defer cancel()
 	// Fetch before stopping, because Finishing is the last state allowed to mint.
 	if _, err := s.Tokens.Get(limited, true); err != nil {
-		return fmt.Errorf("renew GitHub token for rescue: %w", err)
+		// App uninstall or a transient token error must not prevent stopping
+		// agents, rescuing whatever can be saved, and uploading renewed login.
+		s.error(fmt.Errorf("renew GitHub token for rescue: %w", err))
 	}
 	if err := s.Stop.BeginRunFinishing(limited); err != nil {
 		return err

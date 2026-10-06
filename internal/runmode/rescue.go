@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 )
 
 var safeRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
@@ -63,7 +62,7 @@ func (r Rescuer) rescue(ctx context.Context, c Clone) (result RescueResult) {
 	}
 	lock := filepath.Join(folder, ".git", "index.lock")
 	if info, e := os.Lstat(lock); e == nil {
-		if !info.Mode().IsRegular() || time.Since(info.ModTime()) < time.Minute {
+		if !info.Mode().IsRegular() {
 			result.Reason = "git index is locked"
 			return
 		}

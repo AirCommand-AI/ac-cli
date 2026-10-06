@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestRescueStagesWithinLimitBypassesHooksAndReportsPushRejection(t *testing.T) {
@@ -33,8 +32,6 @@ esac
 	_ = os.WriteFile(filepath.Join(repo, "new.txt"), []byte("new work"), 0o600)
 	lock := filepath.Join(repo, ".git", "index.lock")
 	_ = os.WriteFile(lock, []byte("old"), 0o600)
-	old := time.Now().Add(-2 * time.Minute)
-	_ = os.Chtimes(lock, old, old)
 	result := (Rescuer{RunID: "run_0123456789abcdef01234567", Clones: []Clone{{Agent: "eng-1", Repo: "Org/repo", Folder: folder}}}).Rescue(context.Background())
 	if len(result) != 1 || result[0].Result != "failed" || !strings.Contains(result[0].Reason, "push protection") || !strings.HasPrefix(result[0].Branch, "aircommand/rescue/run_") {
 		t.Fatalf("rescue=%+v", result)

@@ -58,6 +58,33 @@ func TestAuthWatcherUploadsOnlyChangedOpenAICodexEntry(t *testing.T) {
 	}
 }
 
+func TestFinishReportsEvenWhenGitHubTokenMintIsDenied(t *testing.T) {
+	home := t.TempDir()
+	store := credentials.NewStore(home)
+	_ = store.SaveMachine(credentials.Machine{DeviceID: "dev", APIToken: "machine"})
+	var stopped, finished atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "github-token") {
+			w.WriteHeader(403)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "finished") {
+			finished.Store(true)
+			w.WriteHeader(204)
+			return
+		}
+		t.Errorf("unexpected route %s", r.URL.Path)
+	}))
+	defer server.Close()
+	api := API{BaseURL: server.URL, Client: server.Client(), Store: store}
+	tokens := &TokenSource{API: api}
+	service := Service{Home: home, API: api, Tokens: tokens, Stop: stopFunc(func(context.Context) error { stopped.Store(true); return nil }), Clones: func() []Clone { return nil }}
+	deadline := time.Now().Add(time.Minute)
+	if err := service.Finish(context.Background(), RunStatus{RunID: "run_test", State: "finishing", RescueDeadline: &deadline}); err != nil || !stopped.Load() || !finished.Load() {
+		t.Fatalf("stop=%t finished=%t err=%v", stopped.Load(), finished.Load(), err)
+	}
+}
+
 func TestFinishingRenewsBeforeStopAndReportsRescueAndLogin(t *testing.T) {
 	home := t.TempDir()
 	store := credentials.NewStore(home)
