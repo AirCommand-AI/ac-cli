@@ -16,6 +16,43 @@ type reportFunc func(context.Context) error
 
 func (f reportFunc) Report(ctx context.Context) error { return f(ctx) }
 
+type diagnosticReporter struct {
+	pending string
+	sent    []string
+	cancel  context.CancelFunc
+}
+
+func (r *diagnosticReporter) SetCheckFailure(err error, _ time.Time) {
+	r.pending = ""
+	if err != nil {
+		r.pending = safeMachineError(err)
+	}
+}
+func (r *diagnosticReporter) Report(context.Context) error {
+	r.sent = append(r.sent, r.pending)
+	if len(r.sent) == 2 {
+		r.cancel()
+	}
+	return nil
+}
+func TestControlSendsFailedStartThenClearsOnSuccessfulCheck(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reporter := &diagnosticReporter{cancel: cancel}
+	attempts := 0
+	c := New(reconcileFunc(func(context.Context) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New(`parsing time ""`)
+		}
+		return nil
+	}), reporter)
+	c.interval = time.Millisecond
+	c.Run(ctx, nil)
+	if len(reporter.sent) != 2 || reporter.sent[0] != `parsing time ""` || reporter.sent[1] != "" {
+		t.Fatalf("machine check-in errors %v", reporter.sent)
+	}
+}
 func TestRunModeReportsBeforeCloning(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

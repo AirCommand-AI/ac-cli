@@ -53,6 +53,7 @@ type AgentReconciler struct {
 type retryFailure struct {
 	revision int64
 	until    time.Time
+	message  string
 }
 
 func (r *AgentReconciler) now() time.Time {
@@ -153,6 +154,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 			continue
 		}
 		if failure, ok := r.failed[target.AgentID]; ok && failure.revision == target.Revision && r.now().Before(failure.until) {
+			// A deferred retry is not a successful check: keep the failure on
+			// the run card until this revision actually starts.
+			failures = append(failures, fmt.Sprintf("%s: %s", target.AgentID, failure.message))
 			continue
 		}
 		if err := r.apply(ctx, target, previous, exists); err != nil {
@@ -160,7 +164,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 			if r.failed == nil {
 				r.failed = make(map[string]retryFailure)
 			}
-			r.failed[target.AgentID] = retryFailure{revision: target.Revision, until: r.now().Add(5 * time.Minute)}
+			r.failed[target.AgentID] = retryFailure{revision: target.Revision, until: r.now().Add(5 * time.Minute), message: err.Error()}
 			if reportErr := r.API.Result(ctx, target.AgentID, target.Revision, "failed", shortReason(err.Error())); reportErr != nil {
 				failures = append(failures, reportErr.Error())
 			}

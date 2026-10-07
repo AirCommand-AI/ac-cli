@@ -93,8 +93,8 @@ func TestLongFailureReasonAndRevisionBackoff(t *testing.T) {
 	if err := r.Reconcile(context.Background()); err == nil {
 		t.Fatal("join failure lost")
 	}
-	if err := r.Reconcile(context.Background()); err != nil {
-		t.Fatal(err)
+	if err := r.Reconcile(context.Background()); err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("deferred retry must keep start failure visible: %v", err)
 	}
 	if attempts != 1 || results != 1 {
 		t.Fatalf("same revision retried immediately: %d/%d", attempts, results)

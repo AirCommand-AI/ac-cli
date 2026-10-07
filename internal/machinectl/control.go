@@ -45,23 +45,53 @@ func (c *Control) CheckIn() {
 func (c *Control) Run(ctx context.Context, onError func(error)) {
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
+	var lastError error
+	var lastErrorAt time.Time
+	var reportFailure bool
+	setReporterFailure := func() {
+		if reporter, ok := c.Reporter.(interface{ SetCheckFailure(error, time.Time) }); ok {
+			reporter.SetCheckFailure(lastError, lastErrorAt)
+		}
+	}
 	check := func() {
 		if c.ReportFirst && c.Reporter != nil && ctx.Err() == nil {
+			setReporterFailure()
 			if err := c.Reporter.Report(ctx); err != nil {
-				if onError != nil {
-					onError(err)
+				if ctx.Err() == nil {
+					lastError, lastErrorAt, reportFailure = err, time.Now().UTC(), true
+					if onError != nil {
+						onError(err)
+					}
 				}
 				return
 			}
-		}
-		if c.Reconciler != nil {
-			if err := c.Reconciler.Reconcile(ctx); err != nil && onError != nil && ctx.Err() == nil {
-				onError(err)
+			if reportFailure {
+				lastError = nil
+				reportFailure = false
 			}
 		}
+		var reconcileErr error
+		if c.Reconciler != nil {
+			reconcileErr = c.Reconciler.Reconcile(ctx)
+		}
+		if reconcileErr != nil && ctx.Err() == nil {
+			lastError, lastErrorAt, reportFailure = reconcileErr, time.Now().UTC(), false
+			if onError != nil {
+				onError(reconcileErr)
+			}
+		} else if !reportFailure {
+			lastError = nil
+		}
 		if c.Reporter != nil && ctx.Err() == nil {
-			if err := c.Reporter.Report(ctx); err != nil && onError != nil && ctx.Err() == nil {
-				onError(err)
+			setReporterFailure()
+			if err := c.Reporter.Report(ctx); err != nil && ctx.Err() == nil {
+				lastError, lastErrorAt, reportFailure = err, time.Now().UTC(), true
+				if onError != nil {
+					onError(err)
+				}
+			} else if reconcileErr == nil && reportFailure {
+				lastError = nil
+				reportFailure = false
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
@@ -24,10 +25,24 @@ type StatusSource interface {
 }
 
 type HTTPReporter struct {
-	URL, Token, Version string
-	Client              *http.Client
-	Source              StatusSource
-	RunMode             bool // run.v1 is opt-in; managed devices keep the old check-in shape
+	URL, Token, Version    string
+	Client                 *http.Client
+	Source                 StatusSource
+	RunMode                bool // run.v1 is opt-in; managed devices keep the old check-in shape
+	failureMu              sync.RWMutex
+	lastError, lastErrorAt string
+}
+
+// SetCheckFailure stores a bounded, sanitized diagnostic for the next status.
+// An empty value explicitly clears the run device's previous error.
+func (r *HTTPReporter) SetCheckFailure(err error, at time.Time) {
+	r.failureMu.Lock()
+	defer r.failureMu.Unlock()
+	r.lastError, r.lastErrorAt = "", ""
+	if err != nil {
+		r.lastError = safeMachineError(err)
+		r.lastErrorAt = at.UTC().Format(time.RFC3339Nano)
+	}
 }
 
 func (r *HTTPReporter) Report(ctx context.Context) error { return r.report(ctx, true) }
@@ -71,13 +86,18 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 	if r.RunMode {
 		capabilities = append(capabilities, "run.v1")
 	}
+	r.failureMu.RLock()
+	lastError, lastErrorAt := r.lastError, r.lastErrorAt
+	r.failureMu.RUnlock()
 	body, err := json.Marshal(struct {
 		Version       string     `json:"aircomVersion"`
 		Capabilities  []string   `json:"capabilities"`
 		IdleSince     *time.Time `json:"idleSince"`
 		AgentsStopped bool       `json:"agentsStopped"`
 		Agents        any        `json:"agents"`
-	}{r.Version, capabilities, idle, r.Source.AgentsStopped(), rows})
+		LastError     string     `json:"lastError"`
+		LastErrorAt   string     `json:"lastErrorAt"`
+	}{r.Version, capabilities, idle, r.Source.AgentsStopped(), rows, lastError, lastErrorAt})
 	if err != nil {
 		return err
 	}

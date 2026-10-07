@@ -1,0 +1,1 @@
+{"aircomVersion":"v0.22.0","capabilities":["check-in","run.v1"],"idleSince":null,"agentsStopped":false,"agents":[{"agentId":"agm_1","state":"running","mode":"headless","kind":"started"}],"lastError":"reconcile: agm_1: parsing time \"\"","lastErrorAt":"2026-10-07T20:30:00Z"}
