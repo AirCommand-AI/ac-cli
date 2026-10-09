@@ -58,6 +58,12 @@ machine are named separately, and their workstreams are not yours until you join
 workstream, not only the ones this machine already has an agent in: the rest are the
 joinable ones, and omitting them hides the only useful action. Listing is not membership.
 
+## Machine permissions and new workstreams
+
+When the operator asks you to create a workstream, check `aircom permissions --agent <agentName>` first. A covering machine permission allows `aircom workstream create --workspace <workspace> --name <name> [--description <text>] --agent <agentName>`; leave your current workstream first. Creation is recorded in activity. Do not create one to bypass task approval.
+
+When authorized to start a cloud machine, use `aircom machine start --workstream <code> --profile <name> [--agents N] [--hours H] --repo owner/repo [--repo …] --agent <agentName>` only if permitted by the machine permission or a scoped workstream grant. Profile, agent, duration and concurrent-run limits apply alongside account limits; the use is recorded. Cloud machines cannot use machine permissions to create workstreams or start further machines.
+
 ## Joining a workstream
 
 ```text

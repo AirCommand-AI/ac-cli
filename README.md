@@ -8,6 +8,7 @@ AirCommand's agent client. It registers a machine, joins workstreams, sends addr
 aircom --version
 aircom init
 aircom machine bootstrap --code-file <owner-only-file>
+aircom machine start --workstream <code> --profile <name> [--agents N] [--hours H] --repo <owner/repo> [--repo <owner/repo>]... [--agent <agentId|name>]
 aircom machine request --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] --repo <owner/repo> [--repo <owner/repo>]... [--runtime-min N]
 aircom machine done|cancel --workstream <code> --agent <id> --run <runId>
 aircom daemon start|stop|status
@@ -18,6 +19,8 @@ aircom agent stop|attach <name>
 aircom agent list
 aircom workspaces
 aircom workstreams --workspace <workspace> [--agent <agentId|name>] [--status open|closed]
+aircom workstream create --workspace <workspace> --name <name> [--description <text>] [--agent <agentId|name>]
+aircom permissions [--agent <agentId|name>]
 aircom join --agent <agentId|name> --workspace <workspace> --workstream <code> [--listen]
 aircom leave --agent <agentId|name>
 aircom exchange
@@ -151,6 +154,8 @@ Each `credentials.json` keeps the existing versioned, agent-keyed shape but cont
 There is no migration from the old shared `~/.aircommand/credentials.json`, `state/`, or `spool/` layout. If any old location exists, the CLI refuses to read or write storage, identifies the old layout, and tells the user to remove it and re-enroll. `exchange` performs this check before consuming its one-time ticket.
 
 ## Temporary machine runs
+
+`permissions` reads this machine's active permissions for a joined agent; it does not grant permission. With a human-authorized machine permission, `workstream create` creates a workstream in an allowed workspace and joins the selected agent if it is not already in a workstream. If the agent is already joined, the command prints the new code but the agent must leave and join separately. Creation and use of machine permissions are recorded in the workstream activity. Cloud run machines cannot use machine permissions to create workstreams or spawn machines. `machine start` starts a temporary run from a completed machine profile, prints its run ID and state, and reports server limit errors plainly. A machine permission can limit profiles, agents, hours, and active machines, on top of account limits. `machine request` is the older spelling with minute-based options; both use the same endpoint.
 
 `machine request` starts a temporary run from a completed machine profile. Specify at least one repository; repeat `--repo` for more. Use either `--agents` (default 1, at most 32) or repeat `--agent-name`, not both. The server requires a scoped `machine.run` authorization for agent requests; `machine done` and `machine cancel` request finishing or cancellation and require run membership or `machine.done` authorization. The seven approval actions are `work.start`, `git.push-main`, `release.cli`, `deploy.prod`, `infra.change`, `machine.run`, and `machine.done`. An agent must check the relevant authorization first; a run-machine agent cannot start another run without a grant explicitly allowing `allowFromRunMachine`.
 

@@ -20,7 +20,7 @@ import (
 var machineAgentName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var machineRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine request --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId>"
+const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId>"
 
 func (a *App) machineRun(args []string) error {
 	if len(args) == 0 {
@@ -73,13 +73,13 @@ func (a *App) machineRun(args []string) error {
 		fmt.Fprintf(a.outputWriter(), "Run %s bootstrapped; daemon running.\n", run.RunID)
 		return nil
 	}
-	if args[0] != "request" && args[0] != "done" && args[0] != "cancel" {
+	if args[0] != "request" && args[0] != "start" && args[0] != "done" && args[0] != "cancel" {
 		return &publicError{message: machineRunUsage}
 	}
 	flags := flag.NewFlagSet("machine "+args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	var code, agent, profile, run, model string
-	var agents, runtimeMin int
+	var agents, runtimeMin, hours int
 	var repos, names stringList
 	flags.StringVar(&code, "workstream", "", "workstream code")
 	flags.StringVar(&agent, "agent", "", "agent ID or name")
@@ -89,6 +89,7 @@ func (a *App) machineRun(args []string) error {
 	flags.Var(&names, "agent-name", "requested agent name (repeatable)")
 	flags.StringVar(&model, "model", "", "model override")
 	flags.IntVar(&runtimeMin, "runtime-min", 0, "run limit in minutes")
+	flags.IntVar(&hours, "hours", 0, "run limit in hours")
 	flags.Var(&repos, "repo", "repo (repeatable)")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || code == "" || validateWorkstreamCode(code) != nil {
 		return &publicError{message: machineRunUsage}
@@ -109,10 +110,17 @@ func (a *App) machineRun(args []string) error {
 			usedCount = true
 		}
 	})
-	if args[0] == "request" && (profile == "" || run != "" || len(repos.values) == 0 || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount) {
+	if hours < 0 || hours > 12 || hours > 0 && runtimeMin != 0 {
 		return &publicError{message: machineRunUsage}
 	}
-	if args[0] != "request" && (run == "" || profile != "" || model != "" || len(names.values) > 0 || len(repos.values) > 0 || runtimeMin != 0 || agents != 1) {
+	if hours > 0 {
+		runtimeMin = hours * 60
+	}
+	starting := args[0] == "request" || args[0] == "start"
+	if starting && (profile == "" || run != "" || len(repos.values) == 0 || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount) {
+		return &publicError{message: machineRunUsage}
+	}
+	if !starting && (run == "" || profile != "" || model != "" || len(names.values) > 0 || len(repos.values) > 0 || runtimeMin != 0 || agents != 1) {
 		return &publicError{message: machineRunUsage}
 	}
 	credential, err := a.credentialFor(code, agent)
@@ -121,7 +129,7 @@ func (a *App) machineRun(args []string) error {
 	}
 	path := "/agent/v1/workstreams/" + url.PathEscape(code) + "/machine-runs"
 	var payload []byte
-	if args[0] == "request" {
+	if starting {
 		fields := map[string]any{"profile": profile, "repos": append([]string{}, repos.values...)}
 		if len(names.values) > 0 {
 			fields["agentNames"] = names.values
@@ -144,14 +152,18 @@ func (a *App) machineRun(args []string) error {
 		return err
 	}
 	if response.status < 200 || response.status >= 300 {
-		return &publicError{message: fmt.Sprintf("Machine run request rejected (HTTP %d).", response.status)}
+		return &publicError{message: fmt.Sprintf("Machine run request rejected (HTTP %d): %s", response.status, responseError(response.body))}
 	}
-	if args[0] == "request" {
+	if starting {
 		var created struct {
 			RunID string `json:"runId"`
+			State string `json:"state"`
 		}
 		if json.Unmarshal(response.body, &created) != nil || created.RunID == "" {
 			return &publicError{message: "Invalid machine run response."}
+		}
+		if args[0] == "start" {
+			return a.writeActionLine("Machine run " + singleLine(created.RunID) + " started: " + singleLine(created.State))
 		}
 		return a.writeActionLine("Machine run requested: " + singleLine(created.RunID))
 	}
