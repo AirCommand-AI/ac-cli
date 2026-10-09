@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const createWorkstreamUsage = "Usage: aircom workstream create --workspace <workspace> --name <name> [--description <text>] [--agent <agentId|name>]"
@@ -141,14 +142,25 @@ func (a *App) permissions(args []string) error {
 	if response.status < 200 || response.status >= 300 {
 		return &publicError{message: fmt.Sprintf("Permissions unavailable (HTTP %d): %s", response.status, responseError(response.body))}
 	}
+	type permissionView struct {
+		ID             string   `json:"id"`
+		Kind           string   `json:"kind"`
+		Workspaces     []string `json:"workspaces"`
+		WorkspaceNames []string `json:"workspaceNames"`
+		ProfileNames   []string `json:"profileNames"`
+		DefaultGrants  []struct {
+			Action string `json:"action"`
+		} `json:"defaultGrants"`
+		Limits *struct {
+			ProfileIDs    []string `json:"profileIds"`
+			MaxAgents     int      `json:"maxAgents"`
+			MaxRuntimeMin int      `json:"maxRuntimeMin"`
+			MaxActive     int      `json:"maxActive"`
+		} `json:"limits"`
+		ExpiresAt *string `json:"expiresAt"`
+	}
 	var result struct {
-		Permissions []struct {
-			ID         string   `json:"id"`
-			Kind       string   `json:"kind"`
-			Workspaces []string `json:"workspaces"`
-			Limits     any      `json:"limits"`
-			ExpiresAt  *string  `json:"expiresAt"`
-		} `json:"permissions"`
+		Permissions []permissionView `json:"permissions"`
 	}
 	if json.Unmarshal(response.body, &result) != nil {
 		return &publicError{message: "Invalid permissions response."}
@@ -157,11 +169,61 @@ func (a *App) permissions(args []string) error {
 		return a.writeActionLine("No active machine permissions.")
 	}
 	for _, permission := range result.Permissions {
-		limits, _ := json.Marshal(permission.Limits)
-		if permission.ID == "" || permission.Kind == "" {
+		if permission.ID == "" {
 			return &publicError{message: "Invalid permissions response."}
 		}
-		fmt.Fprintf(a.outputWriter(), "%s  %s  workspaces: %s  limits: %s\n", singleLine(permission.ID), singleLine(permission.Kind), strings.Join(permission.Workspaces, ","), limits)
+		expiry := "no expiry"
+		if permission.ExpiresAt != nil && *permission.ExpiresAt != "" {
+			parsed, parseErr := time.Parse(time.RFC3339, *permission.ExpiresAt)
+			if parseErr == nil {
+				expiry = "expires " + parsed.UTC().Format("2006-01-02")
+			} else {
+				expiry = "expires " + singleLine(*permission.ExpiresAt)
+			}
+		}
+		switch permission.Kind {
+		case "workstream.create":
+			workspaces := permission.WorkspaceNames
+			if len(workspaces) != len(permission.Workspaces) {
+				workspaces = permission.Workspaces
+			}
+			grants := make([]string, 0, len(permission.DefaultGrants))
+			for _, grant := range permission.DefaultGrants {
+				switch grant.Action {
+				case "work.start":
+					grants = append(grants, "Start work on tasks")
+				case "git.push-main":
+					grants = append(grants, "Push to main")
+				case "machine.run":
+					grants = append(grants, "Start cloud machines")
+				default:
+					grants = append(grants, singleLine(grant.Action))
+				}
+			}
+			if len(grants) == 0 {
+				grants = append(grants, "none")
+			}
+			fmt.Fprintf(a.outputWriter(), "Create workstreams in: %s (default grants: %s); %s\n", strings.Join(workspaces, ", "), strings.Join(grants, ", "), expiry)
+		case "machine.run":
+			if permission.Limits == nil {
+				return &publicError{message: "Invalid machine permission limits."}
+			}
+			profiles := permission.ProfileNames
+			if len(profiles) != len(permission.Limits.ProfileIDs) {
+				profiles = permission.Limits.ProfileIDs
+			}
+			minutes := permission.Limits.MaxRuntimeMin
+			duration := fmt.Sprintf("%d min", minutes)
+			if minutes%60 == 0 {
+				duration = fmt.Sprintf("%d h", minutes/60)
+			}
+			if minutes > 60 && minutes%60 != 0 {
+				duration = fmt.Sprintf("%d h %d min", minutes/60, minutes%60)
+			}
+			fmt.Fprintf(a.outputWriter(), "Start cloud machines: %s; up to %d agents, %s, %d at once; %s\n", strings.Join(profiles, ", "), permission.Limits.MaxAgents, duration, permission.Limits.MaxActive, expiry)
+		default:
+			return &publicError{message: "Unknown machine permission kind."}
+		}
 	}
 	return nil
 }
