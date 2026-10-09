@@ -51,10 +51,16 @@ func (a *App) machineAgentRequest(method, path, token, agent string, payload []b
 
 func responseError(body []byte) string {
 	var failure struct {
-		Error string `json:"error"`
+		Error   string `json:"error"`
+		Message string `json:"message"`
 	}
-	if json.Unmarshal(body, &failure) == nil && failure.Error != "" {
-		return singleLine(failure.Error)
+	if json.Unmarshal(body, &failure) == nil {
+		if failure.Error != "" {
+			return singleLine(failure.Error)
+		}
+		if failure.Message != "" {
+			return singleLine(failure.Message)
+		}
 	}
 	return "request not permitted"
 }

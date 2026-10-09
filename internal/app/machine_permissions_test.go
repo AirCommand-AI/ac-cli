@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+func TestResponseErrorAcceptsServerMessageShape(t *testing.T) {
+	if got := responseError([]byte(`{"message":"This machine may start at most 2 agents."}`)); got != "This machine may start at most 2 agents." {
+		t.Fatalf("message: %q", got)
+	}
+}
+
 func TestMachineStartUsesDefaultsAndShowsPermissionError(t *testing.T) {
 	cred := testCredential()
 	calls := 0
