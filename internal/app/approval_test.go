@@ -125,3 +125,25 @@ func TestApprovalUnknownActionListsValidActions(t *testing.T) {
 		}
 	}
 }
+
+// Grants chosen at workstream creation last until the workstream closes and
+// carry no expiresAt; they must verify (and an expired dated grant must not).
+func TestApprovalGrantUntilClosedHasNoExpiry(t *testing.T) {
+	base := approvalGrant{ID: "grt_1", Grantee: "any", Status: "active"}
+	base.GrantedBy.Nature, base.GrantedBy.ID = "human", "ac_owner"
+	base.Scope.Actions = []string{"work.start"}
+	open := base
+	open.UntilClosed = true
+	if !open.verifiedFor("agm_1", "work.start", "") {
+		t.Fatal("until-closed grant without expiresAt was rejected")
+	}
+	dated := base
+	dated.ExpiresAt = "2000-01-01T00:00:00Z"
+	if dated.verifiedFor("agm_1", "work.start", "") {
+		t.Fatal("expired dated grant was accepted")
+	}
+	missing := base
+	if missing.verifiedFor("agm_1", "work.start", "") {
+		t.Fatal("dated grant without expiresAt was accepted")
+	}
+}

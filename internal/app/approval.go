@@ -31,7 +31,9 @@ type approvalGrant struct {
 		AssignedBy string   `json:"assignedBy"`
 	} `json:"scope"`
 	ExpiresAt string `json:"expiresAt"`
-	Status    string `json:"status"`
+	// UntilClosed grants last while the workstream is open and carry no expiry.
+	UntilClosed bool   `json:"untilClosed"`
+	Status      string `json:"status"`
 }
 
 func (a *App) approval(arguments []string) error {
@@ -134,16 +136,22 @@ func (a *App) approval(arguments []string) error {
 	if who == "" {
 		who = grant.GrantedBy.ID
 	}
-	return a.writeActionLine(fmt.Sprintf("Approved by %s (%s): grant %s; valid until %s. Cite this grant id when proceeding.", singleLine(who), singleLine(grant.GrantedBy.ID), singleLine(grant.ID), singleLine(grant.ExpiresAt)))
+	until := singleLine(grant.ExpiresAt)
+	if grant.UntilClosed {
+		until = "the workstream closes"
+	}
+	return a.writeActionLine(fmt.Sprintf("Approved by %s (%s): grant %s; valid until %s. Cite this grant id when proceeding.", singleLine(who), singleLine(grant.GrantedBy.ID), singleLine(grant.ID), until))
 }
 
 func (g approvalGrant) verifiedFor(agent, action, task string) bool {
 	if g.ID == "" || g.GrantedBy.Nature != "human" || g.GrantedBy.ID == "" || g.Status != "active" || (g.Grantee != "any" && g.Grantee != agent) {
 		return false
 	}
-	expiry, err := time.Parse(time.RFC3339Nano, g.ExpiresAt)
-	if err != nil || !time.Now().Before(expiry) {
-		return false
+	if !g.UntilClosed {
+		expiry, err := time.Parse(time.RFC3339Nano, g.ExpiresAt)
+		if err != nil || !time.Now().Before(expiry) {
+			return false
+		}
 	}
 	found := false
 	for _, a := range g.Scope.Actions {
