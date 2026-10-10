@@ -761,7 +761,7 @@ func (a *App) resolveMessageRecipient(workstreamCode string, recipient string, c
 	}
 	recipient = strings.TrimSpace(recipient)
 
-	path := "/agent/v1/workstreams/" + workstreamCode
+	path := "/agent/v1/workstreams/" + workstreamCode + "?view=roster"
 	response, err := a.request(http.MethodGet, path, credential.APIToken, nil)
 	if err != nil {
 		return "", err
