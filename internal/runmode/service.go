@@ -21,8 +21,10 @@ type Service struct {
 	Clones        func() []Clone
 	Interval      time.Duration
 	LoginInterval time.Duration
-	Now           func() time.Time
-	OnError       func(error)
+	// LoginManaged: the dashboard owns the login (see KeepLogin); nothing is uploaded.
+	LoginManaged bool
+	Now          func() time.Time
+	OnError      func(error)
 }
 
 func (s *Service) now() time.Time {
@@ -101,7 +103,7 @@ func (s *Service) Finish(ctx context.Context, status RunStatus) error {
 	results := (Rescuer{RunID: status.RunID, Clones: s.Clones()}).Rescue(limited)
 	uploaded := false
 	path := filepath.Join(s.Home, ".pi", "agent", "auth.json")
-	if data, err := os.ReadFile(path); err == nil {
+	if data, err := os.ReadFile(path); err == nil && !s.LoginManaged {
 		var auth map[string]json.RawMessage
 		if json.Unmarshal(data, &auth) == nil && len(auth["openai-codex"]) != 0 {
 			login, _ := json.Marshal(map[string]json.RawMessage{"openai-codex": auth["openai-codex"]})

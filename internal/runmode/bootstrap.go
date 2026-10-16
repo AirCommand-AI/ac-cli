@@ -39,6 +39,9 @@ type Run struct {
 	OrganizationID string    `json:"organizationId"`
 	WorkstreamCode string    `json:"workstreamCode"`
 	HardLimitAt    time.Time `json:"hardLimitAt"`
+	// LoginManaged: the dashboard owns the ChatGPT login and hands this
+	// machine passes (KeepLogin); the machine never renews or uploads it.
+	LoginManaged bool `json:"loginManaged,omitempty"`
 }
 
 type bootstrapReply struct {
@@ -57,6 +60,7 @@ type bootstrapReply struct {
 	HardLimitAt    time.Time       `json:"hardLimitAt"`
 	WorkstreamCode string          `json:"workstreamCode"`
 	OrganizationID string          `json:"organizationId"`
+	LoginManaged   bool            `json:"loginManaged"`
 }
 
 type pending struct {
@@ -174,7 +178,7 @@ func (b Bootstrap) Exchange(ctx context.Context, codeFile string) (Run, error) {
 	if json.Unmarshal(result.PiSettings, &settings) != nil || settings.DefaultProvider != "openai-codex" || settings.DefaultModel == "" || settings.Transport != "sse" || json.Unmarshal(result.PiModels, &models) != nil || len(models.Providers["openai-codex"]) == 0 {
 		return Run{}, errors.New("bootstrap response includes invalid model settings")
 	}
-	run := Run{RunID: runID, OrganizationID: result.OrganizationID, WorkstreamCode: result.WorkstreamCode, HardLimitAt: result.HardLimitAt}
+	run := Run{RunID: runID, OrganizationID: result.OrganizationID, WorkstreamCode: result.WorkstreamCode, HardLimitAt: result.HardLimitAt, LoginManaged: result.LoginManaged}
 	if err = b.install(run, result, state.Token); err != nil {
 		return Run{}, err
 	}

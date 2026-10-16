@@ -124,7 +124,7 @@ func main() {
 			return nil, nil
 		} // offline polling still runs without a machine socket
 		source := manager.(machinectl.StatusSource)
-		_, runErr := runmode.Load(home)
+		run, runErr := runmode.Load(home)
 		runEnabled := runErr == nil
 		if runEnabled {
 			api := runmode.API{BaseURL: dashboardURL, Client: httpClient, Store: store}
@@ -141,7 +141,7 @@ func main() {
 					}
 				}
 				return clones
-			}, OnError: func(err error) { log.Printf("machine run: %v", err) }}
+			}, OnError: func(err error) { log.Printf("machine run: %v", err) }, LoginManaged: run.LoginManaged}
 			go func() {
 				if ready, ok := manager.(interface{ WaitReady(context.Context) error }); ok {
 					if err := ready.WaitReady(ctx); err != nil {
@@ -150,7 +150,12 @@ func main() {
 				}
 				svc.Run(ctx)
 			}()
-			go svc.WatchLogin(ctx)
+			if run.LoginManaged {
+				// The dashboard owns the ChatGPT login; keep pi supplied with passes.
+				go svc.KeepLogin(ctx)
+			} else {
+				go svc.WatchLogin(ctx)
+			}
 			go tokens.Maintain(ctx, func(err error) { log.Printf("machine run token renewal: %v", err) })
 			if err := runmode.StartTokens(ctx, home, tokens); err != nil {
 				return nil, err

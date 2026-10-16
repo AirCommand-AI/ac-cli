@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,18 +69,53 @@ func (a API) call(ctx context.Context, method, path string, payload any, result 
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("run API %s HTTP %d", path, response.StatusCode)
+		return &HTTPError{Path: path, Status: response.StatusCode}
 	}
 	if result != nil {
 		return json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(result)
 	}
 	return nil
 }
+
+// HTTPError is a non-2xx answer from the run API.
+type HTTPError struct {
+	Path   string
+	Status int
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("run API %s HTTP %d", e.Path, e.Status) }
+
 func (a API) Status(ctx context.Context) (RunStatus, error) {
 	var state RunStatus
 	err := a.call(ctx, http.MethodGet, "", nil, &state)
 	return state, err
 }
+
+// ChatGPTPass is pi's login for the next hours: an access token only. The
+// dashboard keeps and renews the refresh token, so nothing here can renew it.
+type ChatGPTPass struct {
+	Access    string `json:"access"`
+	AccountID string `json:"accountId"`
+	Expires   int64  `json:"expires"` // Unix milliseconds, as pi stores it
+}
+
+// ErrLoginNeedsSignIn means the account's ChatGPT login stopped renewing;
+// a person must sign in again on the dashboard.
+var ErrLoginNeedsSignIn = errors.New("ChatGPT login needs sign-in on the dashboard")
+
+func (a API) ChatGPTPass(ctx context.Context) (ChatGPTPass, error) {
+	var pass ChatGPTPass
+	err := a.call(ctx, http.MethodPost, "/chatgpt-token", nil, &pass)
+	var status *HTTPError
+	if errors.As(err, &status) && status.Status == http.StatusConflict {
+		return pass, ErrLoginNeedsSignIn
+	}
+	if err == nil && (pass.Access == "" || pass.Expires <= 0) {
+		return pass, errors.New("run API returned an empty ChatGPT pass")
+	}
+	return pass, err
+}
+
 func (a API) UploadLogin(ctx context.Context, login json.RawMessage) error {
 	return a.call(ctx, http.MethodPut, "/chatgpt-login", map[string]any{"login": login}, nil)
 }
