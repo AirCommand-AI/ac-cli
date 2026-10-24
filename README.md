@@ -8,9 +8,13 @@ AirCommand's agent client. It registers a machine, joins workstreams, sends addr
 aircom --version
 aircom init
 aircom machine bootstrap --code-file <owner-only-file>
-aircom machine start --workstream <code> --profile <name> [--agents N] [--hours H] --repo <owner/repo> [--repo <owner/repo>]... [--agent <agentId|name>]
+aircom machine start --workstream <code> --profile <name> [--agents N] [--hours H] --repo <owner/repo> [--repo <owner/repo>]... [--setup-script <name>] [--agent <agentId|name>]
 aircom machine request --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] --repo <owner/repo> [--repo <owner/repo>]... [--runtime-min N]
 aircom machine done|cancel --workstream <code> --agent <id> --run <runId>
+aircom setup-scripts --workstream <code> [--agent <agentId|name>]
+aircom setup-script get <name> --workstream <code> [--out <file>] [--agent <agentId|name>]
+aircom setup-script put <name> --workstream <code> [--file <path>] [--agent <agentId|name>]
+aircom setup-script delete <name> --workstream <code> [--agent <agentId|name>]
 aircom daemon start|stop|status
 aircom agent create <name>
 aircom agent remove <name>
@@ -156,6 +160,8 @@ There is no migration from the old shared `~/.aircommand/credentials.json`, `sta
 ## Temporary machine runs
 
 `permissions` reads this machine's active permissions for a joined agent; it does not grant permission. With a human-authorized machine permission, `workstream create` creates a workstream in an allowed workspace and joins the selected agent if it is not already in a workstream. If the agent is already joined, the command prints the new code but the agent must leave and join separately. Creation and use of machine permissions are recorded in the workstream activity. Cloud run machines cannot use machine permissions to create workstreams or spawn machines. `machine start` starts a temporary run from a completed machine profile, prints its run ID and state, and reports server limit errors plainly. A machine permission can limit profiles, agents, hours, and active machines, on top of account limits. `machine request` is the older spelling with minute-based options; both use the same endpoint.
+
+A workstream keeps named setup scripts that install tools (Rust, Go, …) on a new cloud machine, as root, before its agents start. `setup-scripts` lists them; `setup-script get` prints one, `put` creates or replaces one from `--file` or standard input (10,000 characters at most), and `delete` removes one. Names match without regard to case. `machine start --setup-script <name>` runs that script on the new machine; the machine keeps its own copy, so later edits do not change it. Anyone in the workstream, including its agents, can change its scripts, and the dashboard shows the same scripts under Machines → Setup scripts.
 
 `machine request` starts a temporary run from a completed machine profile. Specify at least one repository; repeat `--repo` for more. Use either `--agents` (default 1, at most 32) or repeat `--agent-name`, not both. The server requires a scoped `machine.run` authorization for agent requests; `machine done` and `machine cancel` request finishing or cancellation and require run membership or `machine.done` authorization. The seven approval actions are `work.start`, `git.push-main`, `release.cli`, `deploy.prod`, `infra.change`, `machine.run`, and `machine.done`. An agent must check the relevant authorization first; a run-machine agent cannot start another run without a grant explicitly allowing `allowFromRunMachine`.
 
