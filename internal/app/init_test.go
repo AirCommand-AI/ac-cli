@@ -52,6 +52,9 @@ func TestInitRegistersThenReusesValidDevice(t *testing.T) {
 	if redeemed.Code != "482 913" || redeemed.MachineName == "" || redeemed.Platform == "" {
 		t.Fatalf("redeemed %+v", redeemed)
 	}
+	if !strings.Contains(stdout.String(), "Approve this machine at "+server.URL+"/device and enter the code") {
+		t.Fatalf("prompt %q", stdout.String())
+	}
 	machine, err := client.Store.LoadMachine()
 	if err != nil || machine.MachineName != "laptop" {
 		t.Fatalf("machine %+v %v", machine, err)

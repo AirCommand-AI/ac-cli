@@ -104,7 +104,7 @@ func (a *App) initMachine(arguments []string) error {
 			return &publicError{message: "Unable to verify this machine's registration."}
 		}
 	}
-	fmt.Fprintln(a.outputWriter(), "Approve this machine at https://dashboard.aircommand.ai and enter the code shown there.")
+	fmt.Fprintf(a.outputWriter(), "Approve this machine at %s/device and enter the code shown there.\n", strings.TrimRight(a.BaseURL, "/"))
 	code, err := a.promptForCode()
 	if err != nil {
 		return err
