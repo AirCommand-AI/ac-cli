@@ -20,7 +20,7 @@ import (
 var machineAgentName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var machineRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] [--setup-script <name>] | machine done|cancel --workstream <code> --agent <id> --run <runId>"
+const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId>"
 
 func (a *App) machineRun(args []string) error {
 	if len(args) == 0 {
@@ -78,7 +78,7 @@ func (a *App) machineRun(args []string) error {
 	}
 	flags := flag.NewFlagSet("machine "+args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var code, agent, profile, run, model, setup string
+	var code, agent, profile, run, model string
 	var agents, runtimeMin, hours int
 	var repos, names stringList
 	flags.StringVar(&code, "workstream", "", "workstream code")
@@ -91,7 +91,6 @@ func (a *App) machineRun(args []string) error {
 	flags.IntVar(&runtimeMin, "runtime-min", 0, "run limit in minutes")
 	flags.IntVar(&hours, "hours", 0, "run limit in hours")
 	flags.Var(&repos, "repo", "repo (repeatable)")
-	flags.StringVar(&setup, "setup-script", "", "workstream setup script name")
 	if flags.Parse(args[1:]) != nil || flags.NArg() != 0 || code == "" || validateWorkstreamCode(code) != nil {
 		return &publicError{message: machineRunUsage}
 	}
@@ -121,9 +120,6 @@ func (a *App) machineRun(args []string) error {
 	if starting && (profile == "" || run != "" || len(repos.values) == 0 || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount) {
 		return &publicError{message: machineRunUsage}
 	}
-	if setup != "" && (!starting || !validSetupScriptName(setup)) {
-		return &publicError{message: machineRunUsage}
-	}
 	if !starting && (run == "" || profile != "" || model != "" || len(names.values) > 0 || len(repos.values) > 0 || runtimeMin != 0 || agents != 1) {
 		return &publicError{message: machineRunUsage}
 	}
@@ -145,9 +141,6 @@ func (a *App) machineRun(args []string) error {
 		}
 		if runtimeMin > 0 {
 			fields["runtimeLimitMin"] = runtimeMin
-		}
-		if setup != "" {
-			fields["setupScript"] = setup
 		}
 		payload, _ = json.Marshal(fields)
 	} else {

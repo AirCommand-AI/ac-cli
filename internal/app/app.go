@@ -368,10 +368,6 @@ func (a *App) Run(arguments []string) int {
 			err = a.docs(arguments[1:])
 		case "doc":
 			err = a.doc(arguments[1:])
-		case "setup-scripts":
-			err = a.setupScripts(arguments[1:])
-		case "setup-script":
-			err = a.setupScript(arguments[1:])
 		case "review":
 			err = a.review(arguments[1:])
 		case "usage":
@@ -404,7 +400,7 @@ func (a *App) Run(arguments []string) int {
 }
 
 func usage() string {
-	return "Usage: aircom init | machine bootstrap|start|request|done|cancel | git-credential get | daemon start|stop|status | agent create|remove|start|stop|list|attach | workspaces | workstream create --workspace <workspace> --name <name> [--agent <agentId|name>] | permissions [--agent <agentId|name>] | join --agent <agentId|name> [--workspace <workspace> --workstream <code>] [--listen] | leave --agent <agentId|name> | workstreams --workspace <workspace> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | docs --workstream <code> | doc get|put|diff|archive <name> --workstream <code> | setup-scripts --workstream <code> | setup-script get|put|delete <name> --workstream <code> | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
+	return "Usage: aircom init | machine bootstrap|start|request|done|cancel | git-credential get | daemon start|stop|status | agent create|remove|start|stop|list|attach | workspaces | workstream create --workspace <workspace> --name <name> [--agent <agentId|name>] | permissions [--agent <agentId|name>] | join --agent <agentId|name> [--workspace <workspace> --workstream <code>] [--listen] | leave --agent <agentId|name> | workstreams --workspace <workspace> [--agent <agentId|name>] [--status open|closed] | exchange | send --workstream <code> [--agent <agentId|name>] --to <agentId|name> --body <text> [--urgent] | update --workstream <code> [--agent <agentId|name>] (--summary <text> [--detail <text>] | --body <legacy-text>) [--task <id|number>] | approval request|check --workstream <code> [--agent <agentId|name>] --action <action> [--task <id|number>] [--note <text> (request only)] | events --workstream <code> [--agent <agentId|name>] [--kind <category>] [--task <id>] [--limit N] [--cursor C] [--since C] | read --workstream <code> [--agent <agentId|name>] | task <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task --id <id> --workstream <code> [--agent <agentId|name>] [--status <status>] [--comment <legacy-text> | --summary <text> [--detail <text>]] [--assignee <agentId|name>] | task create --workstream <code> --title <text> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--agent <agentId|name>] | tasks --workstream <code> [--agent <agentId|name>] [--mine] [--status <status>] | docs --workstream <code> | doc get|put|diff|archive <name> --workstream <code> | inbox --workstream <code> [--agent <agentId|name>] [--all] [--limit N] [--cursor C] | message <id> --workstream <code> [--agent <agentId|name>] | ack --workstream <code> [--agent <agentId|name>] --message <messageId> | listen --workstream <code> [--agent <agentId|name>]"
 }
 
 func requestedHelp(arguments []string) (string, bool) {
@@ -462,8 +458,6 @@ func requestedHelp(arguments []string) (string, bool) {
 		return milestoneUsage, true
 	case "docs", "doc":
 		return docUsage, true
-	case "setup-scripts", "setup-script":
-		return setupScriptsUsage, true
 	case "review":
 		return reviewUsage, true
 	case "usage":
