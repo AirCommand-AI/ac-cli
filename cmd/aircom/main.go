@@ -160,8 +160,14 @@ func main() {
 			if err := runmode.StartTokens(ctx, home, tokens); err != nil {
 				return nil, err
 			}
+		} else {
+			renewer := &daemon.TokenRenewer{Store: store, Client: httpClient, BaseURL: dashboardURL, Log: func(err error) { log.Printf("machine token renewal: %v", err) }}
+			go renewer.Run(ctx)
 		}
-		control := machinectl.New(nil, &machinectl.HTTPReporter{URL: dashboardURL, Token: machine.APIToken, Version: version, Client: httpClient, Source: source, RunMode: runEnabled})
+		control := machinectl.New(nil, &machinectl.HTTPReporter{URL: dashboardURL, Token: machine.APIToken, TokenLoader: func() (string, error) {
+			current, err := store.LoadMachine()
+			return current.APIToken, err
+		}, Version: version, Client: httpClient, Source: source, RunMode: runEnabled})
 		return &daemon.SocketClient{URL: "wss://ac.aircommand.ai/machine", MachineID: machine.DeviceID, Sink: manager.(daemon.WakeSink), Control: control, OnCheckIn: control.CheckIn, OnConnect: control.CheckIn, SecretLoader: func(ctx context.Context) (string, error) {
 			return daemon.MachineSecret(ctx, store, httpClient, dashboardURL)
 		}}, nil

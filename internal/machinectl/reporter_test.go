@@ -87,3 +87,25 @@ func TestHTTPReporterSendsContractAndAppliesMachineState(t *testing.T) {
 		t.Fatalf("calls %d state %q", calls, source.state)
 	}
 }
+
+// TestHTTPReporterReadsTheCurrentToken uses a renewed machine token without a
+// daemon restart.
+func TestHTTPReporterReadsTheCurrentToken(t *testing.T) {
+	var used []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		used = append(used, r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"machine":{"state":"online"}}`))
+	}))
+	defer server.Close()
+	current := "first"
+	reporter := &HTTPReporter{URL: server.URL, Token: "stale", TokenLoader: func() (string, error) { return current, nil }, Source: &fakeStatusSource{}}
+	for _, token := range []string{"first", "renewed"} {
+		current = token
+		if err := reporter.Report(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(used) != 2 || used[0] != "Bearer first" || used[1] != "Bearer renewed" {
+		t.Fatalf("tokens used %v", used)
+	}
+}

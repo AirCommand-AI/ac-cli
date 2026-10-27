@@ -210,3 +210,33 @@ func TestMachineSocketTerminal(t *testing.T) {
 		})
 	}
 }
+
+// TestMachineSocketRetriesWithARotatedSecret reconnects with the secret a new
+// login saved, instead of stopping for good on the old one's revocation.
+func TestMachineSocketRetriesWithARotatedSecret(t *testing.T) {
+	var used []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		used = append(used, r.Header.Get("Authorization"))
+		w.WriteHeader(401)
+	}))
+	defer server.Close()
+	loads := 0
+	client := &SocketClient{URL: "ws" + strings.TrimPrefix(server.URL, "http"), MachineID: "device_123", Sink: &fakeSink{wake: make(chan struct{}, 1)},
+		SecretLoader: func(context.Context) (string, error) {
+			loads++
+			if loads == 1 {
+				return "old", nil
+			}
+			return "new", nil
+		},
+		Backoff: func(context.Context, time.Duration) bool {
+			t.Fatal("rotated secret waited before retrying")
+			return false
+		}}
+	if err := client.Run(context.Background()); !errors.Is(err, ErrSocketRevoked) {
+		t.Fatalf("got %v, want revoked once the new secret is refused too", err)
+	}
+	if strings.Join(used, ",") != "Bearer old,Bearer new" {
+		t.Fatalf("secrets used %v", used)
+	}
+}

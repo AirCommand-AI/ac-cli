@@ -25,7 +25,10 @@ type StatusSource interface {
 }
 
 type HTTPReporter struct {
-	URL, Token, Version    string
+	URL, Token, Version string
+	// TokenLoader, when set, supplies the machine token on every report
+	// instead of Token, so a renewed credential is used without a restart.
+	TokenLoader            func() (string, error)
 	Client                 *http.Client
 	Source                 StatusSource
 	RunMode                bool // run.v1 is opt-in; managed devices keep the old check-in shape
@@ -47,8 +50,16 @@ func (r *HTTPReporter) SetCheckFailure(err error, at time.Time) {
 
 func (r *HTTPReporter) Report(ctx context.Context) error { return r.report(ctx, true) }
 
+func (r *HTTPReporter) token() (string, error) {
+	if r.TokenLoader != nil {
+		return r.TokenLoader()
+	}
+	return r.Token, nil
+}
+
 func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
-	if r.Source == nil || r.URL == "" || r.Token == "" {
+	token, err := r.token()
+	if r.Source == nil || r.URL == "" || err != nil || token == "" {
 		return fmt.Errorf("machine status reporter is not configured")
 	}
 	if ready, ok := r.Source.(interface{ WaitReady(context.Context) error }); ok {
@@ -105,7 +116,7 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+r.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	client := r.Client
 	if client == nil {

@@ -30,6 +30,9 @@ type Machine struct {
 	MachineName         string `json:"machineName,omitempty"`
 	MachineSocketSecret string `json:"machineSocketSecret,omitempty"`
 	CreatedAt           string `json:"createdAt"`
+	// ExpiresAt is when APIToken stops working, RFC 3339. Empty for logins
+	// saved before the dashboard reported it; the daemon renews those first.
+	ExpiresAt string `json:"expiresAt,omitempty"`
 }
 
 // MachinePath is the single machine credential location for this home.

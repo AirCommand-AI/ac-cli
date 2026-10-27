@@ -44,6 +44,9 @@ type redeemDeviceCodeRequest struct {
 	Code        string `json:"code"`
 	MachineName string `json:"machineName"`
 	Platform    string `json:"platform"`
+	// PreviousDeviceID asks the dashboard to log this machine in again as
+	// itself, so agents already bound to it keep working.
+	PreviousDeviceID string `json:"previousDeviceId,omitempty"`
 }
 
 type redeemDeviceCodeResponse struct {
@@ -51,6 +54,7 @@ type redeemDeviceCodeResponse struct {
 	DeviceID            string `json:"deviceId"`
 	DeviceName          string `json:"deviceName"`
 	MachineSocketSecret string `json:"machineSocketSecret"`
+	ExpiresAt           string `json:"expiresAt"`
 }
 
 type workstreamSummary struct {
@@ -88,6 +92,7 @@ func (a *App) initMachine(arguments []string) error {
 	}
 
 	// A live machine registration must not enter the device flow again.
+	var previousDeviceID string
 	if machine, err := a.Store.LoadMachine(); err == nil {
 		response, requestErr := a.request(http.MethodGet, "/v1/agents", machine.APIToken, nil)
 		if requestErr != nil {
@@ -103,6 +108,7 @@ func (a *App) initMachine(arguments []string) error {
 		if response.status != http.StatusUnauthorized && response.status != http.StatusForbidden {
 			return &publicError{message: "Unable to verify this machine's registration."}
 		}
+		previousDeviceID = machine.DeviceID
 	}
 	fmt.Fprintf(a.outputWriter(), "Approve this machine at %s/device and enter the code shown there.\n", strings.TrimRight(a.BaseURL, "/"))
 	code, err := a.promptForCode()
@@ -112,9 +118,10 @@ func (a *App) initMachine(arguments []string) error {
 
 	registeredName := machineName()
 	payload, err := json.Marshal(redeemDeviceCodeRequest{
-		Code:        code,
-		MachineName: registeredName,
-		Platform:    platformName(),
+		Code:             code,
+		MachineName:      registeredName,
+		Platform:         platformName(),
+		PreviousDeviceID: previousDeviceID,
 	})
 	if err != nil {
 		return &publicError{message: "Unable to prepare the registration request."}
@@ -143,6 +150,7 @@ func (a *App) initMachine(arguments []string) error {
 		MachineSocketSecret: redeemed.MachineSocketSecret,
 		MachineName:         registeredName,
 		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:           redeemed.ExpiresAt,
 	}); err != nil {
 		return &publicError{message: "Unable to store the machine credential."}
 	}

@@ -82,6 +82,9 @@ func (c *SocketClient) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
+		if errors.Is(err, ErrSocketRevoked) && c.secretRotated(ctx) {
+			continue
+		}
 		if errors.Is(err, ErrSocketRevoked) || errors.Is(err, ErrSocketSuperseded) {
 			return err
 		}
@@ -95,6 +98,21 @@ func (c *SocketClient) Run(ctx context.Context) error {
 	}
 	return nil
 }
+
+// secretRotated reports whether a revoked secret has since been replaced,
+// as when aircom init logs this machine in again while the daemon runs.
+func (c *SocketClient) secretRotated(ctx context.Context) bool {
+	if c.SecretLoader == nil {
+		return false
+	}
+	secret, err := c.SecretLoader(ctx)
+	if err != nil || secret == "" || secret == c.Secret {
+		return false
+	}
+	c.Secret = secret
+	return true
+}
+
 func (c *SocketClient) connect(ctx context.Context) error {
 	dialer := c.Dialer
 	if dialer == nil {

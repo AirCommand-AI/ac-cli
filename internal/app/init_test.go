@@ -49,7 +49,7 @@ func TestInitRegistersThenReusesValidDevice(t *testing.T) {
 	if err := client.initMachine(nil); err != nil {
 		t.Fatal(err)
 	}
-	if redeemed.Code != "482 913" || redeemed.MachineName == "" || redeemed.Platform == "" {
+	if redeemed.Code != "482 913" || redeemed.MachineName == "" || redeemed.Platform == "" || redeemed.PreviousDeviceID != "" {
 		t.Fatalf("redeemed %+v", redeemed)
 	}
 	if !strings.Contains(stdout.String(), "Approve this machine at "+server.URL+"/device and enter the code") {
@@ -115,6 +115,38 @@ func TestInitRenewsRevokedDevice(t *testing.T) {
 	machine, _ := store.LoadMachine()
 	if gets != 1 || machine.APIToken != "new-token" {
 		t.Fatalf("machine %+v gets %d", machine, gets)
+	}
+}
+
+// TestInitLogsAnExpiredMachineInAsItself sends the saved device id, so the
+// dashboard can keep the machine and the agents bound to it.
+func TestInitLogsAnExpiredMachineInAsItself(t *testing.T) {
+	var redeemed redeemDeviceCodeRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &redeemed)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"token":"new-token","deviceId":"dev_0123456789abcdef01234567","deviceName":"laptop","machineSocketSecret":"msock_new","expiresAt":"2026-11-26T12:00:00Z"}`))
+	}))
+	defer server.Close()
+	store := credentials.NewStore(t.TempDir())
+	if err := store.SaveMachine(credentials.Machine{APIToken: "expired-token", DeviceID: "dev_0123456789abcdef01234567", MachineSocketSecret: "msock_old"}); err != nil {
+		t.Fatal(err)
+	}
+	client := &App{BaseURL: server.URL, Store: store, Stdin: strings.NewReader("ABCD-1234\n"), Stdout: &bytes.Buffer{}, DaemonCommands: fakeDaemonStarter{}}
+	if err := client.initMachine(nil); err != nil {
+		t.Fatal(err)
+	}
+	if redeemed.PreviousDeviceID != "dev_0123456789abcdef01234567" {
+		t.Fatalf("redeemed %+v; want the saved device id sent", redeemed)
+	}
+	machine, _ := store.LoadMachine()
+	if machine.DeviceID != "dev_0123456789abcdef01234567" || machine.APIToken != "new-token" || machine.MachineSocketSecret != "msock_new" || machine.ExpiresAt != "2026-11-26T12:00:00Z" {
+		t.Fatalf("machine %+v", machine)
 	}
 }
 
