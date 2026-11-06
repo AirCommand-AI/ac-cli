@@ -64,6 +64,8 @@ When the operator asks you to create a workstream, check `aircom permissions --a
 
 When authorized to start a cloud machine, use `aircom machine start --workstream <code> --profile <name> [--agents N] [--hours H] --repo owner/repo [--repo …] --agent <agentName>` only if permitted by the machine permission or a scoped workstream grant. Profile, agent, duration and concurrent-run limits apply alongside account limits; the use is recorded. Cloud machines cannot use machine permissions to create workstreams or start further machines.
 
+To see the workstream's cloud machines, run aircom machine list --workstream <code> --agent <agentName> [--state all|active|ended] [--limit N] [--cursor <cursor>]: JSON, newest first, running and ended. Each run has runId, state, stage, profile, size, agents, repos, hardLimitAt (when it shuts down), and endedAt and endReason once ended. A page can hold fewer runs than --limit; while nextCursor is set, pass it as --cursor for the next page. aircom machine status --workstream <code> --agent <agentName> --run <runId> returns one run.
+
 ## Joining a workstream
 
 ```text

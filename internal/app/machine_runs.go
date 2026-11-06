@@ -20,11 +20,17 @@ import (
 var machineAgentName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var machineRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId>"
+const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId> | machine list --workstream <code> [--agent <id>] [--state all|active|ended] [--limit N] [--cursor <cursor>] | machine status --workstream <code> [--agent <id>] --run <runId>"
 
 func (a *App) machineRun(args []string) error {
 	if len(args) == 0 {
 		return &publicError{message: machineRunUsage}
+	}
+	switch args[0] {
+	case "list":
+		return a.machineList(args[1:])
+	case "status":
+		return a.machineStatus(args[1:])
 	}
 	if args[0] == "bootstrap" {
 		flags := flag.NewFlagSet("machine bootstrap", flag.ContinueOnError)
