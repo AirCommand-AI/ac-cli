@@ -20,7 +20,7 @@ import (
 var machineAgentName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var machineRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId> | machine list --workstream <code> [--agent <id>] [--state all|active|ended] [--limit N] [--cursor <cursor>] | machine status --workstream <code> [--agent <id>] --run <runId> | machine metrics --workstream <code> [--agent <id>] [--run <runId>] [--since <2h|RFC3339>] [--until <RFC3339>] [--limit N] [--cursor <cursor>]"
+const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId> | machine list --workstream <code> [--agent <id>] [--state all|active|ended] [--limit N] [--cursor <cursor>] | machine status --workstream <code> [--agent <id>] --run <runId> | machine metrics --workstream <code> [--agent <id>] [--run <runId>] [--since <2h|RFC3339>] [--until <RFC3339>] [--limit N] [--cursor <cursor>] | machine rescue-opened --workspace <workspace> --workstream <code> --run <runId>"
 
 func (a *App) machineRun(args []string) error {
 	if len(args) == 0 {
@@ -33,6 +33,8 @@ func (a *App) machineRun(args []string) error {
 		return a.machineStatus(args[1:])
 	case "metrics":
 		return a.machineMetrics(args[1:])
+	case "rescue-opened":
+		return a.machineRescueOpened(args[1:])
 	}
 	if args[0] == "bootstrap" {
 		flags := flag.NewFlagSet("machine bootstrap", flag.ContinueOnError)
