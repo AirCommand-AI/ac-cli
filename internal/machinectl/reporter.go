@@ -28,10 +28,12 @@ type HTTPReporter struct {
 	URL, Token, Version string
 	// TokenLoader, when set, supplies the machine token on every report
 	// instead of Token, so a renewed credential is used without a restart.
-	TokenLoader            func() (string, error)
-	Client                 *http.Client
-	Source                 StatusSource
-	RunMode                bool // run.v1 is opt-in; managed devices keep the old check-in shape
+	TokenLoader func() (string, error)
+	Client      *http.Client
+	Source      StatusSource
+	RunMode     bool // run.v1 is opt-in; managed devices keep the old check-in shape
+	// Metrics, when set, adds a machine health sample to every report.
+	Metrics                interface{ Collect() Metrics }
 	failureMu              sync.RWMutex
 	lastError, lastErrorAt string
 }
@@ -100,6 +102,11 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 	r.failureMu.RLock()
 	lastError, lastErrorAt := r.lastError, r.lastErrorAt
 	r.failureMu.RUnlock()
+	var metrics *Metrics
+	if r.Metrics != nil {
+		sample := r.Metrics.Collect()
+		metrics = &sample
+	}
 	body, err := json.Marshal(struct {
 		Version       string     `json:"aircomVersion"`
 		Capabilities  []string   `json:"capabilities"`
@@ -108,7 +115,8 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 		Agents        any        `json:"agents"`
 		LastError     string     `json:"lastError"`
 		LastErrorAt   string     `json:"lastErrorAt"`
-	}{r.Version, capabilities, idle, r.Source.AgentsStopped(), rows, lastError, lastErrorAt})
+		Metrics       *Metrics   `json:"metrics,omitempty"`
+	}{r.Version, capabilities, idle, r.Source.AgentsStopped(), rows, lastError, lastErrorAt, metrics})
 	if err != nil {
 		return err
 	}

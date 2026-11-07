@@ -164,10 +164,26 @@ func main() {
 			renewer := &daemon.TokenRenewer{Store: store, Client: httpClient, BaseURL: dashboardURL, Log: func(err error) { log.Printf("machine token renewal: %v", err) }}
 			go renewer.Run(ctx)
 		}
+		metrics := machinectl.NewMetricsCollector(filepath.Join(home, "work"), func(context.Context) []machinectl.AgentDir {
+			var dirs []machinectl.AgentDir
+			if m, ok := manager.(*supervisor.Manager); ok {
+				for _, d := range m.Definitions() {
+					if d.WorkFolder != "" {
+						dirs = append(dirs, machinectl.AgentDir{AgentID: d.AgentID, Name: d.Name, Path: d.WorkFolder})
+					}
+				}
+			}
+			return dirs
+		})
+		go metrics.RunDirWalker(ctx)
+		health := &machinectl.DiskAlert{Collector: metrics}
+		if m, ok := manager.(*supervisor.Manager); ok {
+			health.Notice = m.SendMachineNotice
+		}
 		control := machinectl.New(nil, &machinectl.HTTPReporter{URL: dashboardURL, Token: machine.APIToken, TokenLoader: func() (string, error) {
 			current, err := store.LoadMachine()
 			return current.APIToken, err
-		}, Version: version, Client: httpClient, Source: source, RunMode: runEnabled})
+		}, Version: version, Client: httpClient, Source: source, RunMode: runEnabled, Metrics: health})
 		return &daemon.SocketClient{URL: "wss://ac.aircommand.ai/machine", MachineID: machine.DeviceID, Sink: manager.(daemon.WakeSink), Control: control, OnCheckIn: control.CheckIn, OnConnect: control.CheckIn, SecretLoader: func(ctx context.Context) (string, error) {
 			return daemon.MachineSecret(ctx, store, httpClient, dashboardURL)
 		}}, nil
