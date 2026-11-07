@@ -13,6 +13,7 @@ aircom machine request --workstream <code> --agent <id> --profile <name> [--agen
 aircom machine done|cancel --workstream <code> --agent <id> --run <runId>
 aircom machine list --workstream <code> [--agent <id>] [--state all|active|ended] [--limit N] [--cursor <cursor>]
 aircom machine status --workstream <code> [--agent <id>] --run <runId>
+aircom machine metrics --workstream <code> [--agent <id>] [--run <runId>] [--since <2h|RFC3339>] [--until <RFC3339>] [--limit N] [--cursor <cursor>]
 aircom daemon start|stop|status
 aircom agent create <name>
 aircom agent remove <name>
@@ -170,6 +171,10 @@ There is no migration from the old shared `~/.aircommand/credentials.json`, `sta
 Headless pi agents use RPC instead of a tmux window. `agent attach <name>` streams recent history and live pi events; `/detach` leaves the agent running, `/interrupt <text>` uses the audited machine interrupt route, and ordinary lines steer pi and post an agent update. `agent takeover <name>` runs pi in the foreground on the same session while the daemon keeps its takeover PID/start-time fence and notification spool. In headless RPC prompts the daemon adds a `Delivery kind: urgent|nudge|interrupt` line after the pointer guidance; attach shows the corresponding banner only when pi emits the user's `message_start` (not when a prompt is merely queued). New agents default to headless (`agent create <name> --mode tmux` opts out); existing agents retain tmux until stopped and switched with `agent mode <name> headless|tmux`. The daemon keeps a fixed pi session ID per agent, resumes headless pi after restart, and stops it before switching mode. **Rollback to v0.17.8:** switch every headless agent back to tmux before installing the old CLI; v0.17.8 rejects headless agent definitions.
 
 The brief identifies the agent and asks pi to check unread messages at startup; it does **not** authorize assigned work. Check `aircom approval check --workstream <code> --agent <id> --action work.start --task <task>` unless your operator already authorized it. If check fails, request approval and wait. A workstream standing delegation for `work.start` assigned by ac-lead may be issued by the operator for up to seven days; it does not authorize other consequential actions.
+
+### Machine health
+
+Each 30-second status report carries a health sample read from `/proc` and `statfs` (no disk writes, so it still works on a full disk): disk per mount (`/` and the agents' `work` root when separate), memory, swap, CPU, load, uptime, and each agent's work dir size (measured every 10 minutes). The dashboard keeps one sample per minute for 30 days; read it with `aircom machine metrics` or in `aircom machine status` (`metrics`). When a disk has under 5% available, the daemon sends one urgent notice to every agent it runs, listing work dir sizes largest first, and sends another only after the disk has been above 5% for 10 minutes.
 
 ### Dashboard control and machine status (v0.19)
 
