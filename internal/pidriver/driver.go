@@ -30,6 +30,8 @@ type Options struct {
 type LaunchSpec struct {
 	PiPath, WorkDir, SessionID, ForkFrom string
 	Args                                 []string
+	// Env is the process environment; nil inherits the daemon's (pi).
+	Env []string
 }
 type Exit struct {
 	Code   int

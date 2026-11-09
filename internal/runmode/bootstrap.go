@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AirCommand-AI/ac-cli/internal/claudeauth"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 )
@@ -61,6 +62,8 @@ type bootstrapReply struct {
 	WorkstreamCode string          `json:"workstreamCode"`
 	OrganizationID string          `json:"organizationId"`
 	LoginManaged   bool            `json:"loginManaged"`
+	// Claude is present when the run has a Claude Code agent.
+	Claude *claudeauth.Auth `json:"claude"`
 }
 
 type pending struct {
@@ -154,29 +157,17 @@ func (b Bootstrap) Exchange(ctx context.Context, codeFile string) (Run, error) {
 		return Run{}, fmt.Errorf("bootstrap rejected (HTTP %d)", response.StatusCode)
 	}
 	var result bootstrapReply
-	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&result) != nil || result.RunID != runID || result.DeviceID == "" || result.DeviceID != result.Machine.DeviceID || result.Machine.MachineSocketSecret == "" || result.WorkstreamCode == "" || result.OrganizationID == "" || result.HardLimitAt.Before(b.now()) || len(result.PiAuth) == 0 || len(result.PiModels) == 0 || len(result.PiSettings) == 0 {
+	if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&result) != nil || result.RunID != runID || result.DeviceID == "" || result.DeviceID != result.Machine.DeviceID || result.Machine.MachineSocketSecret == "" || result.WorkstreamCode == "" || result.OrganizationID == "" || result.HardLimitAt.Before(b.now()) {
 		return Run{}, errors.New("invalid bootstrap response")
 	}
-	var auth map[string]json.RawMessage
-	if json.Unmarshal(result.PiAuth, &auth) != nil || len(auth) != 1 || len(auth["openai-codex"]) == 0 {
-		return Run{}, errors.New("bootstrap response includes invalid model login")
+	hasPi := len(result.PiAuth) > 0 || len(result.PiModels) > 0 || len(result.PiSettings) > 0
+	if result.Claude != nil && !result.Claude.Valid() || !hasPi && result.Claude == nil {
+		return Run{}, errors.New("bootstrap response has no usable model login")
 	}
-	var login struct {
-		Type      string `json:"type"`
-		Access    string `json:"access"`
-		Refresh   string `json:"refresh"`
-		AccountID string `json:"accountId"`
-		Expires   int64  `json:"expires"`
-	}
-	if json.Unmarshal(auth["openai-codex"], &login) != nil || login.Type == "" || login.Access == "" || login.Refresh == "" || login.AccountID == "" || login.Expires <= b.now().Unix() {
-		return Run{}, errors.New("bootstrap response includes incomplete model login")
-	}
-	var settings struct{ DefaultProvider, DefaultModel, Transport string }
-	var models struct {
-		Providers map[string]json.RawMessage `json:"providers"`
-	}
-	if json.Unmarshal(result.PiSettings, &settings) != nil || settings.DefaultProvider != "openai-codex" || settings.DefaultModel == "" || settings.Transport != "sse" || json.Unmarshal(result.PiModels, &models) != nil || len(models.Providers["openai-codex"]) == 0 {
-		return Run{}, errors.New("bootstrap response includes invalid model settings")
+	if hasPi {
+		if err := b.checkPi(result); err != nil {
+			return Run{}, err
+		}
 	}
 	run := Run{RunID: runID, OrganizationID: result.OrganizationID, WorkstreamCode: result.WorkstreamCode, HardLimitAt: result.HardLimitAt, LoginManaged: result.LoginManaged}
 	if err = b.install(run, result, state.Token); err != nil {
@@ -294,7 +285,15 @@ func (b Bootstrap) install(run Run, r bootstrapReply, token string) error {
 		path string
 		data []byte
 	}{{filepath.Join(pi, "auth.json"), r.PiAuth}, {filepath.Join(pi, "models.json"), r.PiModels}, {filepath.Join(pi, "settings.json"), r.PiSettings}} {
+		if len(file.data) == 0 {
+			continue
+		}
 		if err := writePrivate(file.path, file.data); err != nil {
+			return err
+		}
+	}
+	if r.Claude != nil {
+		if err := claudeauth.Save(b.Home, *r.Claude); err != nil {
 			return err
 		}
 	}
@@ -347,4 +346,33 @@ func Load(home string) (Run, error) {
 		return Run{}, errors.New("invalid run mode file")
 	}
 	return run, nil
+}
+
+// checkPi validates the pi login and settings of a run with pi agents.
+func (b Bootstrap) checkPi(result bootstrapReply) error {
+	if len(result.PiAuth) == 0 || len(result.PiModels) == 0 || len(result.PiSettings) == 0 {
+		return errors.New("invalid bootstrap response")
+	}
+	var auth map[string]json.RawMessage
+	if json.Unmarshal(result.PiAuth, &auth) != nil || len(auth) != 1 || len(auth["openai-codex"]) == 0 {
+		return errors.New("bootstrap response includes invalid model login")
+	}
+	var login struct {
+		Type      string `json:"type"`
+		Access    string `json:"access"`
+		Refresh   string `json:"refresh"`
+		AccountID string `json:"accountId"`
+		Expires   int64  `json:"expires"`
+	}
+	if json.Unmarshal(auth["openai-codex"], &login) != nil || login.Type == "" || login.Access == "" || login.Refresh == "" || login.AccountID == "" || login.Expires <= b.now().Unix() {
+		return errors.New("bootstrap response includes incomplete model login")
+	}
+	var settings struct{ DefaultProvider, DefaultModel, Transport string }
+	var models struct {
+		Providers map[string]json.RawMessage `json:"providers"`
+	}
+	if json.Unmarshal(result.PiSettings, &settings) != nil || settings.DefaultProvider != "openai-codex" || settings.DefaultModel == "" || settings.Transport != "sse" || json.Unmarshal(result.PiModels, &models) != nil || len(models.Providers["openai-codex"]) == 0 {
+		return errors.New("bootstrap response includes invalid model settings")
+	}
+	return nil
 }

@@ -35,7 +35,12 @@ type Manager struct {
 	Poll          Poller
 	// NewDriver constructs an isolated RPC driver for each headless launch.
 	// The production constructor is supplied by the daemon entrypoint.
-	NewDriver   func(io.Writer) pidriver.Driver
+	NewDriver func(io.Writer) pidriver.Driver
+	// Claude is the claude binary; NewClaudeDriver and ClaudeAuth serve
+	// Claude Code agents (tests replace the driver).
+	Claude          string
+	NewClaudeDriver func(io.Writer) pidriver.Driver
+	ClaudeAuth      func() (*ClaudeAuth, error)
 	DesiredPost func(context.Context, AgentDefinition) (int64, error)
 	// PlaceAttached checks machine assignment and joins using the machine bearer.
 	// Empty workstream means the person has not placed the agent yet.
@@ -336,8 +341,11 @@ func validate(d AgentDefinition) error {
 	if d.Desired != "running" && d.Desired != "stopped" {
 		return fmt.Errorf("invalid desired state")
 	}
-	if d.Harness != "" && d.Harness != "pi" || d.Mode != "" && d.Mode != "tmux" && d.Mode != "headless" {
+	if d.Harness != "" && d.Harness != "pi" && d.Harness != HarnessClaude || d.Mode != "" && d.Mode != "tmux" && d.Mode != "headless" {
 		return fmt.Errorf("unsupported harness or mode")
+	}
+	if d.Harness == HarnessClaude && d.Mode == "tmux" {
+		return fmt.Errorf("Claude Code agents run headless only")
 	}
 	if !d.Profile.valid() {
 		return fmt.Errorf("invalid agent profile")
@@ -374,7 +382,10 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 		return fmt.Errorf("agent is attached to a person's session")
 	}
 	a.legacySession = old.AgentID != "" && !old.SessionMigrated && old.WorkFolder == def.WorkFolder
-	if def.Harness != "" && def.Harness != "pi" {
+	if def.Harness == "" {
+		def.Harness = old.Harness
+	}
+	if def.Harness != "" && def.Harness != "pi" && def.Harness != HarnessClaude {
 		return fmt.Errorf("unsupported harness %q", def.Harness)
 	}
 	if !def.Profile.valid() {
@@ -382,7 +393,15 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 	}
 	def.Version = 1
 	def.Kind = "started"
-	def.Harness = "pi"
+	if def.Harness == "" {
+		def.Harness = "pi"
+	}
+	if def.Harness == HarnessClaude {
+		if def.Mode == "tmux" {
+			return fmt.Errorf("Claude Code agents run headless only")
+		}
+		def.Mode = "headless"
+	}
 	if def.Profile == nil {
 		def.Profile = old.Profile
 	}

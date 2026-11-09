@@ -116,7 +116,7 @@ func (m *Manager) writeBrief(def AgentDefinition) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(briefText(def)); err != nil {
+	if _, err := tmp.WriteString(m.brief(def)); err != nil {
 		tmp.Close()
 		return err
 	}

@@ -64,6 +64,10 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 		m.mu.Unlock()
 		return TakeoverSpec{}, fmt.Errorf("headless agent %q is not running", name)
 	}
+	if isClaude(a.def) {
+		m.mu.Unlock()
+		return TakeoverSpec{}, fmt.Errorf("takeover is not available for Claude Code agents; use aircom agent attach %s", name)
+	}
 	if err := m.writeBrief(a.def); err != nil {
 		m.mu.Unlock()
 		return TakeoverSpec{}, fmt.Errorf("write agent brief: %w", err)

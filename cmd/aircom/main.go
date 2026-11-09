@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/app"
+	"github.com/AirCommand-AI/ac-cli/internal/claudeauth"
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 	"github.com/AirCommand-AI/ac-cli/internal/daemon"
 	"github.com/AirCommand-AI/ac-cli/internal/listenstore"
@@ -73,6 +74,7 @@ func main() {
 		manager := supervisor.New(home, pi, cliPath, supervisor.CommandTmux{Path: tmux}, poll)
 		manager.StateReport = poll.ReportState
 		manager.OperationGate = operationGate
+		manager.ClaudeAuth = func() (*claudeauth.Auth, error) { return claudeauth.Load(home) }
 		api := machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store}
 		manager.PlaceAttached = func(ctx context.Context, d supervisor.AgentDefinition) (string, string, error) {
 			defs, err := api.Definitions(ctx)
@@ -156,6 +158,7 @@ func main() {
 			} else {
 				go svc.WatchLogin(ctx)
 			}
+			go svc.KeepClaudeToken(ctx)
 			go tokens.Maintain(ctx, func(err error) { log.Printf("machine run token renewal: %v", err) })
 			if err := runmode.StartTokens(ctx, home, tokens); err != nil {
 				return nil, err

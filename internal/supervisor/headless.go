@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/adapters/pi"
+	"github.com/AirCommand-AI/ac-cli/internal/claudedriver"
 	"github.com/AirCommand-AI/ac-cli/internal/pidriver"
 )
 
@@ -18,7 +20,17 @@ const startupPrompt = "Check your unread AirCommand messages with aircom inbox a
 // launchHeadless is called with m.mu held. The process start happens outside
 // the manager lock, so slow version checks and pi startup do not block wakes.
 func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
-	if err := piadapter.VerifyHeadless(m.Home); err != nil {
+	if err := m.verifyHarness(a); err != nil {
+		return err
+	}
+	spec, err := m.launchSpec(a.def)
+	if errors.Is(err, ErrClaudeNotConnected) {
+		// The token may arrive later (bootstrap retry, Integrations): retry.
+		a.def.State, a.def.Reason = "starting", err.Error()
+		a.nextStart = m.now().Add(time.Minute)
+		return m.save(a)
+	}
+	if err != nil {
 		a.def.State = "crashed"
 		a.def.Reason = err.Error()
 		if saveErr := m.save(a); saveErr != nil {
@@ -26,31 +38,24 @@ func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
 		}
 		return err
 	}
-	if m.Pi == "pi" {
-		if _, err := exec.LookPath("pi"); err != nil {
-			return fmt.Errorf("pi is required to launch a daemon-started agent; install pi: %w", err)
-		}
+	logName := "pi.log"
+	if isClaude(a.def) {
+		logName = "claude.log"
 	}
-	if m.NewDriver == nil {
-		return fmt.Errorf("headless pi driver is unavailable")
-	}
-	logPath := filepath.Join(filepath.Dir(m.definitionPath(a.def.AgentID)), "pi.log")
+	logPath := filepath.Join(filepath.Dir(m.definitionPath(a.def.AgentID)), logName)
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
-		return fmt.Errorf("open pi log: %w", err)
+		return fmt.Errorf("open agent log: %w", err)
 	}
-	d := m.NewDriver(f)
+	d := m.newDriver(a.def, f)
 	if d == nil {
 		f.Close()
-		return fmt.Errorf("headless pi driver is unavailable")
+		return fmt.Errorf("headless driver is unavailable")
 	}
 	a.logFile = f
 	a.driver = d
 	a.startupSent = false
-	args := []string{"--aircommand-headless", "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID)}
-	args = append(args, piProfileArgs(a.def)...)
-	spec := pidriver.LaunchSpec{PiPath: m.Pi, WorkDir: a.def.WorkFolder, SessionID: a.def.AgentID, Args: args}
-	if a.legacySession && !a.def.SessionMigrated {
+	if !isClaude(a.def) && a.legacySession && !a.def.SessionMigrated {
 		spec.ForkFrom = migrationSource(a.def.WorkFolder, a.def.AgentID)
 	}
 	m.mu.Unlock()
@@ -144,7 +149,10 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 			}
 		}
 		a.def.Crashes = kept
-		if len(kept) >= 5 {
+		if errors.Is(exit.Err, claudedriver.ErrAPIKey) {
+			// Never restart an agent that is not on the subscription.
+			a.def.State, a.def.Reason = "crashed", claudedriver.ErrAPIKey.Error()
+		} else if len(kept) >= 5 {
 			a.def.State = "crashed"
 		} else {
 			a.def.State = "starting"
@@ -220,6 +228,7 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				kind = "turn"
 			}
 			m.emitAgentEvent(a, AgentEvent{AgentID: a.def.AgentID, Kind: kind, At: m.now()})
+			m.reportClaudeEvent(a, e)
 			for ch := range a.subscribers {
 				select {
 				case ch <- e:
@@ -231,4 +240,30 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 			m.mu.Unlock()
 		}
 	}
+}
+
+// verifyHarness checks the harness can start: the pi add-on and binary, or
+// the claude binary. A missing piece marks the agent crashed with the reason.
+func (m *Manager) verifyHarness(a *managed) error {
+	var err error
+	switch {
+	case isClaude(a.def):
+		err = m.checkHarness(a.def)
+	default:
+		err = piadapter.VerifyHeadless(m.Home)
+		if err == nil && m.Pi == "pi" {
+			if _, lookErr := exec.LookPath("pi"); lookErr != nil {
+				return fmt.Errorf("pi is required to launch a daemon-started agent; install pi: %w", lookErr)
+			}
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	a.def.State = "crashed"
+	a.def.Reason = err.Error()
+	if saveErr := m.save(a); saveErr != nil {
+		return fmt.Errorf("%w (saving crashed state: %v)", err, saveErr)
+	}
+	return err
 }

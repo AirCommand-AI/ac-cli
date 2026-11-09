@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Fake `claude -p` stream-json: one turn per user line; records argv."""
+import json, os, sys, time
+
+cfg = os.environ["CLAUDE_CONFIG_DIR"]
+with open(os.path.join(cfg, "argv.json"), "w") as f:
+    json.dump(sys.argv[1:], f)
+session = sys.argv[sys.argv.index("--session-id") + 1] if "--session-id" in sys.argv else sys.argv[sys.argv.index("--resume") + 1]
+project = os.path.join(cfg, "projects", "-work")
+os.makedirs(project, exist_ok=True)
+log = open(os.path.join(project, session + ".jsonl"), "a")
+source = os.environ.get("FAKE_API_KEY_SOURCE", "none")
+n = 0
+
+def out(v):
+    sys.stdout.write(json.dumps(v) + "\n")
+    sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg["type"] == "control_request":
+        out({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"]}})
+        continue
+    n += 1
+    text = msg["message"]["content"]
+    log.write(json.dumps({"type": "user", "uuid": "u%d" % n, "message": {"role": "user", "content": text}}) + "\n")
+    out({"type": "system", "subtype": "init", "apiKeySource": source, "model": "claude-opus-5-5", "claude_code_version": "9.9.9"})
+    if "use a tool" in text:
+        out({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "sleep 1"}}]}})
+        out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}})
+    reply = "ok %d" % n
+    out({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": reply}]}})
+    log.write(json.dumps({"type": "assistant", "uuid": "a%d" % n, "message": {"role": "assistant", "content": [{"type": "text", "text": reply}]}}) + "\n")
+    log.flush()
+    out({"type": "result", "subtype": "success", "is_error": False, "usage": {"input_tokens": 10, "output_tokens": 2}})

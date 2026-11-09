@@ -160,8 +160,8 @@ func TestProfileValidation(t *testing.T) {
 		})
 	}
 	d := definition(m.Home)
-	d.Harness = "claude-code"
+	d.Harness = "codex"
 	if err := m.Start(context.Background(), d); err == nil {
-		t.Fatal("non-pi harness accepted")
+		t.Fatal("unknown harness accepted")
 	}
 }

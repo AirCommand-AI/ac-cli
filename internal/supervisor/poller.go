@@ -232,3 +232,15 @@ func (p *HTTPPoller) Spool(ctx context.Context, d AgentDefinition, n Notificatio
 	summary := agentapi.ComposeSummary(n, d.Workstream, names)
 	return agentapi.Spool(n, summary), nil
 }
+
+// ReportRuntime sends the runtime an agent without an add-on is using.
+func (p *HTTPPoller) ReportRuntime(ctx context.Context, d AgentDefinition, runtime map[string]any) error {
+	_, err := p.apiCall(ctx, d, http.MethodPut, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/agents/me/runtime", runtime)
+	return err
+}
+
+// ReportUsage records one turn's token usage for an agent without an add-on.
+func (p *HTTPPoller) ReportUsage(ctx context.Context, d AgentDefinition, turnID string, in, out int64) error {
+	_, err := p.apiCall(ctx, d, http.MethodPost, "/agent/v1/workstreams/"+url.PathEscape(d.Workstream)+"/usage", map[string]any{"turnId": turnID, "tokensIn": in, "tokensOut": out})
+	return err
+}

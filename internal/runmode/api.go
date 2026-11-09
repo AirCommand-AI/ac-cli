@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/AirCommand-AI/ac-cli/internal/claudeauth"
 	"io"
 	"net/http"
 	"strings"
@@ -182,4 +183,22 @@ func (s *TokenSource) Get(ctx context.Context, force bool) (string, error) {
 	s.obtained = now
 	s.expires = result.ExpiresAt
 	return result.Token, nil
+}
+
+// ErrClaudeUnavailable means the account's Claude token is missing or expired;
+// the operator replaces it in Integrations.
+var ErrClaudeUnavailable = errors.New("Claude token missing or expired on the dashboard")
+
+// ClaudeToken re-reads the account's Claude credentials.
+func (a API) ClaudeToken(ctx context.Context) (claudeauth.Auth, error) {
+	var auth claudeauth.Auth
+	err := a.call(ctx, http.MethodPost, "/claude-token", nil, &auth)
+	var status *HTTPError
+	if errors.As(err, &status) && status.Status == http.StatusConflict {
+		return auth, ErrClaudeUnavailable
+	}
+	if err == nil && !auth.Valid() {
+		return auth, errors.New("run API returned incomplete Claude credentials")
+	}
+	return auth, err
 }
