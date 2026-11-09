@@ -41,7 +41,7 @@ type Manager struct {
 	Claude          string
 	NewClaudeDriver func(io.Writer) pidriver.Driver
 	ClaudeAuth      func() (*ClaudeAuth, error)
-	DesiredPost func(context.Context, AgentDefinition) (int64, error)
+	DesiredPost     func(context.Context, AgentDefinition) (int64, error)
 	// PlaceAttached checks machine assignment and joins using the machine bearer.
 	// Empty workstream means the person has not placed the agent yet.
 	PlaceAttached func(context.Context, AgentDefinition) (organization, workstream string, err error)
