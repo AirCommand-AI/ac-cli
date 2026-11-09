@@ -64,13 +64,11 @@ func TestPresenceTaskPrecedenceAndWaitingNudge(t *testing.T) {
 	check("#13 in flight")
 	*now = now.Add(15 * time.Minute)
 	check("#13 in flight")
+	// Waiting on an in-flight task is nudged by the dashboard's team watch.
 	select {
 	case sig := <-signals:
-		if sig.Type != "nudge" {
-			t.Fatalf("nudge %v", sig)
-		}
+		t.Fatalf("daemon nudged a waiting agent: %v", sig)
 	default:
-		t.Fatal("in-flight waiting nudge missing")
 	}
 	if err = m.Tick(context.Background()); err != nil {
 		t.Fatal(err)

@@ -28,7 +28,7 @@ func (r Reporter) Report(ctx context.Context, workstream string, state State, at
 	}
 	if state.Physical == Running {
 		switch state.Logical {
-		case Working, Idle, Waiting, NoActivity, Unknown:
+		case Working, Idle, Waiting, Stuck, NoActivity, Unknown:
 		default:
 			return fmt.Errorf("invalid logical state")
 		}
@@ -44,6 +44,11 @@ func (r Reporter) Report(ctx context.Context, workstream string, state State, at
 	}
 	path := "/agent/v1/workstreams/" + workstream + "/agents/me/state"
 	target := base.ResolveReference(&url.URL{Path: path, RawPath: "/agent/v1/workstreams/" + url.PathEscape(workstream) + "/agents/me/state"})
+	type tool struct {
+		Name    string `json:"name"`
+		Command string `json:"command,omitempty"`
+		Since   string `json:"since,omitempty"`
+	}
 	body := struct {
 		Physical Physical `json:"physical"`
 		Logical  Logical  `json:"logical,omitempty"`
@@ -51,7 +56,14 @@ func (r Reporter) Report(ctx context.Context, workstream string, state State, at
 		Since    string   `json:"since"`
 		Source   string   `json:"source"`
 		At       string   `json:"at"`
-	}{state.Physical, state.Logical, state.Reason, state.Since.UTC().Format(time.RFC3339Nano), "daemon", at.UTC().Format(time.RFC3339Nano)}
+		Tool     *tool    `json:"tool,omitempty"`
+	}{Physical: state.Physical, Logical: state.Logical, Reason: state.Reason, Since: state.Since.UTC().Format(time.RFC3339Nano), Source: "daemon", At: at.UTC().Format(time.RFC3339Nano)}
+	if state.Tool.Name != "" {
+		body.Tool = &tool{Name: state.Tool.Name, Command: state.Tool.Command}
+		if !state.Tool.Since.IsZero() {
+			body.Tool.Since = state.Tool.Since.UTC().Format(time.RFC3339Nano)
+		}
+	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return err

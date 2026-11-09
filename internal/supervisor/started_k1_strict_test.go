@@ -89,17 +89,17 @@ func TestStartedHeadlessK1OnlyAndOneNudgePerEpisode(t *testing.T) {
 	seen := append([]string(nil), states...)
 	invalid := legacy
 	mu.Unlock()
-	if invalid != 0 || len(seen) < 2 || seen[0] != "working" || seen[1] != "no_activity" {
+	if invalid != 0 || len(seen) < 2 || seen[0] != "working" || seen[1] != "stuck" {
 		t.Fatalf("state PUTs: %v, legacy=%d", seen, invalid)
 	}
 	count := 0
 	for _, sent := range fake.Sent {
-		if sent.Source == "auto-nudge" {
+		if sent.Source == "model-hang" && sent.Kind == pidriver.Interrupt {
 			count++
 		}
 	}
 	if count != 1 {
-		t.Fatalf("automatic nudges = %d, want exactly one", count)
+		t.Fatalf("model-hang interrupts = %d, want exactly one", count)
 	}
 	if err := m.Stop(ctx, d.Name); err != nil {
 		t.Fatal(err)

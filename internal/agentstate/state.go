@@ -4,12 +4,14 @@ package agentstate
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
 const (
-	QuietAfter  = 15 * time.Minute
-	NudgeAfter  = 15 * time.Minute
+	// StuckAfter: a tool with no CPU or I/O, or a turn with no model output
+	// and no tool, for this long is stuck (design-team-watch).
+	StuckAfter  = 5 * time.Minute
 	ReportEvery = 25 * time.Minute
 )
 
@@ -23,9 +25,11 @@ const (
 type Logical string
 
 const (
-	Working    Logical = "working"
-	Idle       Logical = "idle"
-	Waiting    Logical = "waiting"
+	Working Logical = "working"
+	Idle    Logical = "idle"
+	Waiting Logical = "waiting"
+	Stuck   Logical = "stuck"
+	// NoActivity is reported only by daemons before agent-status-v2.
 	NoActivity Logical = "no_activity"
 	Unknown    Logical = "unknown"
 )
@@ -37,6 +41,23 @@ type State struct {
 	Logical  Logical   `json:"logical,omitempty"`
 	Reason   string    `json:"reason,omitempty"`
 	Since    time.Time `json:"since"`
+	// Tool is the tool a working agent is running (zero: none).
+	Tool Tool `json:"tool,omitempty"`
+}
+
+// Tool is a running tool; Command only for shell commands, shortened.
+type Tool struct {
+	Name    string    `json:"name,omitempty"`
+	Command string    `json:"command,omitempty"`
+	Since   time.Time `json:"since,omitempty"`
+}
+
+// Label is "bash: npm install" or the tool name.
+func (t Tool) Label() string {
+	if t.Command != "" {
+		return t.Name + ": " + t.Command
+	}
+	return t.Name
 }
 
 // Event is an ordered signal. The caller assigns At (server timestamps are
@@ -47,6 +68,8 @@ type Event struct {
 	Logical    Logical // only for kind=state, for programs without the pi add-on
 	Reason     string  // explicit stop or state reason
 	TaskNumber string
+	Tool       string // tool_start: tool name
+	Command    string // tool_start: shortened shell command
 }
 
 // Snapshot holds sufficient history for re-evaluating timeouts on a tick.
@@ -63,6 +86,11 @@ type Snapshot struct {
 	ExplicitReason   string
 	NudgedNoActivity bool
 	NudgedInFlight   bool
+	Tool             Tool
+	ToolProgress     time.Time
+	DiskFull         bool
+	// ModelHangSent: the model-hang interrupt was sent; reset by tool activity.
+	ModelHangSent bool
 }
 
 type Nudge string
@@ -71,6 +99,8 @@ const (
 	NoNudge         Nudge = ""
 	NudgeNoActivity Nudge = "no_activity"
 	NudgeInFlight   Nudge = "in_flight"
+	// NudgeModelHang asks the daemon to interrupt a silent model and resend.
+	NudgeModelHang Nudge = "model_hang"
 )
 
 func New(program string, now time.Time) Snapshot {
@@ -108,13 +138,30 @@ func Step(previous Snapshot, event Event) (Snapshot, Nudge) {
 	case "dashboard_stop":
 		stop = "stopped from the dashboard"
 	case "run_start":
-		s.InRun, s.LastActivity, s.NudgedNoActivity = true, now, false
-	case "turn", "tool_start", "tool_end", "rpc":
+		s.InRun, s.LastActivity, s.NudgedNoActivity, s.Tool = true, now, false, Tool{}
+	case "turn", "rpc":
 		if s.InRun {
 			s.LastActivity, s.NudgedNoActivity = now, false
 		}
+	case "tool_start":
+		if s.InRun {
+			s.LastActivity, s.ToolProgress, s.ModelHangSent = now, now, false
+			s.Tool = Tool{Name: event.Tool, Command: event.Command, Since: now}
+		}
+	case "tool_end":
+		if s.InRun {
+			s.LastActivity, s.Tool, s.ModelHangSent = now, Tool{}, false
+		}
+	case "tool_progress":
+		if s.InRun && s.Tool.Name != "" {
+			s.ToolProgress = now
+		}
+	case "disk_full":
+		s.DiskFull = true
+	case "disk_ok":
+		s.DiskFull = false
 	case "run_end":
-		s.InRun, s.NudgedNoActivity = false, false
+		s.InRun, s.NudgedNoActivity, s.Tool = false, false, Tool{}
 	case "approval_pending":
 		s.Approval = event.TaskNumber
 	case "approval_clear":
@@ -143,10 +190,11 @@ func Step(previous Snapshot, event Event) (Snapshot, Nudge) {
 		}
 		s.State.Physical = Stopped
 		s.State.Logical = ""
-		s.InRun = false
+		s.InRun, s.Tool = false, Tool{}
 		s.State.Reason = stop
 	}
 	state := s.State
+	state.Tool = Tool{}
 	if state.Physical == Running {
 		state.Reason = ""
 		switch {
@@ -154,10 +202,14 @@ func Step(previous Snapshot, event Event) (Snapshot, Nudge) {
 			state.Logical, state.Reason = s.Explicit, s.ExplicitReason
 		case s.Program != "pi":
 			state.Logical = Unknown
-		case s.InRun && !s.LastActivity.IsZero() && now.Sub(s.LastActivity) >= QuietAfter:
-			state.Logical, state.Reason = NoActivity, fmt.Sprintf("no activity %dm", int(now.Sub(s.LastActivity)/time.Minute))
+		case s.DiskFull:
+			state.Logical, state.Reason = Stuck, "disk full"
+		case s.InRun && s.Tool.Name != "" && now.Sub(s.ToolProgress) >= StuckAfter:
+			state.Logical, state.Reason = Stuck, fmt.Sprintf("tool idle %dm (%s)", int(StuckAfter/time.Minute), s.Tool.Label())
+		case s.InRun && s.Tool.Name == "" && !s.LastActivity.IsZero() && now.Sub(s.LastActivity) >= StuckAfter:
+			state.Logical, state.Reason = Stuck, fmt.Sprintf("no model response %dm", int(StuckAfter/time.Minute))
 		case s.InRun:
-			state.Logical = Working
+			state.Logical, state.Tool = Working, s.Tool
 		case s.Approval != "":
 			state.Logical, state.Reason = Waiting, "approval for #"+s.Approval
 		case s.Blocked != "":
@@ -182,12 +234,11 @@ func Step(previous Snapshot, event Event) (Snapshot, Nudge) {
 	if state.Logical != Waiting || s.Approval != "" || s.Blocked != "" || s.InFlight == "" {
 		s.NudgedInFlight = false
 	}
+	// Nudges come from the dashboard's team watch; the daemon only acts on a
+	// silent model, which a message cannot reach.
 	var nudge Nudge
-	if state.Physical == Running && state.Logical == NoActivity && !s.NudgedNoActivity && now.Sub(state.Since) >= NudgeAfter {
-		s.NudgedNoActivity, nudge = true, NudgeNoActivity
-	}
-	if state.Physical == Running && state.Logical == Waiting && s.Approval == "" && s.Blocked == "" && s.InFlight != "" && !s.NudgedInFlight && now.Sub(state.Since) >= NudgeAfter {
-		s.NudgedInFlight, nudge = true, NudgeInFlight
+	if state.Physical == Running && state.Logical == Stuck && strings.HasPrefix(state.Reason, "no model response") && !s.ModelHangSent {
+		s.ModelHangSent, nudge = true, NudgeModelHang
 	}
 	return s, nudge
 }
@@ -196,7 +247,7 @@ func Step(previous Snapshot, event Event) (Snapshot, Nudge) {
 // server's 30-minute expiry. A failed report should not update lastReported.
 func validLogical(value Logical) bool {
 	switch value {
-	case Working, Idle, Waiting, NoActivity, Unknown:
+	case Working, Idle, Waiting, Stuck, NoActivity, Unknown:
 		return true
 	}
 	return false

@@ -114,7 +114,7 @@ func TestAttachedStateEngineReportsAndNudgesThroughStream(t *testing.T) {
 	if err = m.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assert(agentstate.Running, agentstate.NoActivity)
+	assert(agentstate.Running, agentstate.Stuck)
 	*now = now.Add(15 * time.Minute)
 	if err = m.Tick(ctx); err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestAttachedStateEngineReportsAndNudgesThroughStream(t *testing.T) {
 			t.Fatalf("nudge: %+v", n)
 		}
 	default:
-		t.Fatal("no attached nudge at 15m no_activity")
+		t.Fatal("no model-hang signal for a silent attached pi")
 	}
 	if err = m.SessionEvent("agm_state", "run_end", "", time.Time{}); err != nil {
 		t.Fatal(err)

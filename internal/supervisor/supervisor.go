@@ -59,6 +59,8 @@ type Manager struct {
 	booted         chan struct{}
 	stoppingHold   bool
 	runFinishing   bool
+	nextDiskCheck  time.Time
+	diskFull       bool
 }
 type managed struct {
 	def                            AgentDefinition
@@ -92,6 +94,8 @@ type managed struct {
 	nextPresenceRetry              time.Time
 	pendingPresenceNudges          []agentstate.Nudge
 	nextTaskCheck                  time.Time
+	nextSample                     time.Time
+	lastToolCPU, lastToolIO        uint64
 }
 
 func New(home, pi, cli string, tmux Tmux, poll Poller) *Manager {
@@ -739,6 +743,7 @@ func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 func (m *Manager) Tick(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.checkDisk()
 	agents := make([]*managed, 0, len(m.agents))
 	for _, a := range m.agents {
 		agents = append(agents, a)

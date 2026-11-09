@@ -30,7 +30,7 @@ func (m *Manager) stepPresence(a *managed, e AgentEvent) {
 		}
 	}
 	previous := a.presence
-	current, nudge := agentstate.Step(previous, agentstate.Event{Kind: e.Kind, Logical: agentstate.Logical(e.Logical), Reason: e.Reason, TaskNumber: e.TaskNumber, At: e.At})
+	current, nudge := agentstate.Step(previous, agentstate.Event{Kind: e.Kind, Logical: agentstate.Logical(e.Logical), Reason: e.Reason, TaskNumber: e.TaskNumber, At: e.At, Tool: e.Tool, Command: e.Command})
 	a.presence = current
 	if nudge != agentstate.NoNudge {
 		a.pendingPresenceNudges = append(a.pendingPresenceNudges, nudge)
@@ -159,10 +159,10 @@ func (m *Manager) stepTaskSignal(a *managed, kind, number string) {
 	m.emitAgentEvent(a, AgentEvent{AgentID: a.def.AgentID, Kind: kind, TaskNumber: number, At: m.now()})
 }
 func (m *Manager) sendPresenceNudge(ctx context.Context, a *managed, n agentstate.Nudge) {
-	text := "You have not made progress in this run for 15 minutes. Continue or report what is blocking you."
-	if n == agentstate.NudgeInFlight {
-		text = "You have been waiting on an in-flight task for 15 minutes. Continue it or report what is blocking you."
+	if n != agentstate.NudgeModelHang {
+		return // nudges come from the dashboard's team watch
 	}
+	text := "The model did not respond for 5 minutes, so AirCommand interrupted it. Continue where you left off."
 	if a.def.Kind == "attached" {
 		m.sendAttachedSignal(a, "nudge", text)
 		return
@@ -172,7 +172,7 @@ func (m *Manager) sendPresenceNudge(ctx context.Context, a *managed, n agentstat
 	}
 	d := a.driver
 	m.mu.Unlock()
-	err := d.Send(pidriver.Outgoing{Text: text, Kind: pidriver.Urgent, Source: "auto-nudge"})
+	err := d.Send(pidriver.Outgoing{Text: text, Kind: pidriver.Interrupt, Source: "model-hang"})
 	m.mu.Lock()
 	if err != nil {
 		log.Printf("supervisor: nudge %s: %v", a.def.Name, err)

@@ -86,7 +86,9 @@ func (r *HTTPReporter) report(ctx context.Context) error {
 			Kind    string `json:"kind"`
 		}{a.AgentID, a.State, a.Mode, kind})
 	}
-	capabilities := []string{"check-in"}
+	// agent-status-v2: stuck states and the running tool are reported, and the
+	// daemon no longer nudges agents (the dashboard's team watch does).
+	capabilities := []string{"check-in", "agent-status-v2"}
 	if r.RunMode {
 		capabilities = append(capabilities, "run.v1")
 	}

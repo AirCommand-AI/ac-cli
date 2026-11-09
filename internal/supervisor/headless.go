@@ -170,6 +170,7 @@ func (m *Manager) tickHeadless(ctx context.Context, a *managed) error {
 	if err := m.drainPending(ctx, a); err != nil {
 		return err
 	}
+	m.sampleTool(a)
 	if m.Poll != nil && !m.now().Before(a.nextPoll) {
 		return m.poll(ctx, a)
 	}
@@ -227,7 +228,11 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 			case "message_start":
 				kind = "turn"
 			}
-			m.emitAgentEvent(a, AgentEvent{AgentID: a.def.AgentID, Kind: kind, At: m.now()})
+			ev := AgentEvent{AgentID: a.def.AgentID, Kind: kind, At: m.now()}
+			if kind == "tool_start" {
+				ev.Tool, ev.Command = toolOf(e.Data)
+			}
+			m.emitAgentEvent(a, ev)
 			m.reportClaudeEvent(a, e)
 			for ch := range a.subscribers {
 				select {

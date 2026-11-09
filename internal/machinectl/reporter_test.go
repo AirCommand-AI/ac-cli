@@ -25,7 +25,7 @@ func TestHTTPReporterRunModeAddsCapability(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if len(body.Capabilities) != 2 || body.Capabilities[1] != "run.v1" {
+		if len(body.Capabilities) != 3 || body.Capabilities[1] != "agent-status-v2" || body.Capabilities[2] != "run.v1" {
 			t.Errorf("capabilities=%v", body.Capabilities)
 		}
 		_, _ = w.Write([]byte(`{"machine":{"state":"online"},"run":{"state":"finishing"}}`))
@@ -57,7 +57,7 @@ func TestHTTPReporterSendsContractAndIgnoresMachineState(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Version != "v0.19.0" || len(body.Capabilities) != 1 || body.Capabilities[0] != "check-in" || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" || body.Agents[0].Kind != "started" {
+		if body.Version != "v0.19.0" || len(body.Capabilities) != 2 || body.Capabilities[0] != "check-in" || body.Capabilities[1] != "agent-status-v2" || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" || body.Agents[0].Kind != "started" {
 			t.Errorf("body %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"machine":{"state":"stopping","stateAt":"2026-10-02T00:00:00Z"}}`))

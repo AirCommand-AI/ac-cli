@@ -29,6 +29,8 @@ type AgentEvent struct {
 	TaskNumber string
 	At         time.Time
 	Reason     string
+	Tool       string
+	Command    string
 }
 type AgentEvents interface {
 	SubscribeAgentEvents() (<-chan AgentEvent, func())
