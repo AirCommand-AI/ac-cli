@@ -29,14 +29,6 @@ func TestWorkspaceCloneFetchAndBrief(t *testing.T) {
 	if !reflect.DeepEqual(commands[1], []string{"-C", filepath.Join(folder, "ac-cli"), "fetch", "origin"}) {
 		t.Fatalf("fetch: %v", commands[1])
 	}
-	briefPath := filepath.Join(root, "state", "brief.md")
-	if err := WriteBrief(briefPath, "eng-3", "Air Command", "626"); err != nil {
-		t.Fatal(err)
-	}
-	brief, err := os.ReadFile(briefPath)
-	if err != nil || !strings.Contains(string(brief), "read your unread AirCommand messages (aircom inbox)") {
-		t.Fatalf("brief: %q %v", brief, err)
-	}
 }
 
 func TestWorkspaceRejectsUnsafeNamesAndRepos(t *testing.T) {

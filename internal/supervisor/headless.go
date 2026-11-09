@@ -48,6 +48,7 @@ func (m *Manager) launchHeadless(ctx context.Context, a *managed) error {
 	a.driver = d
 	a.startupSent = false
 	args := []string{"--aircommand-headless", "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID)}
+	args = append(args, piProfileArgs(a.def)...)
 	spec := pidriver.LaunchSpec{PiPath: m.Pi, WorkDir: a.def.WorkFolder, SessionID: a.def.AgentID, Args: args}
 	if a.legacySession && !a.def.SessionMigrated {
 		spec.ForkFrom = migrationSource(a.def.WorkFolder, a.def.AgentID)

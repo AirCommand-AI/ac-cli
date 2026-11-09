@@ -65,6 +65,9 @@ type AgentDefinition struct {
 	SessionMigrated  bool             `json:"sessionMigrated,omitempty"`
 	Nudge            *NudgeState      `json:"nudge,omitempty"`
 	SessionStartedAt string           `json:"sessionStartedAt,omitempty"`
+	// Profile is the server's role and model settings; nil on Start keeps
+	// the saved one.
+	Profile *AgentProfile `json:"profile,omitempty"`
 }
 type PiProcess struct {
 	PID       int    `json:"pid"`
@@ -90,6 +93,7 @@ type AgentStatus struct {
 	Reason     string `json:"reason,omitempty"`
 	Mode       string `json:"mode"`
 	Kind       string `json:"kind,omitempty"`
+	Role       string `json:"role,omitempty"`
 	PiState    string `json:"piState,omitempty"`
 	PID        int    `json:"pid,omitempty"`
 	LastExit   *Exit  `json:"lastExit,omitempty"`

@@ -35,6 +35,8 @@ type Manager interface {
 	Mode(context.Context, string, string) error
 	MarkRevision(string, int64) error
 	FlushDesired(context.Context) map[string]bool
+	// UpdateProfile saves role and model settings without a restart.
+	UpdateProfile(string, *supervisor.AgentProfile) (bool, error)
 }
 
 type AgentReconciler struct {
@@ -149,6 +151,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 		previous, exists := current[target.AgentID]
 		if exists {
 			target = r.withLocalDefaults(target, previous)
+			// Role and prompt changes need no revision and no restart: the
+			// next start writes the brief from the saved profile.
+			if previous.Kind != "attached" && previous.Name == target.Name {
+				if _, err := r.Manager.UpdateProfile(previous.Name, profileOf(target)); err != nil {
+					failures = append(failures, fmt.Sprintf("%s: profile: %v", target.AgentID, err))
+				}
+			}
 		}
 		if target.Revision <= previous.Revision || target.Revision < 1 {
 			continue
@@ -279,7 +288,17 @@ func (r *AgentReconciler) apply(ctx context.Context, target Agent, old superviso
 }
 
 func definition(d Agent) supervisor.AgentDefinition {
-	return supervisor.AgentDefinition{AgentID: d.AgentID, Name: d.Name, Organization: d.AssignedOrganizationID, Workstream: d.AssignedWorkstreamCode, WorkFolder: d.WorkFolder, Repos: d.Repos, Mode: d.Mode}
+	return supervisor.AgentDefinition{AgentID: d.AgentID, Name: d.Name, Organization: d.AssignedOrganizationID, Workstream: d.AssignedWorkstreamCode, WorkFolder: d.WorkFolder, Repos: d.Repos, Mode: d.Mode, Harness: d.Harness, Profile: profileOf(d)}
+}
+
+// profileOf is the server's role and model settings for an agent; nil when
+// it has none.
+func profileOf(d Agent) *supervisor.AgentProfile {
+	p := supervisor.AgentProfile{Role: d.Role, RoleLabel: d.RoleLabel, RolePrompt: d.RolePrompt, RolePromptRev: d.RolePromptRev, Model: d.Model, Effort: d.Effort, OrganizationName: d.OrganizationName}
+	if p == (supervisor.AgentProfile{}) {
+		return nil
+	}
+	return &p
 }
 
 func (r *AgentReconciler) join(ctx context.Context, agent Agent) error {

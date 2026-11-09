@@ -22,7 +22,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
-const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --workspace <workspace> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name> | takeover <name> | interrupt <name> --message <text>"
+const agentUsage = "Usage: aircom agent create <name> [--mode headless|tmux] | remove <name> | start <name> --workspace <workspace> --workstream <code> [--mode headless|tmux] [--repo owner/repo]... | mode <name> headless|tmux | stop <name> | list | attach <name> | takeover <name> | interrupt <name> --message <text> | role <name> engineer|eng-lead|reviewer|supervisor|none"
 
 // runAgent implements the command contract without depending on daemon service code.
 func (a *App) runAgent(args []string) error {
@@ -120,13 +120,22 @@ func (a *App) runAgent(args []string) error {
 			return &publicError{message: fmt.Sprintf("Unable to list agents: %v", err)}
 		}
 		for _, agent := range agents {
+			role := agent.Role
+			if role == "" {
+				role = "—"
+			}
 			if agent.Mode == "headless" {
-				fmt.Fprintf(a.outputWriter(), "%s\t%s\t%s\t%s\t%s\t%s\n", agent.Name, agent.AgentID, agent.State, agent.Workstream, agent.Mode, agent.PiState)
+				fmt.Fprintf(a.outputWriter(), "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", agent.Name, agent.AgentID, agent.State, agent.Workstream, agent.Mode, agent.PiState, role)
 			} else {
-				fmt.Fprintf(a.outputWriter(), "%s\t%s\t%s\t%s\n", agent.Name, agent.AgentID, agent.State, agent.Workstream)
+				fmt.Fprintf(a.outputWriter(), "%s\t%s\t%s\t%s\t%s\n", agent.Name, agent.AgentID, agent.State, agent.Workstream, role)
 			}
 		}
 		return nil
+	case "role":
+		if len(args) != 3 || !daemonclient.ValidAgentName(args[1]) || !validRoleArg(args[2]) {
+			return &publicError{message: agentUsage}
+		}
+		return a.setAgentRole(args[1], args[2])
 	case "interrupt":
 		if len(args) != 4 || !daemonclient.ValidAgentName(args[1]) || args[2] != "--message" || strings.TrimSpace(args[3]) == "" || len([]rune(args[3])) > 500 {
 			return &publicError{message: agentUsage}
@@ -309,9 +318,6 @@ func (a *App) startAgent(ctx context.Context, client daemonclient.Client, args [
 	if err != nil {
 		return err
 	}
-	if err := daemonclient.WriteBrief(storagepath.AgentBrief(home, agent.AgentID), name, org, code); err != nil {
-		return &publicError{message: fmt.Sprintf("Unable to write agent brief: %v", err)}
-	}
 	if mode == "" {
 		if _, err := os.Stat(storagepath.AgentDaemonState(home, agent.AgentID)); errors.Is(err, os.ErrNotExist) {
 			mode = "headless"
@@ -370,4 +376,52 @@ func (a *App) offlineAgentMode(name, mode string) error {
 		return err
 	}
 	return os.Rename(f.Name(), path)
+}
+
+var roleArgs = map[string]bool{"engineer": true, "eng-lead": true, "reviewer": true, "supervisor": true, "none": true}
+
+func validRoleArg(role string) bool { return roleArgs[role] }
+
+// setAgentRole sets (or with "none" clears) an agent's role on the server.
+// The agent is told its new role; it is not restarted.
+func (a *App) setAgentRole(name, role string) error {
+	agent, err := a.resolveAgent(name)
+	if err != nil {
+		return err
+	}
+	machine, err := a.machineCredential()
+	if err != nil {
+		return err
+	}
+	if role == "none" {
+		role = ""
+	}
+	body, err := json.Marshal(map[string]string{"role": role})
+	if err != nil {
+		return err
+	}
+	response, err := a.request(http.MethodPut, "/agent/v1/machines/me/agents/"+url.PathEscape(agent.AgentID)+"/role", machine.APIToken, body)
+	if err != nil {
+		return err
+	}
+	switch {
+	case response.status == http.StatusUnauthorized || response.status == http.StatusForbidden:
+		return &publicError{message: "This machine's registration is no longer valid. Run aircom init again."}
+	case response.status == http.StatusNotFound:
+		return &publicError{message: fmt.Sprintf("Agent %s was not found on this machine.", name)}
+	case response.status < 200 || response.status >= 300:
+		return &publicError{message: "Unable to set the agent's role."}
+	}
+	var decoded struct {
+		RoleLabel string `json:"roleLabel"`
+	}
+	if err := json.Unmarshal(response.body, &decoded); err != nil {
+		return &publicError{message: "The role was set, but the server's reply could not be read."}
+	}
+	if decoded.RoleLabel == "" {
+		fmt.Fprintf(a.outputWriter(), "%s has no role. Its next start uses no role instructions.\n", name)
+		return nil
+	}
+	fmt.Fprintf(a.outputWriter(), "%s is now %s. A running agent in a workstream is told now; its next start uses the new instructions.\n", name, decoded.RoleLabel)
+	return nil
 }

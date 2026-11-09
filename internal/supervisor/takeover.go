@@ -64,6 +64,10 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 		m.mu.Unlock()
 		return TakeoverSpec{}, fmt.Errorf("headless agent %q is not running", name)
 	}
+	if err := m.writeBrief(a.def); err != nil {
+		m.mu.Unlock()
+		return TakeoverSpec{}, fmt.Errorf("write agent brief: %w", err)
+	}
 	a.takenOver = true
 	a.takeoverConnected = true
 	d := a.driver
@@ -104,6 +108,7 @@ func (m *Manager) Takeover(ctx context.Context, name string) (TakeoverSpec, erro
 		return TakeoverSpec{}, err
 	}
 	args := []string{"--aircommand-workstream", def.Workstream, "--aircommand-agent", def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(def.AgentID), "--session-id", def.AgentID}
+	args = append(args, piProfileArgs(def)...)
 	return TakeoverSpec{PiPath: m.Pi, WorkDir: def.WorkFolder, SessionID: def.AgentID, Args: args}, nil
 }
 func (m *Manager) RecordTakeover(name string, pid int) error {

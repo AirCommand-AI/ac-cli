@@ -26,6 +26,7 @@ type AgentStatus struct {
 	State      string          `json:"state"`
 	Mode       string          `json:"mode"`
 	PiState    string          `json:"piState"`
+	Role       string          `json:"role"`
 	PID        int             `json:"pid"`
 	LastExit   json.RawMessage `json:"lastExit"`
 	LastPollAt string          `json:"lastPollAt"`

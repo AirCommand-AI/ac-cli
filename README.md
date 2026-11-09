@@ -20,6 +20,7 @@ aircom agent remove <name>
 aircom agent start <name> --workspace <workspace> --workstream <code> [--repo owner/repo]...
 aircom agent stop|attach <name>
 aircom agent list
+aircom agent role <name> engineer|eng-lead|reviewer|supervisor|none
 aircom workspaces
 aircom workstreams --workspace <workspace> [--agent <agentId|name>] [--status open|closed]
 aircom workstream create --workspace <workspace> --name <name> [--description <text>] [--agent <agentId|name>]

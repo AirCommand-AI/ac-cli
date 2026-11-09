@@ -62,6 +62,20 @@ func (m *fakeManager) Mode(_ context.Context, name, mode string) error {
 	}
 	return nil
 }
+func (m *fakeManager) UpdateProfile(name string, p *supervisor.AgentProfile) (bool, error) {
+	for id, d := range m.defs {
+		if d.Name == name && d.Kind != "attached" {
+			changed := (d.Profile == nil) != (p == nil) || d.Profile != nil && *d.Profile != *p
+			if changed {
+				m.calls = append(m.calls, "profile:"+name)
+			}
+			d.Profile = p
+			m.defs[id] = d
+			return changed, nil
+		}
+	}
+	return false, nil
+}
 func (m *fakeManager) MarkRevision(name string, revision int64) error {
 	for id, d := range m.defs {
 		if d.Name == name {

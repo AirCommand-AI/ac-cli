@@ -339,6 +339,9 @@ func validate(d AgentDefinition) error {
 	if d.Harness != "" && d.Harness != "pi" || d.Mode != "" && d.Mode != "tmux" && d.Mode != "headless" {
 		return fmt.Errorf("unsupported harness or mode")
 	}
+	if !d.Profile.valid() {
+		return fmt.Errorf("invalid agent profile")
+	}
 	return nil
 }
 func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
@@ -371,9 +374,18 @@ func (m *Manager) Start(ctx context.Context, def AgentDefinition) error {
 		return fmt.Errorf("agent is attached to a person's session")
 	}
 	a.legacySession = old.AgentID != "" && !old.SessionMigrated && old.WorkFolder == def.WorkFolder
+	if def.Harness != "" && def.Harness != "pi" {
+		return fmt.Errorf("unsupported harness %q", def.Harness)
+	}
+	if !def.Profile.valid() {
+		return fmt.Errorf("invalid agent profile")
+	}
 	def.Version = 1
 	def.Kind = "started"
 	def.Harness = "pi"
+	if def.Profile == nil {
+		def.Profile = old.Profile
+	}
 	if def.Mode == "" {
 		def.Mode = old.Mode
 	}
@@ -522,6 +534,9 @@ func (m *Manager) List(ctx context.Context) ([]AgentStatus, error) {
 	var list []AgentStatus
 	for _, a := range m.agents {
 		status := AgentStatus{Name: a.def.Name, AgentID: a.def.AgentID, Workstream: a.def.Workstream, Desired: a.def.Desired, State: a.def.State, Reason: a.def.Reason, Mode: a.def.Mode, Kind: a.def.Kind, PID: a.pid, LastExit: a.def.LastExit, LastPollAt: a.lastPoll}
+		if a.def.Profile != nil {
+			status.Role = a.def.Profile.RoleLabel
+		}
 		if a.def.Kind == "attached" {
 			status.Mode = "attached"
 			status.PID = a.def.SessionPID
@@ -667,6 +682,9 @@ func (m *Manager) watch(ctx context.Context, a *managed) error {
 	return m.launch(ctx, a, false)
 }
 func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
+	if err := m.writeBrief(a.def); err != nil {
+		return fmt.Errorf("write agent brief: %w", err)
+	}
 	if a.def.Mode == "headless" {
 		return m.launchHeadless(ctx, a)
 	}
@@ -674,6 +692,7 @@ func (m *Manager) launch(ctx context.Context, a *managed, resume bool) error {
 		return err
 	}
 	args := []string{m.Pi, "--aircommand-workstream", a.def.Workstream, "--aircommand-agent", a.def.AgentID, "--aircommand-cli", m.CLI, "--append-system-prompt", m.briefPath(a.def.AgentID), "--session-id", a.def.AgentID}
+	args = append(args, piProfileArgs(a.def)...)
 	fork := ""
 	if a.legacySession && !a.def.SessionMigrated {
 		fork = migrationSource(a.def.WorkFolder, a.def.AgentID)

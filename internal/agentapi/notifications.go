@@ -104,7 +104,7 @@ func validateNotification(n Notification) error {
 	if n.Type != "message.received" || !validMessageID(n.MessageID) || strings.TrimSpace(n.SenderID) == "" || strings.TrimSpace(n.At) == "" {
 		return errors.New("incomplete notification")
 	}
-	if n.SenderNature != "agent" && n.SenderNature != "human" {
+	if n.SenderNature != "agent" && n.SenderNature != "human" && n.SenderNature != "system" {
 		return errors.New("invalid sender nature")
 	}
 	if n.Priority != "" && n.Priority != "normal" && n.Priority != "urgent" {
@@ -144,6 +144,9 @@ func validTaskID(id string) bool {
 
 func ComposeSummary(n Notification, workstream string, names map[SenderIdentity]string) string {
 	sender := n.SenderID
+	if n.SenderNature == "system" {
+		sender = "AirCommand"
+	}
 	if name := names[SenderIdentity{ID: n.SenderID, Nature: n.SenderNature}]; name != "" {
 		sender = name
 	}
@@ -156,6 +159,8 @@ func ComposeSummary(n Notification, workstream string, names map[SenderIdentity]
 		return fmt.Sprintf("%sTask %s assigned to you by %s (%s) in workstream %s: %s; run aircom inbox.", urgency, n.TaskID, singleLine(sender), n.SenderNature, workstream, n.MessageID)
 	case "task.unassigned":
 		return fmt.Sprintf("%sTask %s reassigned away from you by %s (%s) in workstream %s: %s; run aircom inbox.", urgency, n.TaskID, singleLine(sender), n.SenderNature, workstream, n.MessageID)
+	case "role":
+		return fmt.Sprintf("%sYour role or role instructions changed (from AirCommand) in workstream %s: %s; run aircom inbox.", urgency, workstream, n.MessageID)
 	case "task.cancelled":
 		return fmt.Sprintf("%sTask %s cancelled by %s (%s) in workstream %s: %s; run aircom inbox.", urgency, n.TaskID, singleLine(sender), n.SenderNature, workstream, n.MessageID)
 	}

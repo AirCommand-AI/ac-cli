@@ -25,6 +25,15 @@ type Agent struct {
 	JoinedOrganizationID   string   `json:"joinedOrganizationId"`
 	JoinedWorkstreamCode   string   `json:"joinedWorkstreamCode"`
 	Revision               int64    `json:"revision"`
+	// Role and model settings (dashboard with roles); empty from older servers.
+	Role             string `json:"role,omitempty"`
+	RoleLabel        string `json:"roleLabel,omitempty"`
+	RolePrompt       string `json:"rolePrompt,omitempty"`
+	RolePromptRev    int64  `json:"rolePromptRev,omitempty"`
+	Harness          string `json:"harness,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Effort           string `json:"effort,omitempty"`
+	OrganizationName string `json:"organizationName,omitempty"`
 }
 
 type Definitions struct {

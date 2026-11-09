@@ -27,7 +27,10 @@ func (m *Manager) Definitions() []AgentDefinition {
 
 // Stage saves a new stopped definition without launching a pi session.
 func (m *Manager) Stage(def AgentDefinition) error {
-	def.Version, def.Kind, def.Harness, def.Desired, def.State = 1, "started", "pi", "stopped", "stopped"
+	if def.Harness == "" {
+		def.Harness = "pi"
+	}
+	def.Version, def.Kind, def.Desired, def.State = 1, "started", "stopped", "stopped"
 	if err := validate(def); err != nil {
 		return err
 	}

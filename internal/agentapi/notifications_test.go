@@ -72,3 +72,22 @@ func TestAmbiguousSendersAndRedaction(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSystemRoleNotification(t *testing.T) {
+	body := []byte(`{"notifications":[{"type":"message.received","messageId":"0123456789abcdef","senderId":"system:machine-runs","senderNature":"system","at":"now","kind":"role"},{"type":"message.received","messageId":"fedcba9876543210","senderId":"x","senderNature":"robot","at":"now"}],"cursor":"c","pollAfterSeconds":30}`)
+	feed, err := DecodeFeed(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feed.Notifications) != 1 || feed.Notifications[0].SenderNature != "system" {
+		t.Fatalf("feed = %+v", feed)
+	}
+	if got := ComposeSummary(feed.Notifications[0], "766", nil); got != "Your role or role instructions changed (from AirCommand) in workstream 766: 0123456789abcdef; run aircom inbox." {
+		t.Fatal(got)
+	}
+	plain := feed.Notifications[0]
+	plain.Kind = ""
+	if got := ComposeSummary(plain, "766", nil); !strings.HasPrefix(got, "New message from AirCommand (system)") {
+		t.Fatal(got)
+	}
+}
