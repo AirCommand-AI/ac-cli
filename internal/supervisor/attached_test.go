@@ -149,7 +149,7 @@ func TestMachineStopDoesNotKillOrUnlockAttachedSession(t *testing.T) {
 	if err = m.Attach(claim, Attachment{AgentID: "agm_machine", Name: "person", SessionPID: os.Getpid(), SessionStart: SessionProcessStart(os.Getpid()), Program: "pi"}); err != nil {
 		t.Fatal(err)
 	}
-	if err = m.SetMachineState(context.Background(), "stopping"); err != nil {
+	if err = m.holdAndStop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if tm.kills != 0 || !agentlock.Held(m.Home, "agm_machine") {

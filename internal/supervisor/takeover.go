@@ -138,7 +138,6 @@ func (m *Manager) ResumeTakeover(name string) error {
 	a.def.Takeover = nil
 	a.def.TakeoverSince = ""
 	a.takenOver = false
-	m.lastBusy = m.now()
 	if m.stoppingHold {
 		a.machineStopped = true
 	}

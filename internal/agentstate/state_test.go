@@ -89,23 +89,10 @@ func TestNudgesOncePerEpisodeAndSince(t *testing.T) {
 	}
 }
 
-func TestReportScheduleAndMachineFunctions(t *testing.T) {
+func TestReportSchedule(t *testing.T) {
 	base := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	s := New("pi", base).State
 	if !Due(s, s, time.Time{}, base) || Due(s, s, base, base.Add(24*time.Minute)) || !Due(s, s, base, base.Add(25*time.Minute)) {
 		t.Fatal("25-minute report contract")
-	}
-	attached := MachineAgent{Kind: "attached", Physical: Running, InRun: true}
-	busyIdle, lastBusy := MachineIdle(base, time.Time{}, time.Time{}, []MachineAgent{attached}, false)
-	if !Busy([]MachineAgent{attached}, false) || busyIdle != nil || !lastBusy.Equal(base) {
-		t.Fatal("attached run should keep machine busy and advance its marker")
-	}
-	attached.InRun = false
-	idle := IdleSince(base, base.Add(-time.Hour), base.Add(-time.Minute), []MachineAgent{attached}, false)
-	if idle == nil || !idle.Equal(base.Add(-time.Minute)) {
-		t.Fatalf("idle = %v", idle)
-	}
-	if !AgentsStopped(true, []MachineAgent{attached}) || AgentsStopped(false, nil) || AgentsStopped(true, []MachineAgent{{Kind: "started"}}) {
-		t.Fatal("shutdown should ignore attached sessions only")
 	}
 }

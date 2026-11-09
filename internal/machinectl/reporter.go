@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,14 +13,10 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
-// StatusSource is the local, read-only machine snapshot plus the stopping hold.
-// It never grants authority to change definitions: the response carries only
-// the managed machine's state, not an agent command.
+// StatusSource is the local, read-only machine snapshot. The status response
+// never changes local state.
 type StatusSource interface {
 	List(context.Context) ([]supervisor.AgentStatus, error)
-	IdleSince(context.Context) (*time.Time, error)
-	AgentsStopped() bool
-	SetMachineState(context.Context, string) error
 }
 
 type HTTPReporter struct {
@@ -31,7 +26,7 @@ type HTTPReporter struct {
 	TokenLoader func() (string, error)
 	Client      *http.Client
 	Source      StatusSource
-	RunMode     bool // run.v1 is opt-in; managed devices keep the old check-in shape
+	RunMode     bool // run.v1 is opt-in
 	// Metrics, when set, adds a machine health sample to every report.
 	Metrics                interface{ Collect() Metrics }
 	failureMu              sync.RWMutex
@@ -50,7 +45,7 @@ func (r *HTTPReporter) SetCheckFailure(err error, at time.Time) {
 	}
 }
 
-func (r *HTTPReporter) Report(ctx context.Context) error { return r.report(ctx, true) }
+func (r *HTTPReporter) Report(ctx context.Context) error { return r.report(ctx) }
 
 func (r *HTTPReporter) token() (string, error) {
 	if r.TokenLoader != nil {
@@ -59,7 +54,7 @@ func (r *HTTPReporter) token() (string, error) {
 	return r.Token, nil
 }
 
-func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
+func (r *HTTPReporter) report(ctx context.Context) error {
 	token, err := r.token()
 	if r.Source == nil || r.URL == "" || err != nil || token == "" {
 		return fmt.Errorf("machine status reporter is not configured")
@@ -70,10 +65,6 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 		}
 	}
 	agents, err := r.Source.List(ctx)
-	if err != nil {
-		return err
-	}
-	idle, err := r.Source.IdleSince(ctx)
 	if err != nil {
 		return err
 	}
@@ -108,15 +99,13 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 		metrics = &sample
 	}
 	body, err := json.Marshal(struct {
-		Version       string     `json:"aircomVersion"`
-		Capabilities  []string   `json:"capabilities"`
-		IdleSince     *time.Time `json:"idleSince"`
-		AgentsStopped bool       `json:"agentsStopped"`
-		Agents        any        `json:"agents"`
-		LastError     string     `json:"lastError"`
-		LastErrorAt   string     `json:"lastErrorAt"`
-		Metrics       *Metrics   `json:"metrics,omitempty"`
-	}{r.Version, capabilities, idle, r.Source.AgentsStopped(), rows, lastError, lastErrorAt, metrics})
+		Version      string   `json:"aircomVersion"`
+		Capabilities []string `json:"capabilities"`
+		Agents       any      `json:"agents"`
+		LastError    string   `json:"lastError"`
+		LastErrorAt  string   `json:"lastErrorAt"`
+		Metrics      *Metrics `json:"metrics,omitempty"`
+	}{r.Version, capabilities, rows, lastError, lastErrorAt, metrics})
 	if err != nil {
 		return err
 	}
@@ -137,23 +126,6 @@ func (r *HTTPReporter) report(ctx context.Context, apply bool) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("machine status HTTP %d", resp.StatusCode)
-	}
-	var result struct {
-		Machine struct {
-			State string `json:"state"`
-		} `json:"machine"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
-		return err
-	}
-	if apply && result.Machine.State != "" {
-		before := r.Source.AgentsStopped()
-		if err := r.Source.SetMachineState(ctx, result.Machine.State); err != nil {
-			return err
-		}
-		if !before && r.Source.AgentsStopped() {
-			return r.report(ctx, false)
-		}
 	}
 	return nil
 }

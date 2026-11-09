@@ -38,7 +38,7 @@ func TestManualMachineStopSignalsOnlyFencedTakeoverGroup(t *testing.T) {
 	}
 	notices := []string{}
 	m.SetTakeoverNotice(d.Name, func(s string) error { notices = append(notices, s); return nil })
-	if err := m.SetMachineState(ctx, "stopping"); err != nil {
+	if err := m.holdAndStop(ctx); err != nil {
 		t.Fatal(err)
 	}
 	select {

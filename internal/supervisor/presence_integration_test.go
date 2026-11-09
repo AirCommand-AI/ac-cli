@@ -110,9 +110,6 @@ func TestAttachedStateEngineReportsAndNudgesThroughStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	assert(agentstate.Running, agentstate.Working)
-	if idle, err := m.IdleSince(ctx); err != nil || idle != nil {
-		t.Fatalf("in-run attached session considered idle: %v %v", idle, err)
-	}
 	*now = now.Add(16 * time.Minute)
 	if err = m.Tick(ctx); err != nil {
 		t.Fatal(err)

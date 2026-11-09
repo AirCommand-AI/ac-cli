@@ -14,11 +14,8 @@ import (
 	"time"
 )
 
-type noIdleSource struct{ fakeStatusSource }
-
-func (*noIdleSource) IdleSince(context.Context) (*time.Time, error) { return nil, nil }
 func TestMachineStatusFailureMatchesDashboardFixtureAndClears(t *testing.T) {
-	source := &noIdleSource{}
+	source := &fakeStatusSource{}
 	var bodies [][]byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)

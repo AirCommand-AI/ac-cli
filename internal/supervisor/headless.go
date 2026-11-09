@@ -205,9 +205,6 @@ func (m *Manager) consumeEvents(a *managed, d pidriver.Driver, done <-chan struc
 				m.mu.Unlock()
 				return
 			}
-			if e.Kind == "agent_settled" {
-				m.lastBusy = m.now()
-			}
 			kind := "rpc"
 			switch e.Kind {
 			case "agent_start":
