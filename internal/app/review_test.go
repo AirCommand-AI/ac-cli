@@ -90,3 +90,11 @@ func TestReviewErrorsShowServerReason(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskDetailListsReviewFindings(t *testing.T) {
+	task := taskListItem{ID: "t1", Number: 16, Title: "human_bytes", Status: "landed", CreatedAt: "2026-11-10T00:00:00Z", UpdatedAt: "2026-11-10T00:00:00Z", ReviewFindings: []reviewFindingItem{{ID: "fnd_1", ReviewTaskID: "t2", Severity: "major", Category: "correctness", Summary: "overflow at 1024 PiB"}}}
+	got := formatTaskState(task, []taskListItem{task, {ID: "t2", Number: 19, Title: "Review #16"}})
+	if !strings.Contains(got, "Review findings:") || !strings.Contains(got, "fnd_1\topen\tmajor/correctness\toverflow at 1024 PiB") {
+		t.Fatalf("task detail:\n%s", got)
+	}
+}

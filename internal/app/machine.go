@@ -878,6 +878,16 @@ func formatTaskState(task taskListItem, tasks []taskListItem, protected ...strin
 	}
 	writeList("Depends on", task.DependsOn, describe)
 	writeList("Links", task.Links, safe)
+	if len(task.ReviewFindings) > 0 {
+		output.WriteString("Review findings:\n")
+		for _, f := range task.ReviewFindings {
+			status := f.Status
+			if status == "" {
+				status = "open"
+			}
+			fmt.Fprintf(&output, "  - %s\t%s\t%s/%s\t%s (review %s)\n", safe(f.ID), safe(status), safe(f.Severity), safe(f.Category), safe(f.Summary), describe(f.ReviewTaskID))
+		}
+	}
 	if task.CancelReason != "" {
 		fmt.Fprintf(&output, "Cancelled: %s\n", safe(task.CancelReason))
 		if task.CancelledBy != nil {

@@ -138,6 +138,16 @@ func (a *App) review(args []string) error {
 	if response.status < 200 || response.status >= 300 {
 		return reviewResponseError(action, response.status, response.body, code, credential)
 	}
+	if action == "finding" {
+		var created struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(response.body, &created) == nil && created.ID != "" {
+			findingID := safeMetadata(created.ID, credential.APIToken, credential.SocketKey)
+			_, e = fmt.Fprintf(a.outputWriter(), "Review finding %s recorded for %s. After the fix: aircom review finding-status %s --workstream %s --status fixed\n", findingID, safeMetadata(ref, credential.APIToken, credential.SocketKey), findingID, code)
+			return e
+		}
+	}
 	_, e = fmt.Fprintf(a.outputWriter(), "Review %s recorded for %s.\n", action, safeMetadata(ref, credential.APIToken, credential.SocketKey))
 	return e
 }

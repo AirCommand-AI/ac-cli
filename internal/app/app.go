@@ -205,6 +205,16 @@ type taskListEnvelope struct {
 	Updates []taskCommentItem `json:"updates"`
 }
 
+// reviewFindingItem is one review finding on a task.
+type reviewFindingItem struct {
+	ID           string `json:"id"`
+	ReviewTaskID string `json:"reviewTaskId"`
+	Severity     string `json:"severity"`
+	Category     string `json:"category"`
+	Summary      string `json:"summary"`
+	Status       string `json:"status,omitempty"`
+}
+
 type taskListItem struct {
 	ID          string     `json:"id"`
 	Status      string     `json:"status"`
@@ -217,18 +227,20 @@ type taskListItem struct {
 	AssignedBy  *taskActor `json:"assignedBy,omitempty"`
 	AssignedAt  string     `json:"assignedAt,omitempty"`
 
-	Number       int        `json:"number,omitempty"`
-	Position     int        `json:"position,omitempty"`
-	Milestone    string     `json:"milestone,omitempty"`
-	Type         string     `json:"type,omitempty"`
-	Acceptance   []string   `json:"acceptance,omitempty"`
-	Validation   string     `json:"validation,omitempty"`
-	DependsOn    []string   `json:"dependsOn,omitempty"`
-	Links        []string   `json:"links,omitempty"`
-	CancelReason string     `json:"cancelReason,omitempty"`
-	ReplacedBy   string     `json:"replacedBy,omitempty"`
-	CancelledBy  *taskActor `json:"cancelledBy,omitempty"`
-	CancelledAt  string     `json:"cancelledAt,omitempty"`
+	Number       int      `json:"number,omitempty"`
+	Position     int      `json:"position,omitempty"`
+	Milestone    string   `json:"milestone,omitempty"`
+	Type         string   `json:"type,omitempty"`
+	Acceptance   []string `json:"acceptance,omitempty"`
+	Validation   string   `json:"validation,omitempty"`
+	DependsOn    []string `json:"dependsOn,omitempty"`
+	Links        []string `json:"links,omitempty"`
+	CancelReason string   `json:"cancelReason,omitempty"`
+	ReplacedBy   string   `json:"replacedBy,omitempty"`
+	// ReviewFindings are findings recorded against this task by its reviews.
+	ReviewFindings []reviewFindingItem `json:"reviewFindings,omitempty"`
+	CancelledBy    *taskActor          `json:"cancelledBy,omitempty"`
+	CancelledAt    string              `json:"cancelledAt,omitempty"`
 }
 
 // taskActor is who created or changed a task, as the server recorded them.
