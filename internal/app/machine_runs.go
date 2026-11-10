@@ -20,7 +20,7 @@ import (
 var machineAgentName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var machineRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId> | machine list --workstream <code> [--agent <id>] [--state all|active|ended] [--limit N] [--cursor <cursor>] | machine status --workstream <code> [--agent <id>] --run <runId> | machine metrics --workstream <code> [--agent <id>] [--run <runId>] [--since <2h|RFC3339>] [--until <RFC3339>] [--limit N] [--cursor <cursor>] | machine rescue-opened --workspace <workspace> --workstream <code> --run <runId>"
+const machineRunUsage = "Usage: aircom machine bootstrap --code-file <owner-only-file> | machine start --workstream <code> --agent <id> --profile <name> [--team <name> | --agents N | --agent-name <name>...] [--model <model>] [--repo <owner/repo>]... [--runtime-min N] | machine done|cancel --workstream <code> --agent <id> --run <runId> | machine list --workstream <code> [--agent <id>] [--state all|active|ended] [--limit N] [--cursor <cursor>] | machine status --workstream <code> [--agent <id>] --run <runId> | machine metrics --workstream <code> [--agent <id>] [--run <runId>] [--since <2h|RFC3339>] [--until <RFC3339>] [--limit N] [--cursor <cursor>] | machine rescue-opened --workspace <workspace> --workstream <code> --run <runId>"
 
 func (a *App) machineRun(args []string) error {
 	if len(args) == 0 {
@@ -88,12 +88,13 @@ func (a *App) machineRun(args []string) error {
 	}
 	flags := flag.NewFlagSet("machine "+args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	var code, agent, profile, run, model string
+	var code, agent, profile, team, run, model string
 	var agents, runtimeMin, hours int
 	var repos, names stringList
 	flags.StringVar(&code, "workstream", "", "workstream code")
 	flags.StringVar(&agent, "agent", "", "agent ID or name")
 	flags.StringVar(&profile, "profile", "", "machine profile")
+	flags.StringVar(&team, "team", "", "team profile (default: the machine profile's default team)")
 	flags.StringVar(&run, "run", "", "run ID")
 	flags.IntVar(&agents, "agents", 1, "agent count")
 	flags.Var(&names, "agent-name", "requested agent name (repeatable)")
@@ -127,10 +128,10 @@ func (a *App) machineRun(args []string) error {
 		runtimeMin = hours * 60
 	}
 	starting := args[0] == "request" || args[0] == "start"
-	if starting && (profile == "" || run != "" || len(repos.values) == 0 || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount) {
+	if starting && (profile == "" || run != "" || len(repos.values) == 0 || agents < 1 || agents > 32 || runtimeMin < 0 || runtimeMin > 720 || len(names.values) > 32 || len(names.values) > 0 && usedCount || team != "" && (usedCount || len(names.values) > 0) || len(team) > 60) {
 		return &publicError{message: machineRunUsage}
 	}
-	if !starting && (run == "" || profile != "" || model != "" || len(names.values) > 0 || len(repos.values) > 0 || runtimeMin != 0 || agents != 1) {
+	if !starting && (run == "" || profile != "" || model != "" || len(names.values) > 0 || len(repos.values) > 0 || runtimeMin != 0 || agents != 1 || team != "") {
 		return &publicError{message: machineRunUsage}
 	}
 	credential, err := a.credentialFor(code, agent)
@@ -141,9 +142,13 @@ func (a *App) machineRun(args []string) error {
 	var payload []byte
 	if starting {
 		fields := map[string]any{"profile": profile, "repos": append([]string{}, repos.values...)}
-		if len(names.values) > 0 {
+		// Neither a team nor a count: the machine profile's default team.
+		switch {
+		case team != "":
+			fields["team"] = team
+		case len(names.values) > 0:
 			fields["agentNames"] = names.values
-		} else {
+		case usedCount:
 			fields["agentCount"] = agents
 		}
 		if model != "" {

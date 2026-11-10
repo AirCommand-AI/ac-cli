@@ -78,3 +78,51 @@ func TestMachineRunApprovalScopeFlags(t *testing.T) {
 		t.Fatal(errs.String())
 	}
 }
+
+func TestMachineStartTeamSelection(t *testing.T) {
+	credential := testCredential()
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		w.WriteHeader(201)
+		_, _ = w.Write([]byte(`{"runId":"run_0123456789abcdef01234567","state":"requested"}`))
+	}))
+	defer server.Close()
+	a, _, errOut := testApp(t, server.URL, "", nil)
+	saveTestCredential(t, a, credential)
+	base := []string{"machine", "start", "--workstream", "694", "--agent", credential.AgentID, "--profile", "standard", "--repo", "Org/repo"}
+	tests := []struct {
+		name  string
+		extra []string
+		ok    bool
+		check func(map[string]any) bool
+	}{
+		{"named team", []string{"--team", "Claude lead + 3"}, true, func(b map[string]any) bool { return b["team"] == "Claude lead + 3" && b["agentCount"] == nil }},
+		{"default team", nil, true, func(b map[string]any) bool {
+			return b["team"] == nil && b["agentCount"] == nil && b["agentNames"] == nil
+		}},
+		{"agent count", []string{"--agents", "3"}, true, func(b map[string]any) bool { return b["agentCount"] == float64(3) && b["team"] == nil }},
+		{"team and count", []string{"--team", "x", "--agents", "2"}, false, nil},
+		{"team and names", []string{"--team", "x", "--agent-name", "eng-a"}, false, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(bodies)
+			code := a.Run(append(append([]string{}, base...), tc.extra...))
+			if (code == 0) != tc.ok {
+				t.Fatalf("exit %d: %s", code, errOut.String())
+			}
+			if !tc.ok {
+				if len(bodies) != before {
+					t.Fatal("rejected request was sent")
+				}
+				return
+			}
+			if len(bodies) != before+1 || !tc.check(bodies[before]) {
+				t.Fatalf("body %v", bodies[len(bodies)-1])
+			}
+		})
+	}
+}

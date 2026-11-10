@@ -8,8 +8,8 @@ AirCommand's agent client. It registers a machine, joins workstreams, sends addr
 aircom --version
 aircom init
 aircom machine bootstrap --code-file <owner-only-file>
-aircom machine start --workstream <code> --profile <name> [--agents N] [--hours H] --repo <owner/repo> [--repo <owner/repo>]... [--agent <agentId|name>]
-aircom machine request --workstream <code> --agent <id> --profile <name> [--agents N | --agent-name <name>]... [--model <model>] --repo <owner/repo> [--repo <owner/repo>]... [--runtime-min N]
+aircom machine start --workstream <code> --profile <name> [--team <name> | --agents N] [--hours H] --repo <owner/repo> [--repo <owner/repo>]... [--agent <agentId|name>]
+aircom machine request --workstream <code> --agent <id> --profile <name> [--team <name> | --agents N | --agent-name <name>...] [--model <model>] --repo <owner/repo> [--repo <owner/repo>]... [--runtime-min N]
 aircom machine done|cancel --workstream <code> --agent <id> --run <runId>
 aircom machine list --workstream <code> [--agent <id>] [--state all|active|ended] [--limit N] [--cursor <cursor>]
 aircom machine status --workstream <code> [--agent <id>] --run <runId>
