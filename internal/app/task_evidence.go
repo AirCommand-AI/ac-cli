@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -51,6 +52,38 @@ func gitRepoName(repo string) (string, error) {
 		return "", &publicError{message: "Local origin must point at a GitHub owner/repo."}
 	}
 	return remote, nil
+}
+
+var ownerRepo = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// resolveRepoDir turns --repo into a local checkout. A path is used as is; a
+// GitHub owner/repo is matched against the origin of the current directory,
+// then ./<repo>, then ../<repo>.
+func resolveRepoDir(repo string) (string, error) {
+	if repo == "" {
+		repo = "."
+	}
+	if info, err := os.Stat(repo); err == nil && info.IsDir() {
+		abs, err := filepath.Abs(repo)
+		if err != nil {
+			return "", &publicError{message: "Invalid repository path."}
+		}
+		return abs, nil
+	}
+	if !ownerRepo.MatchString(repo) {
+		return "", &publicError{message: "--repo must be a local checkout or a GitHub owner/repo."}
+	}
+	short := repo[strings.Index(repo, "/")+1:]
+	for _, dir := range []string{".", short, filepath.Join("..", short)} {
+		top, err := gitOutput(dir, "rev-parse", "--show-toplevel")
+		if err != nil {
+			continue
+		}
+		if name, err := gitRepoName(top); err == nil && strings.EqualFold(name, repo) {
+			return top, nil
+		}
+	}
+	return "", &publicError{message: "No local checkout of " + repo + " here, in ./" + short + " or ../" + short + "; pass its path with --repo."}
 }
 
 var shaReference = regexp.MustCompile(`^[a-fA-F0-9]{7,40}$`)
@@ -112,12 +145,9 @@ func (a *App) addTaskCommits(code, id string, refs []string, commitRange, repo s
 	if len(refs) == 0 && commitRange == "" {
 		return &publicError{message: "Provide --commit <sha> or --commits <a>..<b>."}
 	}
-	if repo == "" {
-		repo = "."
-	}
-	repo, err := filepath.Abs(repo)
+	repo, err := resolveRepoDir(repo)
 	if err != nil {
-		return &publicError{message: "Invalid repository path."}
+		return err
 	}
 	name, err := gitRepoName(repo)
 	if err != nil {

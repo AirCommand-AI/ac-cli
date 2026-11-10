@@ -126,3 +126,25 @@ func TestMachineStartTeamSelection(t *testing.T) {
 		})
 	}
 }
+
+// Git also calls a credential helper with store (after a login worked) and
+// erase (after it failed). The daemon issues the token, so both are accepted
+// and ignored; only get needs a run machine.
+func TestGitCredentialAcceptsStoreAndErase(t *testing.T) {
+	for _, op := range []string{"store", "erase"} {
+		t.Run(op, func(t *testing.T) {
+			a, out, errOut := testApp(t, "http://127.0.0.1:1", "", nil)
+			a.Stdin = strings.NewReader("protocol=https\nhost=github.com\nusername=x-access-token\npassword=secret\n\n")
+			if code := a.Run([]string{"git-credential", op}); code != 0 {
+				t.Fatalf("exit %d: %s", code, errOut.String())
+			}
+			if out.Len() != 0 || errOut.Len() != 0 {
+				t.Fatalf("output %q %q", out.String(), errOut.String())
+			}
+		})
+	}
+	a, _, errOut := testApp(t, "http://127.0.0.1:1", "", nil)
+	if code := a.Run([]string{"git-credential", "fetch"}); code == 0 || !strings.Contains(errOut.String(), "git-credential get") {
+		t.Fatalf("unknown operation: exit %d %q", code, errOut.String())
+	}
+}

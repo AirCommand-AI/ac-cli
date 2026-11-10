@@ -71,3 +71,45 @@ func TestTaskCommitComputesGitNumstatAndTestsAreReported(t *testing.T) {
 		t.Fatalf("tests = %+v", tests)
 	}
 }
+
+func TestTaskCommitRepoAcceptsOwnerRepo(t *testing.T) {
+	work := t.TempDir()
+	repo := filepath.Join(work, "widget")
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, repo, "init")
+	gitTest(t, repo, "remote", "add", "origin", "https://github.com/Acme/widget.git")
+	other := filepath.Join(work, "other")
+	if err := os.Mkdir(other, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, cwd, arg, want string
+		ok                   bool
+	}{
+		{"inside the checkout", repo, "Acme/widget", repo, true},
+		{"next to the checkout", work, "Acme/widget", repo, true},
+		{"sibling directory", other, "Acme/widget", repo, true},
+		{"case of owner differs", repo, "acme/Widget", repo, true},
+		{"a path still works", work, "widget", repo, true},
+		{"no matching checkout", other, "Acme/missing", "", false},
+		{"origin is another repo", repo, "Acme/gadget", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(tc.cwd)
+			got, err := resolveRepoDir(tc.arg)
+			if (err == nil) != tc.ok {
+				t.Fatalf("err %v", err)
+			}
+			if tc.ok {
+				want, _ := filepath.EvalSymlinks(tc.want)
+				have, _ := filepath.EvalSymlinks(got)
+				if have != want {
+					t.Fatalf("got %s want %s", got, tc.want)
+				}
+			}
+		})
+	}
+}

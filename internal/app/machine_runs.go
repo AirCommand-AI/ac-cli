@@ -189,6 +189,12 @@ func (a *App) commandContext() context.Context { return context.Background() }
 
 // The daemon owns the hourly installation token and responds to this helper.
 func (a *App) gitCredential(args []string) error {
+	if len(args) == 1 && (args[0] == "store" || args[0] == "erase") {
+		// Git reports the outcome of a login with these. The daemon issues a
+		// fresh token on every get, so there is nothing to save or forget.
+		_, _ = io.Copy(io.Discard, a.inputReader())
+		return nil
+	}
 	if len(args) != 1 || args[0] != "get" {
 		return &publicError{message: "Usage: aircom git-credential get"}
 	}

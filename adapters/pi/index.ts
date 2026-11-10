@@ -30,7 +30,7 @@ Use the selected CLI path and enrolled workstream and agent values. Post durable
     aircom task <task> --workstream <code> --agent <agentId> --assignee <agentId|name>
     aircom task <task> --workstream <code> --agent <agentId> [--milestone <text>] [--type <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <task>]... [--link <url>]...
     aircom task create --workstream <code> --agent <agentId> --title <text> --type <code|review|test|design|docs|investigation|infra|release|deploy|ops|other> [--description <text>] [--assignee <agentId|name>] [--status <status>] [--number <n>] [--milestone <text>] [--acceptance <text>]... [--validation <text>] [--depends-on <task>]... [--link <url>]...
-    aircom task <task> --workstream <code> --agent <agentId> --commit <sha> [--repo <path>] | --commits <a>..<b>
+    aircom task <task> --workstream <code> --agent <agentId> --commit <sha> [--repo <path|owner/repo>] | --commits <a>..<b>
     aircom task <task> --workstream <code> --agent <agentId> --tests <passed>/<failed>[/<skipped>] [--suite <name>]
     aircom review start <task> --workstream <code> --agent <agentId> --of <task> [--commits <a>..<b>]
     aircom review finding <task> --workstream <code> --agent <agentId> --severity <critical|major|minor|nit> --category <correctness|security|performance|tests|style|docs|design|other> --summary <text>

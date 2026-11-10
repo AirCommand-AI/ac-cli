@@ -13,7 +13,7 @@ import (
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
 )
 
-const reviewUsage = "Usage: aircom review start <task> --of <task> [--commits <a>..<b>] [--repo <path>] | review finding <task> --severity <critical|major|minor|nit> --category <correctness|security|performance|tests|style|docs|design|other> --summary <text> [--file <path>] [--line <n>] | review finish <task> --outcome <approved|sent_back> [--no-findings] | review finding-status <findingId> --status <fixed|wontfix|invalid>; all forms require --workstream <code> [--agent <agentId|name>]"
+const reviewUsage = "Usage: aircom review start <task> --of <task> [--commits <a>..<b>] [--repo <path|owner/repo>] | review finding <task> --severity <critical|major|minor|nit> --category <correctness|security|performance|tests|style|docs|design|other> --summary <text> [--file <path>] [--line <n>] | review finish <task> --outcome <approved|sent_back> [--no-findings] | review finding-status <findingId> --status <fixed|wontfix|invalid>; all forms require --workstream <code> [--agent <agentId|name>]"
 
 func (a *App) review(args []string) error {
 	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
@@ -85,7 +85,11 @@ func (a *App) review(args []string) error {
 			if strings.Count(commits, "..") != 1 || strings.Contains(commits, "...") {
 				return &publicError{message: "--commits must be a range a..b."}
 			}
-			output, e := gitOutput(repo, "diff", "--numstat", "--no-renames", commits)
+			dir, e := resolveRepoDir(repo)
+			if e != nil {
+				return e
+			}
+			output, e := gitOutput(dir, "diff", "--numstat", "--no-renames", commits)
 			if e != nil {
 				return e
 			}

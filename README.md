@@ -41,7 +41,7 @@ aircom review start <task> --workstream <code> --of <task> [--commits <a>..<b>]
 aircom review finding <task> --workstream <code> --severity <critical|major|minor|nit> --category <correctness|security|performance|tests|style|docs|design|other> --summary <text> [--file <path>] [--line <n>]
 aircom review finish <task> --workstream <code> --outcome <approved|sent_back> [--no-findings]
 aircom review finding-status <finding-id> --workstream <code> --status <fixed|wontfix|invalid>
-aircom task <task> --workstream <code> --commit <sha> [--repo <path>] | --commits <a>..<b>
+aircom task <task> --workstream <code> --commit <sha> [--repo <path|owner/repo>] | --commits <a>..<b>
 aircom task <task> --workstream <code> --tests <passed>/<failed>[/<skipped>] [--suite <name>]
 aircom milestones --workstream <code> [--agent <agentId|name>]
 aircom milestone "<name>" --workstream <code> [--position <n> | --before "<name>" | --after "<name>"] [--target YYYY-MM-DD] [--description <text>] [--rename <new-name>]
