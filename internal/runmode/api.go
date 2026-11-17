@@ -124,13 +124,23 @@ func (a API) Finished(ctx context.Context, rescue []RescueResult, uploaded bool)
 	return a.call(ctx, http.MethodPost, "/finished", map[string]any{"rescue": rescue, "loginUploaded": uploaded}, nil)
 }
 
+// TokenSource holds the run's GitHub installation tokens. GitHub issues one
+// token per installation, so a run with repositories from several accounts
+// gets one token per repository owner; the first is the default.
 type TokenSource struct {
 	API      API
 	Now      func() time.Time
 	mu       sync.Mutex
 	token    string
+	owners   map[string]string
 	obtained time.Time
 	expires  time.Time
+}
+
+type ownerToken struct {
+	Owner     string    `json:"owner"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 func (s *TokenSource) now() time.Time {
@@ -157,32 +167,65 @@ func (s *TokenSource) Maintain(ctx context.Context, onError func(error)) {
 	}
 }
 
+// Get returns the default token, renewing every token when due.
 func (s *TokenSource) Get(ctx context.Context, force bool) (string, error) {
+	return s.For(ctx, "", force)
+}
+
+// For returns the token for a repository owner, or the default token when
+// the owner is empty or has no token of its own.
+func (s *TokenSource) For(ctx context.Context, owner string, force bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	if !force && s.token != "" && now.Sub(s.obtained) < 50*time.Minute && now.Before(s.expires.Add(-5*time.Minute)) {
-		return s.token, nil
-	}
-	var result struct {
-		Token     string    `json:"token"`
-		ExpiresAt time.Time `json:"expiresAt"`
-	}
-	if err := s.API.call(ctx, http.MethodPost, "/github-token", map[string]any{}, &result); err != nil {
-		return "", err
-	}
-	if result.Token == "" || strings.ContainsAny(result.Token, "\r\n \t") || !result.ExpiresAt.After(now.Add(time.Minute)) {
-		return "", fmt.Errorf("run API returned invalid GitHub token")
-	}
-	if s.API.Store != nil {
-		if err := writeGHHosts(s.API.Store.Home(), result.Token); err != nil {
+	if force || s.token == "" || now.Sub(s.obtained) >= 50*time.Minute || !now.Before(s.expires.Add(-5*time.Minute)) {
+		if err := s.renew(ctx, now); err != nil {
 			return "", err
 		}
 	}
+	if token, ok := s.owners[strings.ToLower(owner)]; ok && owner != "" {
+		return token, nil
+	}
+	return s.token, nil
+}
+
+func (s *TokenSource) renew(ctx context.Context, now time.Time) error {
+	var result struct {
+		Token     string       `json:"token"`
+		ExpiresAt time.Time    `json:"expiresAt"`
+		Tokens    []ownerToken `json:"tokens"`
+	}
+	if err := s.API.call(ctx, http.MethodPost, "/github-token", map[string]any{}, &result); err != nil {
+		return err
+	}
+	if !validToken(result.Token, result.ExpiresAt, now) {
+		return fmt.Errorf("run API returned invalid GitHub token")
+	}
+	owners := make(map[string]string, len(result.Tokens))
+	expires := result.ExpiresAt
+	for _, item := range result.Tokens {
+		if item.Owner == "" || !validToken(item.Token, item.ExpiresAt, now) {
+			return fmt.Errorf("run API returned invalid GitHub token")
+		}
+		owners[strings.ToLower(item.Owner)] = item.Token
+		if item.ExpiresAt.Before(expires) {
+			expires = item.ExpiresAt
+		}
+	}
+	if s.API.Store != nil {
+		if err := writeGHHosts(s.API.Store.Home(), result.Token); err != nil {
+			return err
+		}
+	}
 	s.token = result.Token
+	s.owners = owners
 	s.obtained = now
-	s.expires = result.ExpiresAt
-	return result.Token, nil
+	s.expires = expires
+	return nil
+}
+
+func validToken(token string, expires, now time.Time) bool {
+	return token != "" && !strings.ContainsAny(token, "\r\n \t") && expires.After(now.Add(time.Minute))
 }
 
 // ErrClaudeUnavailable means the account's Claude token is missing or expired;

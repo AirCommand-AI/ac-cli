@@ -92,12 +92,13 @@ func serveTokenListener(ctx context.Context, home string, listener net.Listener,
 			defer conn.Close()
 			_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
 			var request struct {
-				Op string `json:"op"`
+				Op    string `json:"op"`
+				Owner string `json:"owner"`
 			}
 			if json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&request) != nil || request.Op != "github-token" {
 				return
 			}
-			token, e := source.Get(ctx, false)
+			token, e := source.For(ctx, request.Owner, false)
 			if e != nil {
 				_ = json.NewEncoder(conn).Encode(map[string]any{"ok": false})
 				return
@@ -128,26 +129,39 @@ func GitCredential(ctx context.Context, home string, in io.Reader, out io.Writer
 	if values["protocol"] != "https" || values["host"] != "github.com" {
 		return nil
 	}
+	// With credential.useHttpPath git sends path=owner/repo.git; the owner
+	// picks that account's token.
+	owner, _, _ := strings.Cut(strings.TrimPrefix(values["path"], "/"), "/")
+	token, err := RequestToken(ctx, home, owner)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "protocol=https\nhost=github.com\nusername=x-access-token\npassword=%s\n\n", token)
+	return err
+}
+
+// RequestToken asks the run daemon for the token of a repository owner; an
+// empty owner returns the default token.
+func RequestToken(ctx context.Context, home, owner string) (string, error) {
 	dial := net.Dialer{}
 	conn, err := dial.DialContext(ctx, "unix", TokenSocket(home))
 	if err != nil {
-		return fmt.Errorf("run token daemon unavailable: %w", err)
+		return "", fmt.Errorf("run token daemon unavailable: %w", err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
-	if err = json.NewEncoder(conn).Encode(map[string]string{"op": "github-token"}); err != nil {
-		return err
+	if err = json.NewEncoder(conn).Encode(map[string]string{"op": "github-token", "owner": owner}); err != nil {
+		return "", err
 	}
 	var reply struct {
 		OK    bool   `json:"ok"`
 		Token string `json:"token"`
 	}
 	if err = json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&reply); err != nil {
-		return err
+		return "", err
 	}
 	if !reply.OK || reply.Token == "" {
-		return fmt.Errorf("run token unavailable")
+		return "", fmt.Errorf("run token unavailable")
 	}
-	_, err = fmt.Fprintf(out, "protocol=https\nhost=github.com\nusername=x-access-token\npassword=%s\n\n", reply.Token)
-	return err
+	return reply.Token, nil
 }

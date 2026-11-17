@@ -276,7 +276,7 @@ func (b Bootstrap) install(run Run, r bootstrapReply, token string) error {
 		if !filepath.IsAbs(b.GitHelperPath) {
 			return errors.New("git helper must be absolute")
 		}
-		config := fmt.Sprintf("[credential \"https://github.com\"]\n\thelper = !%q git-credential\n", b.GitHelperPath)
+		config := fmt.Sprintf("[credential \"https://github.com\"]\n\thelper = !%q git-credential\n\tuseHttpPath = true\n", b.GitHelperPath)
 		if err := writePrivate(filepath.Join(b.Home, ".gitconfig"), []byte(config)); err != nil {
 			return err
 		}

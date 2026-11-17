@@ -58,6 +58,20 @@ func main() {
 		_, _ = os.Stderr.WriteString("Unable to locate the aircom executable.\n")
 		os.Exit(1)
 	}
+	if _, err := runmode.Load(home); err == nil {
+		// gh on a run machine: pick the token of the repository's owner.
+		if len(os.Args) >= 2 && os.Args[1] == "gh" {
+			err = runmode.RunGH(context.Background(), home, os.Args[2:])
+			_, _ = os.Stderr.WriteString("aircom gh: " + err.Error() + "\n")
+			os.Exit(1)
+		}
+		// Only the commands that start the daemon, which launches the agents.
+		if len(os.Args) >= 2 && (os.Args[1] == "daemon" || os.Args[1] == "machine") {
+			if err := runmode.InstallGHShim(home, cliPath); err != nil {
+				_, _ = os.Stderr.WriteString("Unable to install the run gh wrapper.\n")
+			}
+		}
+	}
 	store := credentials.NewStore(home)
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	daemon.AircomVersion = version
