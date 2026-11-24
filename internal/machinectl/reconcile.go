@@ -397,15 +397,25 @@ func cloneRepo(ctx context.Context, home, folder, agentName, repo string) error 
 		_ = os.RemoveAll(tmp)
 		return err
 	}
+	// The author is set before the rename, so an existing folder is always a
+	// finished checkout with its author configured.
+	if err := configureAuthor(ctx, home, tmp, agentName); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
 	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.RemoveAll(tmp)
 		return fmt.Errorf("clone %s: %w", repo, err)
 	}
+	return nil
+}
+
+func configureAuthor(ctx context.Context, home, checkout, agentName string) error {
 	if !isRunMachine(home) {
 		return nil
 	}
 	for _, pair := range [][2]string{{"user.name", agentName + " (AirCommand)"}, {"user.email", "run-agents@users.noreply.aircommand.ai"}} {
-		if out, e := exec.CommandContext(ctx, "git", "-C", dest, "config", "--local", pair[0], pair[1]).CombinedOutput(); e != nil {
+		if out, e := exec.CommandContext(ctx, "git", "-C", checkout, "config", "--local", pair[0], pair[1]).CombinedOutput(); e != nil {
 			return fmt.Errorf("configure git author: %w: %s", e, strings.TrimSpace(string(out)))
 		}
 	}

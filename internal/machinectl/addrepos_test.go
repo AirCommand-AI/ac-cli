@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AirCommand-AI/ac-cli/internal/credentials"
+	"github.com/AirCommand-AI/ac-cli/internal/storagepath"
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
 )
 
@@ -387,6 +388,51 @@ func TestIsNotFound(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isNotFound(tc.err); got != tc.want {
 				t.Fatalf("isNotFound=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCloneRepoSetsAuthorBeforeFolderAppears(t *testing.T) {
+	tests := []struct {
+		name       string
+		runMachine bool
+		wantAuthor string
+	}{
+		{"run machine sets the agent author", true, "eng-1 (AirCommand)"},
+		{"own machine keeps the person's author", false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home, origin := t.TempDir(), t.TempDir()
+			if tt.runMachine {
+				if err := os.MkdirAll(storagepath.Root(home), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(storagepath.Root(home), "run.json"), []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if out, err := exec.Command("git", "init", "--bare", "-q", filepath.Join(origin, "owner", "repo.git")).CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v: %s", err, out)
+			}
+			previous := githubCloneBase
+			githubCloneBase = "file://" + origin + "/"
+			t.Cleanup(func() { githubCloneBase = previous })
+			folder := filepath.Join(home, "work")
+			if err := os.MkdirAll(folder, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := cloneRepo(context.Background(), home, folder, "eng-1", "owner/repo"); err != nil {
+				t.Fatal(err)
+			}
+			out, _ := exec.Command("git", "-C", filepath.Join(folder, "repo"), "config", "--local", "--get", "user.name").Output()
+			if got := strings.TrimSpace(string(out)); got != tt.wantAuthor {
+				t.Fatalf("author = %q, want %q", got, tt.wantAuthor)
+			}
+			entries, _ := os.ReadDir(folder)
+			if len(entries) != 1 {
+				t.Fatalf("leftover temp folders: %v", entries)
 			}
 		})
 	}
