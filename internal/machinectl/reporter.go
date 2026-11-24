@@ -35,6 +35,13 @@ type HTTPReporter struct {
 
 // SetCheckFailure stores a bounded, sanitized diagnostic for the next status.
 // An empty value explicitly clears the run device's previous error.
+// Capabilities reported in the machine status.
+const (
+	CapabilityCheckIn       = "check-in"
+	CapabilityAgentStatusV2 = "agent-status-v2"
+	CapabilityRunV1         = "run.v1"
+)
+
 func (r *HTTPReporter) SetCheckFailure(err error, at time.Time) {
 	r.failureMu.Lock()
 	defer r.failureMu.Unlock()
@@ -88,9 +95,9 @@ func (r *HTTPReporter) report(ctx context.Context) error {
 	}
 	// agent-status-v2: stuck states and the running tool are reported, and the
 	// daemon no longer nudges agents (the dashboard's team watch does).
-	capabilities := []string{"check-in", "agent-status-v2"}
+	capabilities := []string{CapabilityCheckIn, CapabilityAgentStatusV2, CapabilityAddRepos}
 	if r.RunMode {
-		capabilities = append(capabilities, "run.v1")
+		capabilities = append(capabilities, CapabilityRunV1)
 	}
 	r.failureMu.RLock()
 	lastError, lastErrorAt := r.lastError, r.lastErrorAt

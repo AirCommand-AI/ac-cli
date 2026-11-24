@@ -37,6 +37,9 @@ type Manager interface {
 	FlushDesired(context.Context) map[string]bool
 	// UpdateProfile saves role and model settings without a restart.
 	UpdateProfile(string, *supervisor.AgentProfile) (bool, error)
+	// AddRepo saves a repository cloned after the agent was created,
+	// without a restart.
+	AddRepo(string, string) (bool, error)
 }
 
 type AgentReconciler struct {
@@ -45,11 +48,18 @@ type AgentReconciler struct {
 	Store   *credentials.Store
 	Home    string
 	// Join verifies/resumes a bearer. Tests replace it with a fake.
-	Join         func(context.Context, Agent) error
-	Gate         *sync.Mutex
-	Now          func() time.Time
+	Join func(context.Context, Agent) error
+	Gate *sync.Mutex
+	Now  func() time.Time
+	// Tokens renews the run's GitHub tokens before cloning an added
+	// repository; nil off run machines.
+	Tokens RepoTokens
+	// RepoReports receives each added repository's clone result; nil off run
+	// machines.
+	RepoReports  RepoReporter
 	failed       map[string]retryFailure
 	seedRejected map[string]bool
+	repoReported map[string]string
 }
 
 type retryFailure struct {
@@ -130,6 +140,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 			return err
 		}
 	}
+	renewed := make(map[string]bool)
 	current := make(map[string]supervisor.AgentDefinition, len(local))
 	for _, d := range local {
 		current[d.AgentID] = d
@@ -157,6 +168,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 				if _, err := r.Manager.UpdateProfile(previous.Name, profileOf(target)); err != nil {
 					failures = append(failures, fmt.Sprintf("%s: profile: %v", target.AgentID, err))
 				}
+				// A restart by a newer revision saves only cloned
+				// repositories, so a failed one is still retried.
+				repos, repoFailures := r.addRepos(ctx, target, previous, renewed)
+				target.Repos = repos
+				failures = append(failures, repoFailures...)
 			}
 		}
 		if target.Revision <= previous.Revision || target.Revision < 1 {
@@ -311,56 +327,98 @@ func (r *AgentReconciler) join(ctx context.Context, agent Agent) error {
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 func prepareFolder(ctx context.Context, home string, agent Agent) error {
-	root := filepath.Join(home, "work")
-	path := filepath.Clean(agent.WorkFolder)
-	if !filepath.IsAbs(path) || !strings.HasPrefix(path, root+string(os.PathSeparator)) {
-		return fmt.Errorf("work folder must be below %s", root)
-	}
-	if err := os.MkdirAll(path, 0700); err != nil {
+	path, err := workFolder(home, agent.WorkFolder)
+	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return fmt.Errorf("create work folder: %w", err)
+	}
 	for _, repo := range agent.Repos {
-		if !repoPattern.MatchString(repo) || strings.Contains(repo, "..") {
-			return fmt.Errorf("invalid repository %q", repo)
-		}
-		dest := filepath.Join(path, strings.Split(repo, "/")[1])
-		if _, err := os.Lstat(dest); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
+		if err := cloneRepo(ctx, home, path, agent.Name, repo); err != nil {
 			return err
-		}
-		// A failed clone never leaves a partial repository that a later check
-		// might mistake for a completed checkout.
-		tmp, err := os.MkdirTemp(path, ".aircom-clone-*")
-		if err != nil {
-			return err
-		}
-		timeout := 2 * time.Minute
-		if _, runErr := os.Stat(filepath.Join(storagepath.Root(home), "run.json")); runErr == nil {
-			timeout = 10 * time.Minute
-		}
-		cloneCtx, cancel := context.WithTimeout(ctx, timeout)
-		cmd := exec.CommandContext(cloneCtx, "git", "clone", "--", "https://github.com/"+repo+".git", tmp)
-		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-		output, cloneErr := cmd.CombinedOutput()
-		cancel()
-		if cloneErr != nil {
-			_ = os.RemoveAll(tmp)
-			return fmt.Errorf("clone %s: %w: %s", repo, cloneErr, strings.TrimSpace(string(output)))
-		}
-		if err := os.Rename(tmp, dest); err != nil {
-			_ = os.RemoveAll(tmp)
-			return err
-		}
-		if _, runErr := os.Stat(filepath.Join(storagepath.Root(home), "run.json")); runErr == nil {
-			for _, pair := range [][2]string{{"user.name", agent.Name + " (AirCommand)"}, {"user.email", "run-agents@users.noreply.aircommand.ai"}} {
-				if out, e := exec.CommandContext(ctx, "git", "-C", dest, "config", "--local", pair[0], pair[1]).CombinedOutput(); e != nil {
-					return fmt.Errorf("configure git author: %w: %s", e, strings.TrimSpace(string(out)))
-				}
-			}
 		}
 	}
 	return nil
+}
+
+// workFolder is the cleaned agent folder; it must be below <home>/work.
+func workFolder(home, folder string) (string, error) {
+	root := filepath.Join(home, "work")
+	path := filepath.Clean(folder)
+	if !filepath.IsAbs(path) || !strings.HasPrefix(path, root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("work folder must be below %s", root)
+	}
+	return path, nil
+}
+
+func validRepo(repo string) error {
+	if !repoPattern.MatchString(repo) || strings.Contains(repo, "..") {
+		return fmt.Errorf("invalid repository %q", repo)
+	}
+	return nil
+}
+
+func isRunMachine(home string) bool {
+	_, err := os.Stat(filepath.Join(storagepath.Root(home), "run.json"))
+	return err == nil
+}
+
+// githubCloneBase is replaced in tests with a local folder of bare repos.
+var githubCloneBase = "https://github.com/"
+
+// cloneRepo clones repo into <folder>/<name>. An existing path counts as
+// done. A failed clone never leaves a partial repository that a later check
+// might mistake for a completed checkout.
+func cloneRepo(ctx context.Context, home, folder, agentName, repo string) error {
+	if err := validRepo(repo); err != nil {
+		return err
+	}
+	dest := filepath.Join(folder, strings.Split(repo, "/")[1])
+	if _, err := os.Lstat(dest); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("check %s: %w", dest, err)
+	}
+	tmp, err := os.MkdirTemp(folder, ".aircom-clone-*")
+	if err != nil {
+		return fmt.Errorf("clone %s: %w", repo, err)
+	}
+	if err := runClone(ctx, home, repo, tmp, dest); err != nil {
+		_ = os.RemoveAll(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("clone %s: %w", repo, err)
+	}
+	if !isRunMachine(home) {
+		return nil
+	}
+	for _, pair := range [][2]string{{"user.name", agentName + " (AirCommand)"}, {"user.email", "run-agents@users.noreply.aircommand.ai"}} {
+		if out, e := exec.CommandContext(ctx, "git", "-C", dest, "config", "--local", pair[0], pair[1]).CombinedOutput(); e != nil {
+			return fmt.Errorf("configure git author: %w: %s", e, strings.TrimSpace(string(out)))
+		}
+	}
+	return nil
+}
+
+func runClone(ctx context.Context, home, repo, tmp, dest string) error {
+	timeout := 2 * time.Minute
+	if isRunMachine(home) {
+		timeout = 10 * time.Minute
+	}
+	cloneCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(cloneCtx, "git", "clone", "--", githubCloneBase+repo+".git", tmp)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	// The temp name differs per attempt; keep the message stable.
+	text := strings.ReplaceAll(strings.TrimSpace(string(output)), tmp, dest)
+	return fmt.Errorf("clone %s: %w: %s", repo, err, text)
 }
 
 // JoinAssignment connects a locally attached, unplaced agent once a person

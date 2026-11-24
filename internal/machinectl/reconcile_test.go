@@ -76,6 +76,17 @@ func (m *fakeManager) UpdateProfile(name string, p *supervisor.AgentProfile) (bo
 	}
 	return false, nil
 }
+func (m *fakeManager) AddRepo(name, repo string) (bool, error) {
+	for id, d := range m.defs {
+		if d.Name == name {
+			m.calls = append(m.calls, "add-repo:"+repo)
+			d.Repos = append(append([]string(nil), d.Repos...), repo)
+			m.defs[id] = d
+			return true, nil
+		}
+	}
+	return false, nil
+}
 func (m *fakeManager) MarkRevision(name string, revision int64) error {
 	for id, d := range m.defs {
 		if d.Name == name {

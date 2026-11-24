@@ -124,6 +124,21 @@ func (a API) Finished(ctx context.Context, rescue []RescueResult, uploaded bool)
 	return a.call(ctx, http.MethodPost, "/finished", map[string]any{"rescue": rescue, "loginUploaded": uploaded}, nil)
 }
 
+// ReportRepo reports the result of cloning a repository added to an agent
+// while the run was running.
+func (a API) ReportRepo(ctx context.Context, agentID, repo string, ok bool, reason string) error {
+	body := struct {
+		AgentID string `json:"agentId"`
+		Repo    string `json:"repo"`
+		OK      bool   `json:"ok"`
+		Error   string `json:"error,omitempty"`
+	}{agentID, repo, ok, reason}
+	if err := a.call(ctx, http.MethodPost, "/repos", body, nil); err != nil {
+		return fmt.Errorf("report repository %s: %w", repo, err)
+	}
+	return nil
+}
+
 // TokenSource holds the run's GitHub installation tokens. GitHub issues one
 // token per installation, so a run with repositories from several accounts
 // gets one token per repository owner; the first is the default.

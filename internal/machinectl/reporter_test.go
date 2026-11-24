@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/AirCommand-AI/ac-cli/internal/supervisor"
@@ -16,23 +17,39 @@ func (s *fakeStatusSource) List(context.Context) ([]supervisor.AgentStatus, erro
 	return []supervisor.AgentStatus{{AgentID: "agm_1", Mode: "headless", State: "running"}}, nil
 }
 
-func TestHTTPReporterRunModeAddsCapability(t *testing.T) {
-	source := &fakeStatusSource{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Capabilities []string `json:"capabilities"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		if len(body.Capabilities) != 3 || body.Capabilities[1] != "agent-status-v2" || body.Capabilities[2] != "run.v1" {
-			t.Errorf("capabilities=%v", body.Capabilities)
-		}
-		_, _ = w.Write([]byte(`{"machine":{"state":"online"},"run":{"state":"finishing"}}`))
-	}))
-	defer server.Close()
-	if err := (&HTTPReporter{URL: server.URL, Token: "machine", Source: source, RunMode: true}).Report(context.Background()); err != nil {
-		t.Fatal(err)
+func TestHTTPReporterCapabilities(t *testing.T) {
+	cases := []struct {
+		name    string
+		runMode bool
+		want    []string
+	}{
+		{"laptop", false, []string{"check-in", "agent-status-v2", "add-repos"}},
+		{"run machine", true, []string{"check-in", "agent-status-v2", "add-repos", "run.v1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Capabilities []string `json:"capabilities"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				got = body.Capabilities
+				_, _ = w.Write([]byte(`{"machine":{"state":"online"}}`))
+			}))
+			defer server.Close()
+			if err := (&HTTPReporter{URL: server.URL, Token: "machine", Source: &fakeStatusSource{}, RunMode: tc.runMode}).Report(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("capabilities=%v want %v", got, tc.want)
+			}
+			if !slices.Contains(got, CapabilityAddRepos) || CapabilityAddRepos != "add-repos" {
+				t.Fatalf("add-repos capability missing: %v", got)
+			}
+		})
 	}
 }
 
@@ -57,7 +74,7 @@ func TestHTTPReporterSendsContractAndIgnoresMachineState(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body.Version != "v0.19.0" || len(body.Capabilities) != 2 || body.Capabilities[0] != "check-in" || body.Capabilities[1] != "agent-status-v2" || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" || body.Agents[0].Kind != "started" {
+		if body.Version != "v0.19.0" || len(body.Capabilities) != 3 || body.Capabilities[0] != "check-in" || body.Capabilities[1] != "agent-status-v2" || body.Capabilities[2] != "add-repos" || len(body.Agents) != 1 || body.Agents[0].AgentID != "agm_1" || body.Agents[0].Mode != "headless" || body.Agents[0].Kind != "started" {
 			t.Errorf("body %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"machine":{"state":"stopping","stateAt":"2026-10-02T00:00:00Z"}}`))

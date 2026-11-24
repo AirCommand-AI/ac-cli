@@ -77,6 +77,12 @@ func main() {
 	daemon.AircomVersion = version
 	commands := daemon.Commands{Home: home, Output: os.Stdout}
 	operationGate := &sync.Mutex{}
+	// One GitHub token source per run daemon: the reconciler force-renews it
+	// before cloning an added repository and the git helper reads from it.
+	var runTokens *runmode.TokenSource
+	if _, err := runmode.Load(home); err == nil {
+		runTokens = &runmode.TokenSource{API: runmode.API{BaseURL: dashboardURL, Client: httpClient, Store: store}}
+	}
 	commands.NewSupervisor = func(tmux, pi string) (daemon.Supervisor, error) {
 		if tmux == "" {
 			tmux = "tmux"
@@ -124,10 +130,15 @@ func main() {
 		return manager, nil
 	}
 	commands.NewControl = func(manager daemon.Supervisor) *machinectl.Control {
-		control := machinectl.New(&machinectl.AgentReconciler{
+		reconciler := &machinectl.AgentReconciler{
 			API:     machinectl.HTTPAPI{BaseURL: dashboardURL, Client: httpClient, Store: store},
 			Manager: manager.(machinectl.Manager), Store: store, Home: home, Gate: operationGate,
-		}, nil)
+		}
+		if runTokens != nil {
+			reconciler.Tokens = runTokens
+			reconciler.RepoReports = runmode.API{BaseURL: dashboardURL, Client: httpClient, Store: store}
+		}
+		control := machinectl.New(reconciler, nil)
 		if _, err := runmode.Load(home); err == nil {
 			control.ReportFirst = true
 			control.Reconciler = runningOnlyReconciler{Reconciler: control.Reconciler, API: runmode.API{BaseURL: dashboardURL, Client: httpClient, Store: store}}
@@ -144,7 +155,10 @@ func main() {
 		runEnabled := runErr == nil
 		if runEnabled {
 			api := runmode.API{BaseURL: dashboardURL, Client: httpClient, Store: store}
-			tokens := &runmode.TokenSource{API: api}
+			tokens := runTokens
+			if tokens == nil {
+				tokens = &runmode.TokenSource{API: api}
+			}
 			svc := &runmode.Service{Home: home, API: api, Tokens: tokens, Stop: manager.(runmode.Stopper), Clones: func() []runmode.Clone {
 				defs := manager.(*supervisor.Manager).Definitions()
 				var clones []runmode.Clone
