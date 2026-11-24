@@ -59,7 +59,7 @@ type AgentReconciler struct {
 	RepoReports  RepoReporter
 	failed       map[string]retryFailure
 	seedRejected map[string]bool
-	repoReported map[string]string
+	repos        repoState
 }
 
 type retryFailure struct {
@@ -79,10 +79,20 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 	if r.API == nil || r.Manager == nil || r.Store == nil {
 		return fmt.Errorf("reconciler is not configured")
 	}
+	err := r.reconcileLocked(ctx)
+	// Repository results are sent without the operation lock held.
+	r.flushRepoReports(ctx)
+	return err
+}
+
+func (r *AgentReconciler) reconcileLocked(ctx context.Context) error {
 	if r.Gate != nil {
 		r.Gate.Lock()
 		defer r.Gate.Unlock()
 	}
+	// Clones planned in this pass start in the background on return; they
+	// never hold the operation lock while git runs.
+	defer r.startRepoJobs(ctx)
 	// A failed local desired post must be retried before fetching an older
 	// server revision that could undo the local operator's successful action.
 	skip := r.Manager.FlushDesired(ctx)
@@ -140,7 +150,6 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 			return err
 		}
 	}
-	renewed := make(map[string]bool)
 	current := make(map[string]supervisor.AgentDefinition, len(local))
 	for _, d := range local {
 		current[d.AgentID] = d
@@ -168,11 +177,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context) error {
 				if _, err := r.Manager.UpdateProfile(previous.Name, profileOf(target)); err != nil {
 					failures = append(failures, fmt.Sprintf("%s: profile: %v", target.AgentID, err))
 				}
+				failures = append(failures, r.planRepos(target, previous)...)
 				// A restart by a newer revision saves only cloned
-				// repositories, so a failed one is still retried.
-				repos, repoFailures := r.addRepos(ctx, target, previous, renewed)
-				target.Repos = repos
-				failures = append(failures, repoFailures...)
+				// repositories; added ones are saved once cloned.
+				target.Repos = previous.Repos
 			}
 		}
 		if target.Revision <= previous.Revision || target.Revision < 1 {
@@ -265,6 +273,7 @@ func (r *AgentReconciler) apply(ctx context.Context, target Agent, old superviso
 		if err := prepareFolder(ctx, r.Home, target); err != nil {
 			return err
 		}
+		r.queueInitialRepos(target)
 		if target.Desired == "stopped" {
 			return r.Manager.Stage(definition(target))
 		}

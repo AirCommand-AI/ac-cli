@@ -46,7 +46,7 @@ func TestReportRepo(t *testing.T) {
 				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
 			}
 			var status *HTTPError
-			if tc.wantErr && (!errors.As(err, &status) || status.Status != http.StatusNotFound) {
+			if tc.wantErr && (!errors.As(err, &status) || status.HTTPStatus() != http.StatusNotFound) {
 				t.Fatalf("err=%v", err)
 			}
 			if body != tc.wantBody {

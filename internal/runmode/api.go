@@ -86,6 +86,9 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("run API %s HTTP %d", e.Path, e.Status) }
 
+// HTTPStatus lets callers outside this package read the status code.
+func (e *HTTPError) HTTPStatus() int { return e.Status }
+
 func (a API) Status(ctx context.Context) (RunStatus, error) {
 	var state RunStatus
 	err := a.call(ctx, http.MethodGet, "", nil, &state)
